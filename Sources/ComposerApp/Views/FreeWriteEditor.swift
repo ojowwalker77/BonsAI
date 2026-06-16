@@ -37,6 +37,12 @@ final class EditorController: ObservableObject {
     coordinator?.replace(range: range, with: string)
   }
 
+  /// Apply a linter quick-fix, but only if the span still reads exactly as flagged
+  /// (guards against the text having shifted under us).
+  func applyLintFix(range: NSRange, expecting phrase: String, with replacement: String) {
+    coordinator?.applyLintFix(range: range, expecting: phrase, with: replacement)
+  }
+
   /// Self-contained plain text with mention tokens serialized back to "@name".
   var plainText: String {
     guard let tv = coordinator?.textView else { return "" }
@@ -56,6 +62,7 @@ struct FreeWriteEditor: NSViewRepresentable {
   @ObservedObject var mentions: MentionState
   @ObservedObject var appSearch: AppSearchState
   @ObservedObject var controller: EditorController
+  @ObservedObject var lint: LintState
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -112,6 +119,9 @@ struct FreeWriteEditor: NSViewRepresentable {
     tv.onChipClick = { [weak coordinator = context.coordinator] range in
       coordinator?.handleChipClick(range)
     }
+    tv.onHoverPoint = { [weak coordinator = context.coordinator] point in
+      coordinator?.handleHover(point)
+    }
 
     if !text.isEmpty {
       tv.textStorage?.setAttributedString(
@@ -150,11 +160,19 @@ extension FreeWriteEditor {
     weak var textView: NSTextView?
     private let placeholderView = NSTextField(labelWithString: "")
     private var selectionWork: DispatchWorkItem?
+    private var lintWork: DispatchWorkItem?
+    private var hideWork: DispatchWorkItem?
+    /// Monotonic guard so a slow analysis can't apply onto newer text.
+    private var lintVersion = 0
 
     init(_ parent: FreeWriteEditor) {
       self.parent = parent
       super.init()
       parent.mentions.commitRequested = { [weak self] item in self?.commit(item) }
+      parent.lint.cancelHide = { [weak self] in self?.hideWork?.cancel() }
+      parent.lint.requestHide = { [weak self] in self?.scheduleHide() }
+      // Warm the on-device model so the first pause doesn't pay cold-start latency.
+      SemanticLintService.shared.prewarm()
     }
 
     // MARK: Typography
@@ -178,6 +196,9 @@ extension FreeWriteEditor {
       updatePlaceholderVisibility()
       refreshMentionMenu(tv)
       publishSelection(tv)
+      // Editing invalidates any existing flags; clear now, re-lint once you pause.
+      resetLint()
+      scheduleLint(tv)
     }
 
     // MARK: Selection change → debounced snapshot (anti-flicker on drag)
@@ -220,6 +241,119 @@ extension FreeWriteEditor {
       updatePlaceholderVisibility()
       publishSelection(tv)
       return true
+    }
+
+    // MARK: - Semantic linter
+
+    /// Debounced: only analyze once typing pauses, so the sentinel never fires mid-thought.
+    private func scheduleLint(_ tv: NSTextView) {
+      lintWork?.cancel()
+      guard SemanticLintService.shared.isAvailable else { return }
+      let work = DispatchWorkItem { [weak self, weak tv] in
+        guard let self, let tv else { return }
+        self.runLint(tv)
+      }
+      lintWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+    }
+
+    private func runLint(_ tv: NSTextView) {
+      let snapshot = tv.string
+      lintVersion &+= 1
+      let version = lintVersion
+      Task { [weak self] in
+        let flags = await SemanticLintService.shared.analyze(snapshot)
+        guard let self, let tv = self.textView else { return }
+        // Discard if the text changed or a newer pass started while we were thinking.
+        guard version == self.lintVersion, tv.string == snapshot else { return }
+        self.applyLintFlags(flags)
+      }
+    }
+
+    /// Paint the underlines as **temporary attributes** (display-only): they never enter
+    /// the text storage, so they don't serialize, don't dirty undo, and reflow with the text.
+    private func applyLintFlags(_ flags: [LintFlag]) {
+      guard let tv = textView, let lm = tv.layoutManager else { return }
+      clearLintDecorations()
+      let length = (tv.string as NSString).length
+
+      var resolved: [LintFlag] = []
+      for var flag in flags {
+        guard flag.range.location >= 0, flag.range.location + flag.range.length <= length else { continue }
+        lm.addTemporaryAttributes(
+          [.underlineStyle: NSUnderlineStyle.thick.rawValue,
+           .underlineColor: flag.kind.nsTint.withAlphaComponent(0.9),
+           .backgroundColor: flag.kind.nsTint.withAlphaComponent(0.10)],
+          forCharacterRange: flag.range)
+        flag.rectInView = rectInPanel(for: flag.range)
+        resolved.append(flag)
+      }
+
+      parent.lint.flags = resolved
+      if let active = parent.lint.activeFlagID, !resolved.contains(where: { $0.id == active }) {
+        parent.lint.activeFlagID = nil
+      }
+    }
+
+    /// Full reset on edit: drop decorations and any open popover until the next pause.
+    private func resetLint() {
+      clearLintDecorations()
+      hideWork?.cancel()
+      if !parent.lint.flags.isEmpty { parent.lint.flags = [] }
+      if parent.lint.activeFlagID != nil { parent.lint.activeFlagID = nil }
+    }
+
+    private func clearLintDecorations() {
+      guard let tv = textView, let lm = tv.layoutManager else { return }
+      let full = NSRange(location: 0, length: (tv.string as NSString).length)
+      for key in [NSAttributedString.Key.underlineStyle, .underlineColor, .backgroundColor] {
+        lm.removeTemporaryAttribute(key, forCharacterRange: full)
+      }
+    }
+
+    // MARK: Hover → popover (hit-test against the flagged rects)
+
+    func handleHover(_ point: NSPoint?) {
+      guard let point, !parent.lint.flags.isEmpty else { scheduleHide(); return }
+      let hit = parent.lint.flags.first {
+        guard let r = viewRect(for: $0.range) else { return false }
+        return r.insetBy(dx: -2, dy: -3).contains(point)
+      }
+      guard let flag = hit else { scheduleHide(); return }
+      hideWork?.cancel()
+      if parent.lint.activeFlagID != flag.id { parent.lint.activeFlagID = flag.id }
+    }
+
+    /// Small grace period so the mouse can cross from the underline into the popover.
+    private func scheduleHide() {
+      hideWork?.cancel()
+      let work = DispatchWorkItem { [weak self] in self?.parent.lint.activeFlagID = nil }
+      hideWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    func applyLintFix(range: NSRange, expecting phrase: String, with replacement: String) {
+      guard let tv = textView else { return }
+      let ns = tv.string as NSString
+      guard range.location + range.length <= ns.length,
+            ns.substring(with: range) == phrase else { return }
+      _ = replace(range: range, with: replacement)
+      parent.lint.activeFlagID = nil
+    }
+
+    /// Flag rect in the text view's own coordinates (for hover hit-testing).
+    private func viewRect(for range: NSRange) -> CGRect? {
+      guard let tv = textView, let lm = tv.layoutManager, let c = tv.textContainer else { return nil }
+      let glyphs = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+      let rect = lm.boundingRect(forGlyphRange: glyphs, in: c)
+      let origin = tv.textContainerOrigin
+      return rect.offsetBy(dx: origin.x, dy: origin.y)
+    }
+
+    /// Flag rect in panel SwiftUI space (for anchoring the popover).
+    private func rectInPanel(for range: NSRange) -> CGRect? {
+      guard let screen = screenRect(for: range) else { return nil }
+      return panelRect(fromScreen: screen)
     }
 
     // MARK: Geometry — everything resolves through screen space, then the panel frame.

@@ -11,6 +11,7 @@ struct ComposerCanvas: View {
   @StateObject private var mentions = MentionState()
   @StateObject private var appSearch = AppSearchState()
   @StateObject private var controller = EditorController()
+  @StateObject private var lint = LintState()
 
   private let service = HeadlessPromptService()
 
@@ -34,7 +35,8 @@ struct ComposerCanvas: View {
           onEscape: { NotificationCenter.default.post(name: .composerDismiss, object: nil) },
           mentions: mentions,
           appSearch: appSearch,
-          controller: controller
+          controller: controller,
+          lint: lint
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, Theme.Inset.horizontal)
@@ -50,12 +52,14 @@ struct ComposerCanvas: View {
       selectionBar
       mentionMenu
       appSearchPanel
+      lintPopover
       toastView
     }
     .animation(Theme.Motion.accessory, value: selection)
     .animation(Theme.Motion.accessory, value: mentions.isOpen)
     .animation(Theme.Motion.accessory, value: appSearch.isOpen)
     .animation(Theme.Motion.accessory, value: isWorking)
+    .animation(Theme.Motion.accessory, value: lint.activeFlagID)
     .onChange(of: text) { _, _ in NotePersistence.scheduleSave(controller.plainText) }
     .onReceive(NotificationCenter.default.publisher(for: .composerCopy)) { _ in copySelfContained() }
   }
@@ -93,6 +97,23 @@ struct ComposerCanvas: View {
         .fixedSize()
         .offset(x: clampMenuX(anchor.x), y: anchor.y + 5)
         .transition(.opacity)
+    }
+  }
+
+  @ViewBuilder
+  private var lintPopover: some View {
+    if selection.isEmpty, !mentions.isOpen, let flag = lint.activeFlag, let rect = flag.rectInView {
+      LintPopover(
+        flag: flag,
+        onPick: { applyFix(flag, $0) },
+        onAskClaude: { askClaude(about: flag) },
+        onHover: { hovering in
+          if hovering { lint.cancelHide?() } else { lint.requestHide?() }
+        }
+      )
+      .fixedSize()
+      .offset(x: clampMenuX(rect.minX), y: rect.maxY + 6)
+      .transition(.opacity)
     }
   }
 
@@ -143,6 +164,33 @@ struct ComposerCanvas: View {
         let result = try await service.refineSelection(whole: whole, selection: snapshot.text, engine: engine)
         controller.replace(range: snapshot.range, with: result)
         show(Toast(text: "Refined with \(engine.title)", symbol: "checkmark.circle.fill", tint: .green))
+      } catch {
+        show(Toast(text: error.localizedDescription, symbol: "exclamationmark.triangle.fill", tint: .orange))
+      }
+      isWorking = false
+    }
+  }
+
+  // MARK: Linter quick-fixes
+
+  /// One-tap drop-in replacement — no model round-trip, the on-device pass already
+  /// produced the rewrite.
+  private func applyFix(_ flag: LintFlag, _ replacement: String) {
+    controller.applyLintFix(range: flag.range, expecting: flag.phrase, with: replacement)
+  }
+
+  /// Escalate a single flagged phrase to Claude — the deliberate, heavier tier, invoked
+  /// only when the on-device suggestions aren't enough.
+  private func askClaude(about flag: LintFlag) {
+    guard !isWorking else { return }
+    let whole = controller.plainText
+    isWorking = true
+    lint.activeFlagID = nil
+    Task {
+      do {
+        let result = try await service.refineSelection(whole: whole, selection: flag.phrase, engine: .claude)
+        controller.applyLintFix(range: flag.range, expecting: flag.phrase, with: result)
+        show(Toast(text: "Clarified with Claude", symbol: "checkmark.circle.fill", tint: .green))
       } catch {
         show(Toast(text: error.localizedDescription, symbol: "exclamationmark.triangle.fill", tint: .orange))
       }

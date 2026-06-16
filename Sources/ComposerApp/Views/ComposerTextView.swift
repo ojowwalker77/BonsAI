@@ -147,6 +147,37 @@ final class ComposerTextView: NSTextView {
     do { try png.write(to: url); return url } catch { return nil }
   }
 
+  // MARK: Hover reporting for the semantic linter
+  //
+  // Pure observation: we report the cursor's location so the coordinator can hit-test
+  // it against flagged ranges. We never consume the event, so caret placement, drag
+  // selection, and clicks are completely unaffected.
+
+  /// Called on every move with the point in text-view coords, or nil on exit.
+  var onHoverPoint: ((NSPoint?) -> Void)?
+  private var hoverTracking: NSTrackingArea?
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let existing = hoverTracking { removeTrackingArea(existing) }
+    let area = NSTrackingArea(
+      rect: .zero,
+      options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+      owner: self, userInfo: nil)
+    addTrackingArea(area)
+    hoverTracking = area
+  }
+
+  override func mouseMoved(with event: NSEvent) {
+    super.mouseMoved(with: event)
+    onHoverPoint?(convert(event.locationInWindow, from: nil))
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    super.mouseExited(with: event)
+    onHoverPoint?(nil)
+  }
+
   // MARK: Re-fit inline images when the panel resizes (bounds-only, cheap).
 
   override func setFrameSize(_ newSize: NSSize) {
