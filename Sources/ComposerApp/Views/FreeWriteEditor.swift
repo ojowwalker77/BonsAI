@@ -94,6 +94,7 @@ struct FreeWriteEditor: NSViewRepresentable {
     tv.backgroundColor = .clear
     tv.isRichText = true            // keep: styled chips + image attachments persist in-session
     tv.importsGraphics = false      // keep FALSE: ComposerTextView is the only image path
+    tv.appearance = NSAppearance(named: .darkAqua)
     tv.isAutomaticQuoteSubstitutionEnabled = false
     tv.isAutomaticDashSubstitutionEnabled = false
     tv.isAutomaticTextReplacementEnabled = false
@@ -110,7 +111,7 @@ struct FreeWriteEditor: NSViewRepresentable {
     tv.font = Theme.Typography.body
     tv.defaultParagraphStyle = context.coordinator.paragraphStyle()
     tv.typingAttributes = context.coordinator.bodyAttributes()
-    tv.textColor = .labelColor
+    tv.textColor = Theme.nsBodyText
     tv.delegate = context.coordinator
     scrollView.documentView = tv
 
@@ -183,7 +184,7 @@ extension FreeWriteEditor {
     }
     func bodyAttributes() -> [NSAttributedString.Key: Any] {
       [.font: Theme.Typography.body,
-       .foregroundColor: NSColor.labelColor,
+       .foregroundColor: Theme.nsBodyText,
        .paragraphStyle: paragraphStyle()]
     }
 
@@ -564,7 +565,7 @@ extension FreeWriteEditor {
     func installPlaceholder(in tv: NSTextView, text: String) {
       placeholderView.stringValue = text
       placeholderView.font = Theme.Typography.body
-      placeholderView.textColor = .placeholderTextColor
+      placeholderView.textColor = Theme.nsPlaceholderText
       placeholderView.backgroundColor = .clear
       placeholderView.isBezeled = false
       placeholderView.drawsBackground = false

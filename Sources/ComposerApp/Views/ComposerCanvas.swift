@@ -22,7 +22,6 @@ struct ComposerCanvas: View {
       VStack(spacing: 0) {
         Text(noteTitle)
           .font(Theme.Typography.title)
-          .tracking(0.2)
           .foregroundStyle(Theme.Palette.title)
           .lineLimit(1)
           .padding(.horizontal, Theme.Inset.horizontal)
@@ -124,7 +123,7 @@ struct ComposerCanvas: View {
         Spacer()
         HStack(spacing: 8) {
           Image(systemName: toast.symbol).foregroundStyle(toast.tint)
-          Text(toast.text).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.Palette.body)
+          Text(toast.text).font(Theme.Typography.actionLabel).foregroundStyle(Theme.Palette.body)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
@@ -133,7 +132,6 @@ struct ComposerCanvas: View {
             .fill(.black.opacity(0.35))
             .background(VisualEffectBackground(material: .popover, blending: .withinWindow, forceDark: true).clipShape(Capsule()))
         )
-        .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
         .shadow(color: .black.opacity(0.25), radius: 14, y: 6)
         .padding(.bottom, 40)
       }
@@ -157,6 +155,10 @@ struct ComposerCanvas: View {
   private func refine(_ engine: HeadlessEngine) {
     let snapshot = selection
     guard !snapshot.isEmpty, !isWorking else { return }
+    guard EnginePreferences.isEnabled(engine) else {
+      show(Toast(text: "\(engine.title) is disabled in Settings", symbol: "exclamationmark.triangle.fill", tint: .orange))
+      return
+    }
     let whole = controller.plainText
     isWorking = true
     Task {
@@ -183,6 +185,10 @@ struct ComposerCanvas: View {
   /// only when the on-device suggestions aren't enough.
   private func askClaude(about flag: LintFlag) {
     guard !isWorking else { return }
+    guard EnginePreferences.isEnabled(.claude) else {
+      show(Toast(text: "Claude is disabled in Settings", symbol: "exclamationmark.triangle.fill", tint: .orange))
+      return
+    }
     let whole = controller.plainText
     isWorking = true
     lint.activeFlagID = nil

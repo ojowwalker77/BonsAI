@@ -13,4 +13,16 @@ enum HeadlessEngine: String, Codable, CaseIterable, Identifiable {
     case .codex: "wand.and.stars"
     }
   }
+  var logoResourceName: String {
+    switch self {
+    case .claude: "ClaudeAI"
+    case .codex: "OpenAI-light"
+    }
+  }
+  var commandLabel: String {
+    switch self {
+    case .claude: "claude -p"
+    case .codex: "codex exec"
+    }
+  }
 }

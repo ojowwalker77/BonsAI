@@ -6,7 +6,18 @@ struct SelectionActionBar: View {
   var onRefine: (HeadlessEngine) -> Void
   var onCopy: () -> Void
 
+  @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
+  @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
   @State private var shown = false
+
+  private var enabledEngines: [HeadlessEngine] {
+    HeadlessEngine.allCases.filter { engine in
+      switch engine {
+      case .claude: claudeEnabled
+      case .codex: codexEnabled
+      }
+    }
+  }
 
   var body: some View {
     HStack(spacing: 2) {
@@ -19,20 +30,34 @@ struct SelectionActionBar: View {
         .frame(height: Theme.Size.actionBarItemHeight)
         .foregroundStyle(Theme.Palette.body)
       } else {
-        action("Claude", icon: HeadlessEngine.claude.systemImage) { onRefine(.claude) }
-        action("Codex", icon: HeadlessEngine.codex.systemImage) { onRefine(.codex) }
+        ForEach(enabledEngines) { engine in
+          action(engine: engine) { onRefine(engine) }
+        }
+        if enabledEngines.isEmpty {
+          Text("No engines enabled")
+            .font(Theme.Typography.actionLabel)
+            .foregroundStyle(Theme.Palette.menuDesc)
+            .padding(.horizontal, 10)
+            .frame(height: Theme.Size.actionBarItemHeight)
+        }
         Divider().frame(height: 16).opacity(0.35)
         iconAction(icon: "doc.on.doc", help: "Copy self-contained text", run: onCopy)
       }
     }
     .padding(.horizontal, 5)
     .frame(height: Theme.Size.actionBarHeight)
-    .background(VisualEffectBackground(material: Theme.Material.popover, blending: .withinWindow, forceDark: true))
+    .background {
+      ZStack {
+        VisualEffectBackground(material: Theme.Material.popover, blending: .withinWindow, state: .active, forceDark: true)
+        Theme.Palette.barScrim
+        LinearGradient(
+          colors: [Color.white.opacity(0.055), Color.clear],
+          startPoint: .top,
+          endPoint: .bottom
+        )
+      }
+    }
     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.actionBar, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: Theme.Radius.actionBar, style: .continuous)
-        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-    )
     .shadow(color: Theme.Shadow.bar.color, radius: Theme.Shadow.bar.radius, y: Theme.Shadow.bar.y)
     .scaleEffect(shown ? 1 : 0.94, anchor: .bottom)
     .opacity(shown ? 1 : 0)
@@ -40,11 +65,11 @@ struct SelectionActionBar: View {
   }
 
   @ViewBuilder
-  private func action(_ title: String, icon: String, run: @escaping () -> Void) -> some View {
+  private func action(engine: HeadlessEngine, run: @escaping () -> Void) -> some View {
     Button(action: run) {
       HStack(spacing: 6) {
-        Image(systemName: icon).font(Theme.Typography.actionIcon)
-        Text(title).font(Theme.Typography.actionLabel)
+        EngineLogo(engine: engine)
+        Text(engine.title).font(Theme.Typography.actionLabel)
       }
       .padding(.horizontal, 10)
       .frame(height: Theme.Size.actionBarItemHeight)
@@ -75,7 +100,7 @@ struct HoverButtonStyle: ButtonStyle {
     configuration.label
       .background(
         RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .fill(Color.white.opacity(hovering || configuration.isPressed ? 0.12 : 0))
+          .fill(hovering || configuration.isPressed ? Theme.Palette.buttonHover : Color.clear)
       )
       .onHover { hovering = $0 }
       .animation(.easeOut(duration: 0.12), value: hovering)

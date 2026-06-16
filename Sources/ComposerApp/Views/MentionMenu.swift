@@ -19,18 +19,14 @@ struct MentionMenu: View {
     .frame(width: Theme.Size.menuWidth)
     .background(VisualEffectBackground(material: Theme.Material.menu, blending: .withinWindow, forceDark: true))
     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous)
-        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-    )
     .shadow(color: Theme.Shadow.menu.color, radius: Theme.Shadow.menu.radius, y: Theme.Shadow.menu.y)
   }
 
   private func row(_ item: MentionItem, selected: Bool) -> some View {
     HStack(spacing: 9) {
       Image(systemName: item.symbol)
-        .font(.system(size: 12))
-        .foregroundStyle(selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+        .font(.body)
+        .foregroundStyle(selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Theme.Palette.menuDesc))
         .frame(width: 16)
       Text(item.id)
         .font(Theme.Typography.menuName)
@@ -38,14 +34,14 @@ struct MentionMenu: View {
       Spacer(minLength: 10)
       Text(item.subtitle)
         .font(Theme.Typography.menuDesc)
-        .foregroundStyle(Theme.Palette.menuDesc)
+        .foregroundStyle(selected ? Theme.Palette.body : Theme.Palette.menuDesc)
         .lineLimit(1)
     }
     .padding(.horizontal, 10)
     .frame(height: Theme.Size.menuRowHeight)
     .background(
       RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-        .fill(selected ? Theme.Palette.accentFill : .clear)
+        .fill(selected ? Theme.Palette.selectedRowFill : Theme.Palette.rowFill)
         .padding(.horizontal, 5)
     )
     .contentShape(Rectangle())
@@ -54,9 +50,9 @@ struct MentionMenu: View {
   private var footer: some View {
     HStack(spacing: 6) {
       keycap("↑↓")
-      Text("navigate").font(.system(size: 10.5)).foregroundStyle(Theme.Palette.title)
+      Text("navigate").font(.caption2).foregroundStyle(Theme.Palette.title)
       keycap("↵")
-      Text("insert").font(.system(size: 10.5)).foregroundStyle(Theme.Palette.title)
+      Text("insert").font(.caption2).foregroundStyle(Theme.Palette.title)
       Spacer()
     }
     .padding(.horizontal, 12)
@@ -68,7 +64,7 @@ struct MentionMenu: View {
 
   private func keycap(_ text: String) -> some View {
     Text(text)
-      .font(.system(size: 10, weight: .medium))
+      .font(.caption2.weight(.medium))
       .foregroundStyle(.secondary)
       .padding(.horizontal, 5)
       .padding(.vertical, 1.5)

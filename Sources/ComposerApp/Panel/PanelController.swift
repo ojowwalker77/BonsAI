@@ -76,6 +76,10 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     let container = NSView()
     container.wantsLayer = true
+    container.layer?.backgroundColor = NSColor.clear.cgColor
+    container.layer?.cornerRadius = Theme.Radius.panel
+    container.layer?.cornerCurve = .continuous
+    container.layer?.masksToBounds = false
     container.addSubview(host)
     NSLayoutConstraint.activate([
       host.topAnchor.constraint(equalTo: container.topAnchor),

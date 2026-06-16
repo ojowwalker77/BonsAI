@@ -32,10 +32,6 @@ struct LintPopover: View {
     .frame(width: 300, alignment: .leading)
     .background(VisualEffectBackground(material: Theme.Material.menu, blending: .withinWindow, forceDark: true))
     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous)
-        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-    )
     .shadow(color: Theme.Shadow.menu.color, radius: Theme.Shadow.menu.radius, y: Theme.Shadow.menu.y)
     .scaleEffect(shown ? 1 : 0.96, anchor: .topLeading)
     .opacity(shown ? 1 : 0)
@@ -48,16 +44,16 @@ struct LintPopover: View {
   private var header: some View {
     HStack(alignment: .top, spacing: 9) {
       Image(systemName: flag.kind.symbol)
-        .font(.system(size: 12, weight: .semibold))
+        .font(.body.weight(.semibold))
         .foregroundStyle(flag.kind.tint)
         .frame(width: 16)
       VStack(alignment: .leading, spacing: 2) {
         Text(flag.question)
-          .font(.system(size: 12.5, weight: .medium))
+          .font(.body.weight(.medium))
           .foregroundStyle(Theme.Palette.body)
           .fixedSize(horizontal: false, vertical: true)
         Text(flag.kind.label)
-          .font(.system(size: 10.5))
+          .font(.caption)
           .foregroundStyle(Theme.Palette.title)
       }
       Spacer(minLength: 0)
@@ -70,11 +66,11 @@ struct LintPopover: View {
     Button { onPick(suggestion) } label: {
       HStack(spacing: 8) {
         Image(systemName: "arrow.turn.down.right")
-          .font(.system(size: 10, weight: .semibold))
+          .font(.caption.weight(.semibold))
           .foregroundStyle(.secondary)
           .frame(width: 14)
         Text(suggestion)
-          .font(.system(size: 12.5))
+          .font(.body)
           .foregroundStyle(Theme.Palette.body)
           .multilineTextAlignment(.leading)
           .fixedSize(horizontal: false, vertical: true)
@@ -90,8 +86,8 @@ struct LintPopover: View {
   private var askClaudeButton: some View {
     Button(action: onAskClaude) {
       HStack(spacing: 7) {
-        Image(systemName: "sparkles").font(.system(size: 11, weight: .medium))
-        Text("Refine with Claude").font(.system(size: 11.5, weight: .medium))
+        EngineLogo(engine: .claude)
+        Text("Refine with Claude").font(Theme.Typography.actionLabel)
         Spacer(minLength: 0)
       }
       .foregroundStyle(Theme.Palette.body)

@@ -26,7 +26,7 @@ final class FloatingPanel: NSPanel {
 
     isOpaque = false
     backgroundColor = .clear
-    hasShadow = true
+    hasShadow = false
 
     // Force dark at the window level so semantic label colors resolve light-on-dark
     // (matches the .hudWindow material).

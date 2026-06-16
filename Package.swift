@@ -13,7 +13,8 @@ let package = Package(
   targets: [
     .executableTarget(
       name: "ComposerApp",
-      path: "Sources/ComposerApp"
+      path: "Sources/ComposerApp",
+      resources: [.process("Resources")]
     )
   ]
 )

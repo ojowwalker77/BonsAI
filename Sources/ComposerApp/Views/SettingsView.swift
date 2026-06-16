@@ -11,21 +11,25 @@ struct SettingsView: View {
 
   /// Republished whenever a brand icon/color lands so the Apps list redraws.
   @StateObject private var appIcons = AppIconStore()
+  @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
+  @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
 
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
       VStack(alignment: .leading, spacing: 4) {
-        Text("Composer").font(.system(size: 15, weight: .semibold))
+        Text("Composer").font(.headline)
         Text("A menu-bar scratchpad for drafting prompts.")
-          .font(.system(size: 11)).foregroundStyle(.secondary)
+          .font(.caption).foregroundStyle(.secondary)
       }
+
+      enginesSection
 
       appsSection
 
       shortcutsSection
 
       Text("Type @ in the composer to drop a connector. Apps expand into self-contained context when you copy.")
-        .font(.system(size: 11)).foregroundStyle(.tertiary)
+        .font(.caption).foregroundStyle(.tertiary)
         .fixedSize(horizontal: false, vertical: true)
     }
     .padding(22)
@@ -33,6 +37,31 @@ struct SettingsView: View {
   }
 
   // MARK: - Apps
+
+  private var enginesSection: some View {
+    VStack(alignment: .leading, spacing: 9) {
+      sectionHeader("ENGINES")
+      engineToggle(.claude, isOn: $claudeEnabled)
+      Divider().opacity(0.4)
+      engineToggle(.codex, isOn: $codexEnabled)
+    }
+    .padding(14)
+    .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor).opacity(0.5)))
+  }
+
+  private func engineToggle(_ engine: HeadlessEngine, isOn: Binding<Bool>) -> some View {
+    Toggle(isOn: isOn) {
+      HStack(spacing: 11) {
+        EngineLogo(engine: engine)
+          .frame(width: 22, height: 22)
+        VStack(alignment: .leading, spacing: 1) {
+          Text(engine.title).font(.body.weight(.medium))
+          Text(engine.commandLabel).font(.caption).foregroundStyle(.secondary)
+        }
+      }
+    }
+    .toggleStyle(.switch)
+  }
 
   private var appsSection: some View {
     VStack(alignment: .leading, spacing: 9) {
@@ -53,12 +82,12 @@ struct SettingsView: View {
       appIcon(app)
         .frame(width: 22, height: 22)
       VStack(alignment: .leading, spacing: 1) {
-        Text(app.label).font(.system(size: 12.5, weight: .medium))
-        Text(app.subtitle).font(.system(size: 10.5)).foregroundStyle(.secondary)
+        Text(app.label).font(.body.weight(.medium))
+        Text(app.subtitle).font(.caption).foregroundStyle(.secondary)
       }
       Spacer(minLength: 12)
       Text(app.id)
-        .font(.system(size: 11, weight: .medium, design: .monospaced))
+        .font(.caption.monospaced().weight(.medium))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 7).padding(.vertical, 2)
         .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
@@ -76,7 +105,7 @@ struct SettingsView: View {
         .aspectRatio(contentMode: .fit)
     } else {
       Image(systemName: app.symbol)
-        .font(.system(size: 13))
+        .font(.body)
         .foregroundStyle(.secondary)
     }
   }
@@ -88,10 +117,10 @@ struct SettingsView: View {
       sectionHeader("SHORTCUTS")
       ForEach(shortcuts, id: \.0) { item in
         HStack {
-          Text(item.0).font(.system(size: 12))
+          Text(item.0).font(.body)
           Spacer(minLength: 16)
           Text(item.1)
-            .font(.system(size: 11, weight: .medium))
+            .font(.caption.weight(.medium))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 7).padding(.vertical, 2)
             .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
@@ -103,7 +132,7 @@ struct SettingsView: View {
   }
 
   private func sectionHeader(_ text: String) -> some View {
-    Text(text).font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundStyle(.tertiary)
+    Text(text).font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
   }
 }
 

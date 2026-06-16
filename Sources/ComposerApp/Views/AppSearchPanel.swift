@@ -101,10 +101,6 @@ struct AppSearchPanel: View {
     .frame(width: 360)
     .background(VisualEffectBackground(material: Theme.Material.menu, blending: .withinWindow, forceDark: true))
     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous)
-        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-    )
     .shadow(color: Theme.Shadow.menu.color, radius: Theme.Shadow.menu.radius, y: Theme.Shadow.menu.y)
   }
 
@@ -114,7 +110,7 @@ struct AppSearchPanel: View {
     HStack(spacing: 8) {
       appGlyph.frame(width: 16, height: 16)
       Text(state.app?.label ?? "App")
-        .font(.system(size: 12.5, weight: .semibold))
+        .font(.body.weight(.semibold))
         .foregroundStyle(Theme.Palette.body)
       Spacer(minLength: 8)
       if state.isGitHub { kindToggle }
@@ -128,7 +124,7 @@ struct AppSearchPanel: View {
     if let image = MentionStyleCache.shared.image(for: state.appID) {
       Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
     } else {
-      Image(systemName: state.app?.symbol ?? "app").font(.system(size: 12)).foregroundStyle(.secondary)
+      Image(systemName: state.app?.symbol ?? "app").font(.body).foregroundStyle(.secondary)
     }
   }
 
@@ -137,7 +133,7 @@ struct AppSearchPanel: View {
       ForEach(GitHubItemKind.allCases, id: \.self) { kind in
         let on = state.githubKind == kind
         Text(kind.shortLabel)
-          .font(.system(size: 10.5, weight: .medium))
+          .font(.caption.weight(.medium))
           .foregroundStyle(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
           .padding(.horizontal, 8).padding(.vertical, 3)
           .background(RoundedRectangle(cornerRadius: 5).fill(on ? Theme.Palette.accentFill : .clear))
@@ -153,7 +149,7 @@ struct AppSearchPanel: View {
 
   private var searchField: some View {
     HStack(spacing: 8) {
-      Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.secondary)
+      Image(systemName: "magnifyingglass").font(.body).foregroundStyle(.secondary)
       FocusedSearchField(
         text: Binding(get: { state.query }, set: { state.queryChanged($0) }),
         placeholder: state.placeholder,
@@ -205,12 +201,12 @@ struct AppSearchPanel: View {
   private func row(_ result: AppSearchResult, selected: Bool) -> some View {
     VStack(alignment: .leading, spacing: 1) {
       Text(result.title)
-        .font(.system(size: 12.5, weight: .medium))
+        .font(.body.weight(.medium))
         .foregroundStyle(Theme.Palette.body)
         .lineLimit(1)
       if !result.subtitle.isEmpty {
         Text(result.subtitle)
-          .font(.system(size: 10.5))
+          .font(.caption)
           .foregroundStyle(Theme.Palette.menuDesc)
           .lineLimit(1)
       }
@@ -219,7 +215,7 @@ struct AppSearchPanel: View {
     .padding(.horizontal, 10).padding(.vertical, 5)
     .background(
       RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-        .fill(selected ? Theme.Palette.accentFill : .clear)
+        .fill(selected ? Theme.Palette.selectedRowFill : Theme.Palette.rowFill)
         .padding(.horizontal, 5)
     )
     .contentShape(Rectangle())
@@ -227,8 +223,8 @@ struct AppSearchPanel: View {
 
   private func message(_ text: String, symbol: String?) -> some View {
     HStack(spacing: 7) {
-      if let symbol { Image(systemName: symbol).font(.system(size: 11)).foregroundStyle(.tertiary) }
-      Text(text).font(.system(size: 11.5)).foregroundStyle(Theme.Palette.menuDesc)
+      if let symbol { Image(systemName: symbol).font(.caption).foregroundStyle(.tertiary) }
+      Text(text).font(.caption).foregroundStyle(Theme.Palette.menuDesc)
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 14).padding(.vertical, 12)
@@ -236,9 +232,9 @@ struct AppSearchPanel: View {
 
   private var footer: some View {
     HStack(spacing: 6) {
-      keycap("↑↓"); Text("navigate").font(.system(size: 10.5)).foregroundStyle(Theme.Palette.title)
-      keycap("↵"); Text("select").font(.system(size: 10.5)).foregroundStyle(Theme.Palette.title)
-      keycap("esc"); Text("close").font(.system(size: 10.5)).foregroundStyle(Theme.Palette.title)
+      keycap("↑↓"); Text("navigate").font(.caption2).foregroundStyle(Theme.Palette.title)
+      keycap("↵"); Text("select").font(.caption2).foregroundStyle(Theme.Palette.title)
+      keycap("esc"); Text("close").font(.caption2).foregroundStyle(Theme.Palette.title)
       Spacer()
     }
     .padding(.horizontal, 12)
@@ -248,7 +244,7 @@ struct AppSearchPanel: View {
 
   private func keycap(_ text: String) -> some View {
     Text(text)
-      .font(.system(size: 10, weight: .medium))
+      .font(.caption2.weight(.medium))
       .foregroundStyle(.secondary)
       .padding(.horizontal, 5).padding(.vertical, 1.5)
       .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.08)))
@@ -274,8 +270,8 @@ struct FocusedSearchField: NSViewRepresentable {
     field.isBordered = false
     field.drawsBackground = false
     field.focusRingType = .none
-    field.font = .systemFont(ofSize: 13)
-    field.textColor = .labelColor
+    field.font = Theme.Typography.body
+    field.textColor = Theme.nsBodyText
     field.cell?.usesSingleLineMode = true
     field.cell?.wraps = false
     field.cell?.isScrollable = true
