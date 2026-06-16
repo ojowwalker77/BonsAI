@@ -5,6 +5,45 @@ import AppKit
 /// so this override is the only path that ever inserts an image.
 final class ComposerTextView: NSTextView {
 
+  /// Set by the editor coordinator; fired when an interactive app chip is clicked.
+  var onChipClick: ((NSRange) -> Void)?
+
+  /// Intercept clicks that land on an app chip (Context7/GitHub) and open its search
+  /// instead of placing a caret. Other clicks fall through to normal text behavior.
+  override func mouseDown(with event: NSEvent) {
+    if let range = appChipRange(at: event) {
+      onChipClick?(range)
+      return
+    }
+    super.mouseDown(with: event)
+  }
+
+  /// The full `.mentionToken` run under the click, but only for interactive app tokens
+  /// and only when the point is actually inside the chip's glyphs (not past line end).
+  private func appChipRange(at event: NSEvent) -> NSRange? {
+    guard let lm = layoutManager, let container = textContainer, let storage = textStorage,
+          storage.length > 0 else { return nil }
+    let point = convert(event.locationInWindow, from: nil)
+    let origin = textContainerOrigin
+    let inContainer = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+
+    var fraction: CGFloat = 0
+    let glyphIndex = lm.glyphIndex(for: inContainer, in: container, fractionOfDistanceThroughGlyph: &fraction)
+    let charIndex = lm.characterIndexForGlyph(at: glyphIndex)
+    guard charIndex < storage.length else { return nil }
+
+    var range = NSRange()
+    guard let token = storage.attribute(.mentionToken, at: charIndex, longestEffectiveRange: &range,
+                                        in: NSRange(location: 0, length: storage.length)) as? String,
+          AppToken.parse(token) != nil else { return nil }
+
+    // Reject clicks beyond the glyphs (e.g. trailing whitespace area on the line).
+    let glyphRange = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+    let rect = lm.boundingRect(forGlyphRange: glyphRange, in: container).offsetBy(dx: origin.x, dy: origin.y)
+    guard rect.contains(point) else { return nil }
+    return range
+  }
+
   /// Required for the PASTE path: the default importsGraphics=false readable list has
   /// no image/file-URL type, so Cmd-V can't prefer an image without prepending these.
   /// (Drag is already accepted via editable + rich-text; this does not affect drag.)

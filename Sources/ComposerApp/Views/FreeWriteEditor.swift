@@ -54,6 +54,7 @@ struct FreeWriteEditor: NSViewRepresentable {
   var onSelectionChange: (EditorSelection) -> Void = { _ in }
   var onEscape: () -> Void = {}
   @ObservedObject var mentions: MentionState
+  @ObservedObject var appSearch: AppSearchState
   @ObservedObject var controller: EditorController
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -108,6 +109,9 @@ struct FreeWriteEditor: NSViewRepresentable {
 
     context.coordinator.textView = tv
     controller.coordinator = context.coordinator
+    tv.onChipClick = { [weak coordinator = context.coordinator] range in
+      coordinator?.handleChipClick(range)
+    }
 
     if !text.isEmpty {
       tv.textStorage?.setAttributedString(
@@ -179,6 +183,8 @@ extension FreeWriteEditor {
     // MARK: Selection change → debounced snapshot (anti-flicker on drag)
     func textViewDidChangeSelection(_ notification: Notification) {
       guard let tv = textView else { return }
+      // Caret moved inside the editor (click-away / arrow keys) → dismiss app search.
+      if parent.appSearch.isOpen { closeAppSearch() }
       refreshMentionMenu(tv)
       selectionWork?.cancel()
       let work = DispatchWorkItem { [weak self, weak tv] in
@@ -288,7 +294,8 @@ extension FreeWriteEditor {
     // MARK: Insert the chosen mention as an undo-safe chip + trailing space
     func commit(_ item: MentionItem) {
       guard let tv = textView, let query = activeMentionQuery(in: tv) else { return }
-      let token = NSMutableAttributedString(attributedString: chip(for: item))
+      let chip = ChipFactory.make(token: item.id, font: Theme.Typography.body)
+      let token = NSMutableAttributedString(attributedString: chip)
       token.append(NSAttributedString(string: " ", attributes: bodyAttributes()))
       guard tv.shouldChangeText(in: query.range, replacementString: token.string) else { return }
       tv.textStorage?.replaceCharacters(in: query.range, with: token)
@@ -298,16 +305,12 @@ extension FreeWriteEditor {
       parent.text = tv.string
       parent.onCountChange(tv.string.count)
       closeMenu()
-    }
 
-    /// A favicon chip when its style is cached, else the plain styled token fallback
-    /// (both carry `.mentionToken`, so serialization is identical).
-    private func chip(for item: MentionItem) -> NSAttributedString {
-      let cache = MentionStyleCache.shared
-      if let image = cache.image(for: item.id), let color = cache.color(for: item.id) {
-        return MentionChip.attributed(for: item, font: Theme.Typography.body, image: image, color: color)
+      // Apps don't just tag — open their inline search so the user picks a concrete thing.
+      if item.kind == .app {
+        let chipRange = NSRange(location: query.range.location, length: chip.length)
+        openAppSearch(appID: item.id, targetRange: chipRange, kind: nil)
       }
-      return MentionToken.attributed(for: item, font: Theme.Typography.body)
     }
 
     /// Restyle already-inserted chips in place when async favicons land. One
@@ -320,11 +323,8 @@ extension FreeWriteEditor {
       storage.enumerateAttribute(.mentionToken,
                                  in: NSRange(location: 0, length: storage.length),
                                  options: []) { value, range, _ in
-        guard let id = value as? String,
-              let item = MentionCatalog.all.first(where: { $0.id == id }),
-              let image = MentionStyleCache.shared.image(for: id),
-              let color = MentionStyleCache.shared.color(for: id) else { return }
-        edits.append((range, MentionChip.attributed(for: item, font: Theme.Typography.body, image: image, color: color)))
+        guard let token = value as? String else { return }
+        edits.append((range, ChipFactory.make(token: token, font: Theme.Typography.body)))
       }
       guard !edits.isEmpty else { return }
 
@@ -344,6 +344,86 @@ extension FreeWriteEditor {
       }
       tv.setSelectedRange(NSRange(location: min(saved.location + delta, storage.length), length: 0))
       parent.text = tv.string
+    }
+
+    // MARK: - Inline app search (Context7 / GitHub)
+
+    /// Open the search popover for the app token at `targetRange`, anchored under the chip.
+    func openAppSearch(appID: String, targetRange: NSRange, kind: GitHubItemKind?) {
+      guard let anchor = anchorBelow(range: targetRange) else { return }
+      let state = parent.appSearch
+      state.targetRange = targetRange
+      state.appID = appID
+      state.githubKind = kind ?? .issue
+      state.query = ""
+      state.results = []
+      state.selectedIndex = 0
+      state.isLoading = false
+      state.errorText = nil
+      state.anchorInView = anchor
+      state.onCommit = { [weak self] result in self?.resolveSelection(result) }
+      state.onCancel = { [weak self] in self?.closeAppSearchAndFocus() }
+      state.isOpen = true
+    }
+
+    /// Clicking an app chip re-opens its search, pre-scoped to its current kind.
+    func handleChipClick(_ range: NSRange) {
+      guard let tv = textView, let storage = tv.textStorage, range.location < storage.length,
+            let token = storage.attribute(.mentionToken, at: range.location, effectiveRange: nil) as? String,
+            let parsed = AppToken.parse(token) else { return }
+      var kind: GitHubItemKind?
+      if case let .github(k, _) = parsed.selection { kind = k }
+      closeMenu()
+      openAppSearch(appID: parsed.appID, targetRange: range, kind: kind)
+    }
+
+    /// Replace the target chip with one resolved to the picked result, keeping one trailing space.
+    func resolveSelection(_ result: AppSearchResult) {
+      guard let tv = textView, let storage = tv.textStorage,
+            let range = parent.appSearch.targetRange,
+            range.location + range.length <= storage.length else { closeAppSearch(); return }
+
+      let token = AppToken.string(appID: parent.appSearch.appID, selection: result.selection)
+      let chip = NSMutableAttributedString(attributedString: ChipFactory.make(token: token, font: Theme.Typography.body))
+
+      let after = range.location + range.length
+      let hasSpace = after < storage.length &&
+        (storage.string as NSString).substring(with: NSRange(location: after, length: 1)) == " "
+      if !hasSpace { chip.append(NSAttributedString(string: " ", attributes: bodyAttributes())) }
+
+      guard tv.shouldChangeText(in: range, replacementString: chip.string) else { closeAppSearch(); return }
+      storage.replaceCharacters(in: range, with: chip)
+      tv.didChangeText()
+      tv.setSelectedRange(NSRange(location: range.location + chip.length, length: 0))
+      tv.typingAttributes = bodyAttributes()
+      parent.text = tv.string
+      parent.onCountChange(tv.string.count)
+      closeAppSearch()
+      tv.window?.makeFirstResponder(tv)
+    }
+
+    func closeAppSearch() {
+      let state = parent.appSearch
+      guard state.isOpen else { return }
+      state.isOpen = false
+      state.targetRange = nil
+      state.results = []
+      state.anchorInView = nil
+      state.onCommit = nil
+      state.onCancel = nil
+    }
+
+    func closeAppSearchAndFocus() {
+      closeAppSearch()
+      textView?.window?.makeFirstResponder(textView)
+    }
+
+    /// Panel-space point at the bottom-left of the chip (same geometry as the `@` menu).
+    private func anchorBelow(range: NSRange) -> CGPoint? {
+      guard let tv = textView, let frame = tv.window?.frame else { return nil }
+      let screen = tv.firstRect(forCharacterRange: range, actualRange: nil)
+      guard screen.width.isFinite, screen.minY.isFinite else { return nil }
+      return CGPoint(x: screen.minX - frame.minX, y: frame.maxY - screen.minY)
     }
 
     // MARK: Placeholder (NSTextView has none of its own)

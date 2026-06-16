@@ -9,6 +9,7 @@ struct ComposerCanvas: View {
   @State private var toast: Toast?
 
   @StateObject private var mentions = MentionState()
+  @StateObject private var appSearch = AppSearchState()
   @StateObject private var controller = EditorController()
 
   private let service = HeadlessPromptService()
@@ -32,6 +33,7 @@ struct ComposerCanvas: View {
           onSelectionChange: { selection = $0 },
           onEscape: { NotificationCenter.default.post(name: .composerDismiss, object: nil) },
           mentions: mentions,
+          appSearch: appSearch,
           controller: controller
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -47,10 +49,12 @@ struct ComposerCanvas: View {
 
       selectionBar
       mentionMenu
+      appSearchPanel
       toastView
     }
     .animation(Theme.Motion.accessory, value: selection)
     .animation(Theme.Motion.accessory, value: mentions.isOpen)
+    .animation(Theme.Motion.accessory, value: appSearch.isOpen)
     .animation(Theme.Motion.accessory, value: isWorking)
     .onChange(of: text) { _, _ in NotePersistence.scheduleSave(controller.plainText) }
     .onReceive(NotificationCenter.default.publisher(for: .composerCopy)) { _ in copySelfContained() }
@@ -60,7 +64,7 @@ struct ComposerCanvas: View {
 
   @ViewBuilder
   private var selectionBar: some View {
-    if !selection.isEmpty, !mentions.isOpen, let rect = selection.rectInView {
+    if !selection.isEmpty, !mentions.isOpen, !appSearch.isOpen, let rect = selection.rectInView {
       SelectionActionBar(
         isWorking: isWorking,
         onRefine: refine,
@@ -76,6 +80,16 @@ struct ComposerCanvas: View {
   private var mentionMenu: some View {
     if mentions.isOpen, let anchor = mentions.anchorInView {
       MentionMenu(mentions: mentions)
+        .fixedSize()
+        .offset(x: clampMenuX(anchor.x), y: anchor.y + 5)
+        .transition(.opacity)
+    }
+  }
+
+  @ViewBuilder
+  private var appSearchPanel: some View {
+    if appSearch.isOpen, let anchor = appSearch.anchorInView {
+      AppSearchPanel(state: appSearch)
         .fixedSize()
         .offset(x: clampMenuX(anchor.x), y: anchor.y + 5)
         .transition(.opacity)
@@ -137,11 +151,17 @@ struct ComposerCanvas: View {
   }
 
   private func copySelfContained() {
-    let rendered = SelfContainedRenderer.render(controller.plainText)
-    guard !rendered.trimmed.isEmpty else { return }
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(rendered, forType: .string)
-    show(Toast(text: "Copied self-contained text", symbol: "doc.on.doc.fill", tint: .accentColor))
+    let plain = controller.plainText
+    guard !plain.trimmed.isEmpty else { return }
+    let resolving = AppToken.scan(plain).contains { $0.selection != nil }
+    if resolving { show(Toast(text: "Resolving connectors…", symbol: "arrow.triangle.2.circlepath", tint: .accentColor)) }
+    Task {
+      let rendered = await SelfContainedRenderer.render(plain)
+      guard !rendered.trimmed.isEmpty else { return }
+      NSPasteboard.general.clearContents()
+      NSPasteboard.general.setString(rendered, forType: .string)
+      show(Toast(text: "Copied self-contained text", symbol: "doc.on.doc.fill", tint: .accentColor))
+    }
   }
 
   // MARK: Toast

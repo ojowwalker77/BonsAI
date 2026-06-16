@@ -88,6 +88,12 @@ final class MentionStyleCache {
   /// Fires on the main actor when a favicon/color lands; wire to updateExistingChips().
   var onUpdate: (() -> Void)?
 
+  /// Notifies multiple observers (chips + Settings Apps list) without clobbering `onUpdate`.
+  private func broadcast() {
+    onUpdate?()
+    NotificationCenter.default.post(name: .composerStyleCacheUpdated, object: nil)
+  }
+
   private let dir: URL = {
     let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
     let directory = base.appendingPathComponent("Composer/Favicons", isDirectory: true)
@@ -112,7 +118,7 @@ final class MentionStyleCache {
         colors[item.id] = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? legibleNeutral()
       }
     }
-    onUpdate?()
+    broadcast()
   }
 
   private func loadFavicon(id: String, host: String) {
@@ -140,7 +146,7 @@ final class MentionStyleCache {
   private func ingest(id: String, image: NSImage) {
     images[id] = image
     colors[id] = dominantColor(of: image)
-    onUpdate?()
+    broadcast()
   }
 
   private func sanitized(_ id: String) -> String { String(id.drop(while: { $0 == "@" })) }
@@ -161,12 +167,37 @@ final class MentionStyleCache {
   }
 }
 
+// MARK: - Unified chip factory
+
+/// The single place chips are built — used by insert, async favicon restyle, and resolve.
+/// `token` is the serialized `@id` (possibly carrying a resolved selection); the chip's
+/// visible label is derived from it, and the whole run carries `.mentionToken: token`
+/// so `composerPlainText` round-trips it.
+enum ChipFactory {
+  @MainActor
+  static func make(token: String, font: NSFont) -> NSAttributedString {
+    let parsed = AppToken.parse(token)
+    let appID = parsed?.appID ?? token
+    let item = MentionCatalog.all.first { $0.id == appID }
+    let isApp = item?.kind == .app
+    let label = isApp ? AppToken.label(appID: appID, selection: parsed?.selection) : (item?.label ?? token)
+
+    let cache = MentionStyleCache.shared
+    if let image = cache.image(for: appID), let color = cache.color(for: appID) {
+      return MentionChip.attributed(token: token, label: label, font: font,
+                                    image: image, color: color, showDisclosure: isApp)
+    }
+    return MentionToken.attributed(token: token, label: label, font: font, showDisclosure: isApp)
+  }
+}
+
 // MARK: - Chip builder
 
 enum MentionChip {
-  /// favicon attachment + thin space + name colored by the dominant color.
-  /// The whole run carries `.mentionToken` so `composerPlainText` still emits "@github".
-  static func attributed(for item: MentionItem, font: NSFont, image: NSImage, color: NSColor) -> NSAttributedString {
+  /// favicon attachment + thin space + name colored by the dominant color, optionally
+  /// followed by a `▾` disclosure. The whole run carries `.mentionToken`.
+  static func attributed(token: String, label: String, font: NSFont,
+                         image: NSImage, color: NSColor, showDisclosure: Bool) -> NSAttributedString {
     let cap = font.capHeight
     let glyph = max(cap + 3, 12)
     let scaled = resize(image, to: NSSize(width: glyph, height: glyph))
@@ -178,9 +209,16 @@ enum MentionChip {
     let chip = NSMutableAttributedString(attributedString: NSAttributedString(attachment: attachment))
     chip.append(NSAttributedString(string: "\u{2009}", attributes: [.font: font]))
     let nameFont = NSFont.systemFont(ofSize: font.pointSize - 1, weight: .medium)
-    chip.append(NSAttributedString(string: item.label, attributes: [.font: nameFont, .foregroundColor: color]))
-    chip.addAttribute(.mentionToken, value: item.id, range: NSRange(location: 0, length: chip.length))
+    chip.append(NSAttributedString(string: label, attributes: [.font: nameFont, .foregroundColor: color]))
+    if showDisclosure { chip.append(disclosure(font: font, color: color.withAlphaComponent(0.6))) }
+    chip.addAttribute(.mentionToken, value: token, range: NSRange(location: 0, length: chip.length))
     return chip
+  }
+
+  /// The "click to search" affordance appended to interactive app chips.
+  static func disclosure(font: NSFont, color: NSColor) -> NSAttributedString {
+    let small = NSFont.systemFont(ofSize: font.pointSize - 3, weight: .semibold)
+    return NSAttributedString(string: "\u{2009}\u{25BE}", attributes: [.font: small, .foregroundColor: color])
   }
 
   private static func resize(_ image: NSImage, to size: NSSize) -> NSImage {

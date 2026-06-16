@@ -32,7 +32,7 @@ struct HeadlessPromptService {
       case .codex:
         process.arguments = ["codex", "exec", "--ask-for-approval", "never", prompt]
       }
-      process.environment = Self.augmentedEnvironment()
+      process.environment = Shell.augmentedEnvironment()
       process.standardOutput = outPipe
       process.standardError = errPipe
 
@@ -52,22 +52,6 @@ struct HeadlessPromptService {
       guard !out.isEmpty else { throw HeadlessPromptError.failed("\(engine.title) returned no text.") }
       return out
     }.value
-  }
-
-  /// A GUI app launched from Finder has a minimal PATH; add the usual CLI locations
-  /// so `claude` / `codex` resolve.
-  private static func augmentedEnvironment() -> [String: String] {
-    var env = ProcessInfo.processInfo.environment
-    let home = NSHomeDirectory()
-    let extras = [
-      "/opt/homebrew/bin", "/usr/local/bin",
-      "\(home)/.local/bin", "\(home)/.bun/bin",
-      "\(home)/.npm-global/bin", "\(home)/.cargo/bin",
-      "\(home)/.deno/bin", "/usr/bin", "/bin",
-    ]
-    let existing = env["PATH"].map { [$0] } ?? []
-    env["PATH"] = (extras + existing).joined(separator: ":")
-    return env
   }
 }
 
