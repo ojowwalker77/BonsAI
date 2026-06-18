@@ -45,13 +45,17 @@ final class SemanticLintService {
     #endif
   }
 
-  /// Analyze a draft and return the ambiguous spans. Returns `[]` for trivial drafts
-  /// or when the model is unavailable — callers don't special-case anything.
-  func analyze(_ text: String) async -> [LintFlag] {
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+  /// Analyze a draft and return the ambiguous spans. `visibleText` is the NSTextView
+  /// string used for ranges; `plainText` is the self-contained serialization that still
+  /// contains raw connector tokens such as `@github:<url>` and `@context7:<library>`.
+  /// Returns `[]` for trivial drafts or when the model is unavailable.
+  func analyze(visibleText: String, plainText: String, boardContext: String? = nil) async -> [LintFlag] {
+    let trimmed = visibleText.trimmingCharacters(in: .whitespacesAndNewlines)
     // Skip drafts too short to be ambiguous, and too long for the on-device context.
     guard trimmed.count >= 12, trimmed.count <= 4000 else { return [] }
     guard isAvailable else { return [] }
+
+    let context = ConnectorLintContext(plainText: plainText)
 
     #if canImport(FoundationModels)
     guard #available(macOS 26, *) else { return [] }
@@ -59,9 +63,12 @@ final class SemanticLintService {
       // A fresh, stateless session per pass: each analysis is independent, and a
       // growing transcript would only waste the small context window.
       let session = LanguageModelSession(instructions: Self.instructions)
-      let response = try await session.respond(to: Self.userPrompt(for: text),
+      let response = try await session.respond(to: Self.userPrompt(visibleText: visibleText, context: context, boardContext: boardContext),
                                                generating: LintResult.self)
-      return response.content.issues.compactMap { $0.toFlag(in: text) }
+      return response.content.issues
+        .compactMap { $0.toFlag(in: visibleText) }
+        .filter { !Self.rangeTouchesImagePlaceholder($0.range, in: visibleText) }
+        .filter { context.shouldKeep($0) }
     } catch {
       // Guardrail refusals, context overflow, etc. — stay silent, never surface an error.
       return []
@@ -76,15 +83,21 @@ final class SemanticLintService {
   /// Bias hard toward precision. An *unprompted* squiggle nobody asked for is far more
   /// annoying than a missed one, so the model is told: when in doubt, don't flag.
   static let instructions = """
-  You are a precise semantic-ambiguity linter built into a tool where a developer drafts \
-  prompts to hand to an AI coding agent. You read the draft and flag ONLY phrases that are \
-  genuinely ambiguous or underspecified — places where a competent engineer would have to \
-  guess and could reasonably build two different things.
+  You are a precise semantic-ambiguity linter built into Composer, a scratchpad where a \
+  user drafts prompts to copy into another AI tool later. You read the whole draft plus a \
+  connector summary. Flag ONLY phrases that are genuinely ambiguous or underspecified — \
+  places where a competent assistant would have to guess and could reasonably do two \
+  different things.
 
-  Be conservative. Most text is fine. When in doubt, do NOT flag. Never flag grammar, \
-  spelling, tone, politeness, or style. Never flag a phrase merely for being short. Do not \
-  rewrite or summarize the whole draft. Aim for zero false positives: a wrong flag is worse \
-  than a missed one.
+  Be extremely conservative. Most text is fine. When in doubt, do NOT flag. Never flag \
+  grammar, spelling, tone, politeness, or style. Never flag a phrase merely for being short. \
+  Never flag a resolved connector chip or a phrase whose referent is supplied by the \
+  connector summary. Aim for zero false positives: a wrong flag is worse than a missed one.
+
+  This draft is ONE card on a larger board. When other cards are supplied as context they are \
+  READ-ONLY: never quote or flag a phrase from them. Use them only to judge whether the current \
+  card is genuinely ambiguous — if a sibling card defines a term or resolves a reference the \
+  current card uses, do NOT flag it.
 
   Flag a phrase only if it fits one of these kinds:
   - unresolvedReference: a pronoun or noun phrase ("it", "this", "the function", "the client") \
@@ -97,11 +110,20 @@ final class SemanticLintService {
   - missingContext: a reference to knowledge the coding agent cannot see ("like we discussed", \
   "the usual way", "same as before").
 
-  Tokens that start with "@" (such as @github, @context7) and the object-replacement character \
-  are already-resolved references — never flag them.
+  Connector rules:
+  - Context7 connector context resolves references to docs, documentation, APIs, libraries, \
+    versions, examples, and the selected library/topic.
+  - GitHub connector context resolves references to the selected issue, PR, pull request, \
+    ticket, repo discussion, acceptance criteria, and linked URL.
+  - Finder connector context resolves references to the selected local file/folder/path and \
+    its contents/listing.
+  - Browser connector context resolves references to the selected tab, page, URL, website, \
+    title, host, and page metadata.
+  - Tokens that start with "@", the object-replacement character, and `[image: ...]` \
+    placeholders are resolved attachments/connectors; never flag them directly.
 
   For each flagged phrase return:
-  - phrase: copied verbatim from the draft, exactly as written, so it can be located.
+  - phrase: copied verbatim from the visible draft only, exactly as written, so it can be located.
   - kind: the single best-fitting kind.
   - question: one short clarifying question, max 8 words, ending with "?".
   - suggestions: 0 to 3 concrete rewrites of the phrase, each a drop-in replacement that \
@@ -110,8 +132,91 @@ final class SemanticLintService {
   If nothing is genuinely ambiguous, return an empty list of issues.
   """
 
-  static func userPrompt(for text: String) -> String {
-    "Analyze this draft prompt and return its ambiguous spans:\n\n\(text)"
+  private static func rangeTouchesImagePlaceholder(_ range: NSRange, in text: String) -> Bool {
+    guard let regex = try? NSRegularExpression(pattern: #"\[image:\s*[^\]]+\]"#) else { return false }
+    let full = NSRange(location: 0, length: (text as NSString).length)
+    return regex.matches(in: text, range: full).contains { NSIntersectionRange($0.range, range).length > 0 }
+  }
+
+  private static func userPrompt(visibleText: String, context: ConnectorLintContext, boardContext: String?) -> String {
+    var prompt = """
+    Analyze this visible draft card and return only the truly ambiguous spans.
+
+    Resolved connector context:
+    \(context.summary)
+    """
+    if let boardContext, !boardContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      prompt += "\n\nOther cards on this board (READ-ONLY context — do NOT quote phrases from here):\n\(boardContext)"
+    }
+    prompt += "\n\nVisible draft to quote phrases from:\n\(visibleText)"
+    return prompt
+  }
+}
+
+// MARK: - Connector context supplied to the linter
+
+private struct ConnectorLintContext {
+  let summary: String
+  let hasContext7: Bool
+  let hasGitHub: Bool
+  let hasFinder: Bool
+  let hasBrowser: Bool
+
+  private var resolvedConnectorCount: Int {
+    [hasContext7, hasGitHub, hasFinder, hasBrowser].filter { $0 }.count
+  }
+
+  init(plainText: String) {
+    let tokens = AppToken.scan(plainText)
+    var lines: [String] = []
+    var context7 = false, github = false, finder = false, browser = false
+
+    for entry in tokens {
+      switch entry.selection {
+      case let .context7(libraryID, query):
+        context7 = true
+        lines.append("- Context7 docs selected: library `\(libraryID)`" + (query.map { ", topic `\($0)`" } ?? "") + ".")
+      case let .github(kind, url):
+        github = true
+        lines.append("- GitHub \(kind == .pr ? "pull request" : "issue") selected: \(AppToken.shortGitHub(url)), URL \(url).")
+      case let .finder(reference):
+        finder = true
+        lines.append("- Finder reference selected: \(reference.path).")
+      case let .browser(reference):
+        browser = true
+        lines.append("- Browser tab selected: \(reference.title.isEmpty ? reference.url : reference.title), URL \(reference.url).")
+      case .none:
+        lines.append("- Unresolved connector token present: \(entry.appID).")
+      }
+    }
+
+    self.summary = lines.isEmpty ? "- No resolved connectors." : lines.joined(separator: "\n")
+    self.hasContext7 = context7
+    self.hasGitHub = github
+    self.hasFinder = finder
+    self.hasBrowser = browser
+  }
+
+  func shouldKeep(_ flag: LintFlag) -> Bool {
+    let phrase = flag.phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !phrase.isEmpty, !phrase.hasPrefix("@"), !phrase.contains("\u{fffc}") else { return false }
+
+    let lower = phrase.lowercased()
+    if flag.kind == .unresolvedReference || flag.kind == .missingContext {
+      if hasContext7, containsAny(lower, ["context7", "docs", "documentation", "api", "apis", "library", "libraries", "version", "versions", "examples"]) { return false }
+      if hasGitHub, containsAny(lower, ["github", "issue", "issues", "pr", "prs", "pull request", "pull requests", "ticket", "acceptance criteria"]) { return false }
+      if hasFinder, containsAny(lower, ["finder", "file", "files", "folder", "folders", "path", "local", "contents", "listing"]) { return false }
+      if hasBrowser, containsAny(lower, ["browser", "tab", "page", "url", "site", "website", "link", "host", "title"]) { return false }
+
+      let pronouns: Set<String> = ["it", "this", "that", "these", "those", "this one", "that one", "the above", "above"]
+      if resolvedConnectorCount == 1, pronouns.contains(lower) { return false }
+    }
+
+    return true
+  }
+
+  private func containsAny(_ text: String, _ needles: [String]) -> Bool {
+    needles.contains { text.contains($0) }
   }
 }
 

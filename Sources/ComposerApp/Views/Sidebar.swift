@@ -1,0 +1,61 @@
+import SwiftUI
+
+/// The floating liquid-glass rail on the left edge — the always-visible home for the
+/// board/session actions (the canvas tools + Compile/Copy live in the top `CanvasToolbar`).
+/// Quiet by default, lights up on hover.
+struct Sidebar: View {
+  @ObservedObject var store: DumpStore
+  var onNew: () -> Void
+  var onHistory: () -> Void
+  var onSettings: () -> Void
+
+  var body: some View {
+    VStack(spacing: 9) {
+      SidebarButton(symbol: "square.and.pencil", help: "New board  ⌘N", action: onNew)
+      SidebarButton(symbol: "clock.arrow.circlepath", help: "Past boards  ⌘[ ⌘]",
+                    active: store.isHistoryOpen, action: onHistory)
+
+      Rectangle().fill(Theme.Palette.separator).frame(width: 16, height: 1).padding(.vertical, 1)
+
+      SidebarButton(symbol: "gearshape", help: "Settings  ⌘,", action: onSettings)
+    }
+    .padding(.vertical, 12)
+    .padding(.horizontal, 7)
+    .railSurface()
+  }
+}
+
+struct SidebarButton: View {
+  let symbol: String
+  let help: String
+  var active = false
+  var disabled = false
+  var action: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: symbol)
+        .font(.system(size: 17, weight: .medium))
+        .foregroundStyle(foreground)
+        .frame(width: 38, height: 38)
+        .background(
+          Circle().fill(active ? Color.accentColor.opacity(0.22)
+                        : (hovering && !disabled ? Color.white.opacity(0.12) : Color.clear))
+        )
+        .contentShape(Circle())
+    }
+    .buttonStyle(.plain)
+    .disabled(disabled)
+    .onHover { hovering = $0 }
+    .help(help)
+    .animation(.easeOut(duration: 0.12), value: hovering)
+  }
+
+  // Icons sit on the dark rail, so they're keyed to white — bright enough to read at rest.
+  private var foreground: AnyShapeStyle {
+    if disabled { return AnyShapeStyle(Color.white.opacity(0.26)) }
+    if active { return AnyShapeStyle(Color.accentColor) }
+    return AnyShapeStyle(Color.white.opacity(hovering ? 0.95 : 0.62))
+  }
+}

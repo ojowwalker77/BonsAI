@@ -85,6 +85,9 @@ final class MentionStyleCache {
 
   private(set) var images: [String: NSImage] = [:]
   private(set) var colors: [String: NSColor] = [:]
+  /// Small, line-height-sized copies for inline use in SwiftUI `Text` (non-editing cards),
+  /// built lazily and reused so panning/redrawing never re-rasterizes a 64px icon per frame.
+  private var inlineImages: [String: NSImage] = [:]
   /// Fires on the main actor when a favicon/color lands; wire to updateExistingChips().
   var onUpdate: (() -> Void)?
 
@@ -104,6 +107,18 @@ final class MentionStyleCache {
   func image(for id: String) -> NSImage? { images[id] }
   func color(for id: String) -> NSColor? { colors[id] }
 
+  /// A `side`×`side` copy of the brand icon for inline `Text` use, cached per id.
+  func inlineImage(for id: String, side: CGFloat = 15) -> NSImage? {
+    if let cached = inlineImages[id] { return cached }
+    guard let base = images[id] else { return nil }
+    let resized = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+      base.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+      return true
+    }
+    inlineImages[id] = resized
+    return resized
+  }
+
   func preload() {
     for item in MentionCatalog.all {
       if item.id == "@github" {
@@ -111,6 +126,12 @@ final class MentionStyleCache {
         let image = githubOctocatImage()
         images[item.id] = image
         colors[item.id] = dominantColor(of: image)   // white glyph → legible light neutral
+      } else if item.id == "@finder", let image = localAppIcon(bundleID: "com.apple.finder", fallbackPath: "/System/Library/CoreServices/Finder.app") {
+        images[item.id] = image
+        colors[item.id] = dominantColor(of: image)
+      } else if item.id == "@browser", let image = localAppIcon(bundleID: "com.apple.Safari", fallbackPath: "/Applications/Safari.app") {
+        images[item.id] = image
+        colors[item.id] = dominantColor(of: image)
       } else if let host = MentionDomain.host(for: item.id) {
         loadFavicon(id: item.id, host: host)
       } else {
@@ -119,6 +140,15 @@ final class MentionStyleCache {
       }
     }
     broadcast()
+  }
+
+  private func localAppIcon(bundleID: String, fallbackPath: String) -> NSImage? {
+    let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+      ?? (FileManager.default.fileExists(atPath: fallbackPath) ? URL(fileURLWithPath: fallbackPath) : nil)
+    guard let url else { return nil }
+    let image = NSWorkspace.shared.icon(forFile: url.path)
+    image.size = NSSize(width: 64, height: 64)
+    return image
   }
 
   private func loadFavicon(id: String, host: String) {
@@ -146,6 +176,7 @@ final class MentionStyleCache {
   private func ingest(id: String, image: NSImage) {
     images[id] = image
     colors[id] = dominantColor(of: image)
+    inlineImages[id] = nil   // drop the stale inline copy; rebuilt on next request
     broadcast()
   }
 
@@ -189,6 +220,47 @@ enum ChipFactory {
     }
     return MentionToken.attributed(token: token, label: label, font: font, showDisclosure: isApp)
   }
+
+  /// Inverse of `composerPlainText` for the editor: rebuild an attributed string from serialized
+  /// plain text, re-styling each `@token` as a chip. This is what lets a reloaded card show real
+  /// chips instead of raw "@github" text. Image placeholders stay literal (the bitmap isn't
+  /// recoverable from the serialized text).
+  @MainActor
+  static func attributedDocument(fromPlainText plain: String, font: NSFont,
+                                 paragraph: NSParagraphStyle) -> NSAttributedString {
+    let body: [NSAttributedString.Key: Any] = [
+      .font: font, .foregroundColor: Theme.nsBodyText, .paragraphStyle: paragraph]
+    let result = NSMutableAttributedString()
+    let ns = plain as NSString
+    var cursor = 0
+    for range in mentionTokenRanges(in: plain) {
+      if range.location > cursor {
+        result.append(NSAttributedString(
+          string: ns.substring(with: NSRange(location: cursor, length: range.location - cursor)),
+          attributes: body))
+      }
+      result.append(make(token: ns.substring(with: range), font: font))
+      cursor = range.location + range.length
+    }
+    if cursor < ns.length {
+      result.append(NSAttributedString(
+        string: ns.substring(with: NSRange(location: cursor, length: ns.length - cursor)),
+        attributes: body))
+    }
+    return result
+  }
+
+  private static let mentionRegex: NSRegularExpression? = {
+    let ids = MentionCatalog.all.map { NSRegularExpression.escapedPattern(for: $0.id) }
+      .sorted { $0.count > $1.count }.joined(separator: "|")
+    return try? NSRegularExpression(pattern: "(?:\(ids))(?::[^\\s]+)?")
+  }()
+
+  private static func mentionTokenRanges(in text: String) -> [NSRange] {
+    guard let regex = mentionRegex else { return [] }
+    let ns = text as NSString
+    return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map(\.range)
+  }
 }
 
 // MARK: - Chip builder
@@ -199,26 +271,33 @@ enum MentionChip {
   static func attributed(token: String, label: String, font: NSFont,
                          image: NSImage, color: NSColor, showDisclosure: Bool) -> NSAttributedString {
     let cap = font.capHeight
-    let glyph = max(cap + 3, 12)
+    let glyph = (max(cap + 3, 12)).rounded()
     let scaled = resize(image, to: NSSize(width: glyph, height: glyph))
 
     let attachment = NSTextAttachment()
     attachment.image = scaled
-    attachment.bounds = NSRect(x: 0, y: font.descender + (cap - glyph) / 2 + 1, width: glyph, height: glyph)
+    // Center the glyph box on the cap-height midline (≈ the font's optical center).
+    // Derived purely from cap + glyph, so it stays centered at every font size.
+    attachment.bounds = NSRect(x: 0, y: (cap - glyph) / 2, width: glyph, height: glyph)
 
     let chip = NSMutableAttributedString(attributedString: NSAttributedString(attachment: attachment))
     chip.append(NSAttributedString(string: "\u{2009}", attributes: [.font: font]))
     let nameFont = NSFont.systemFont(ofSize: font.pointSize - 1, weight: .medium)
     chip.append(NSAttributedString(string: label, attributes: [.font: nameFont, .foregroundColor: color]))
-    if showDisclosure { chip.append(disclosure(font: font, color: color.withAlphaComponent(0.6))) }
+    if showDisclosure { chip.append(disclosure(font: font, color: color.withAlphaComponent(0.42))) }
     chip.addAttribute(.mentionToken, value: token, range: NSRange(location: 0, length: chip.length))
     return chip
   }
 
-  /// The "click to search" affordance appended to interactive app chips.
+  /// The "click to search" affordance appended to interactive app chips — a quiet
+  /// chevron that sits a hair below the cap line so it reads as an affordance, not a glyph.
   static func disclosure(font: NSFont, color: NSColor) -> NSAttributedString {
-    let small = NSFont.systemFont(ofSize: font.pointSize - 3, weight: .semibold)
-    return NSAttributedString(string: "\u{2009}\u{25BE}", attributes: [.font: small, .foregroundColor: color])
+    let small = NSFont.systemFont(ofSize: font.pointSize - 4, weight: .medium)
+    return NSAttributedString(string: "\u{2009}\u{25BE}", attributes: [
+      .font: small,
+      .foregroundColor: color,
+      .baselineOffset: 0.5,
+    ])
   }
 
   private static func resize(_ image: NSImage, to size: NSSize) -> NSImage {

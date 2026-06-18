@@ -3,17 +3,22 @@ import AppKit
 
 // MARK: - Design tokens
 
-/// One source of truth for everything spatial, material, and temporal.
-/// The app is a single translucent card, so the token set is deliberately small.
+/// One source of truth for spatial, material, color, and motion tokens.
+/// Colors are adaptive so the panel and popovers follow the system appearance.
 enum Theme {
-  static let nsBodyText = NSColor.white.withAlphaComponent(0.88)
-  static let nsPlaceholderText = NSColor.white.withAlphaComponent(0.48)
+  static var nsBodyText: NSColor {
+    Adaptive.ns(light: Adaptive.white(0.04, 0.84), dark: Adaptive.white(1.00, 0.88))
+  }
+
+  static var nsPlaceholderText: NSColor {
+    Adaptive.ns(light: Adaptive.white(0.02, 0.38), dark: Adaptive.white(1.00, 0.48))
+  }
 
   enum Radius {
     static let panel: CGFloat = 22
-    static let actionBar: CGFloat = 10
-    static let menu: CGFloat = 10
-    static let row: CGFloat = 7
+    static let actionBar: CGFloat = 12
+    static let menu: CGFloat = 14
+    static let row: CGFloat = 9
   }
 
   enum Material {
@@ -23,31 +28,32 @@ enum Theme {
   }
 
   enum Size {
-    static let widthFraction: CGFloat = 0.52
-    static let heightFraction: CGFloat = 0.62
-    static let minWidth: CGFloat = 560, maxWidth: CGFloat = 820
-    static let minHeight: CGFloat = 420, maxHeight: CGFloat = 680
-    static let opticalLift: CGFloat = 0.06   // nudge the panel up 6% of its height
+    /// The whole panel (card + the rail/toolbar gutters) fills this fraction of the screen's
+    /// visible frame, centered — Composer is a near-fullscreen canvas. The card auto-derives
+    /// from the window size minus the gutters in the canvas layout.
+    static let screenFraction: CGFloat = 0.95
+    /// Transparent left margin of the window where the rail floats outside the card.
+    static let railGutter: CGFloat = 84
+    /// Transparent top margin of the window where the canvas toolbar floats above the card.
+    static let toolbarGutter: CGFloat = 60
 
     static let actionBarHeight: CGFloat = 34
     static let actionBarItemHeight: CGFloat = 28
-    static let menuWidth: CGFloat = 300
-    static let menuRowHeight: CGFloat = 32
+    static let menuWidth: CGFloat = 320
+    static let menuRowHeight: CGFloat = 36
     static let menuMaxVisibleRows: CGFloat = 6
   }
 
   enum Inset {
     static let horizontal: CGFloat = 60
-    static let titleTop: CGFloat = 16
-    static let editorTop: CGFloat = 22
+    static let editorTop: CGFloat = 34
     static let countBottom: CGFloat = 14
     static let textContainer = NSSize(width: 4, height: 8)
   }
 
   enum Typography {
-    static let body = NSFont.preferredFont(forTextStyle: .body)
+    static var body: NSFont { ComposerPreferences.editorFont }
     static let bodyLineSpacing: CGFloat = 3
-    static let title = SwiftUI.Font.caption
     static let count = SwiftUI.Font.caption2
     static let menuName = SwiftUI.Font.body
     static let menuDesc = SwiftUI.Font.caption
@@ -55,38 +61,92 @@ enum Theme {
     static let actionIcon = SwiftUI.Font.body.weight(.medium)
   }
 
-  /// All text is driven from semantic colors so alpha resolves correctly on vibrancy.
+  /// All foreground and surface colors are adaptive. Avoid hard-coded white/black in views.
   enum Palette {
-    static let body = Color.white.opacity(0.88)
-    static let title = Color.white.opacity(0.36)
-    static let count = Color.white.opacity(0.22)
-    static let placeholder = Color.white.opacity(0.48)
-    static let menuDesc = Color.white.opacity(0.58)
-    static let accentFill = Color.accentColor.opacity(0.20)
-    static let rowFill = Color.white.opacity(0.055)
-    static let selectedRowFill = Color.accentColor.opacity(0.28)
+    static var body: Color { Color(nsColor: Theme.nsBodyText) }
+    static var title: Color { Adaptive.color(light: Adaptive.white(0.02, 0.42), dark: Adaptive.white(1.00, 0.36)) }
+    static var count: Color { Adaptive.color(light: Adaptive.white(0.02, 0.30), dark: Adaptive.white(1.00, 0.22)) }
+    static var placeholder: Color { Color(nsColor: Theme.nsPlaceholderText) }
+    static var menuDesc: Color { Adaptive.color(light: Adaptive.white(0.02, 0.58), dark: Adaptive.white(1.00, 0.58)) }
 
-    static let panelBase = Color(red: 0.070, green: 0.078, blue: 0.086)
-    static let panelScrim = Color.black.opacity(0.78)
-    static let panelBottomShade = Color.black.opacity(0.10)
-    static let panelTopSheen = Color.white.opacity(0.035)
-    static let panelHairline = Color.clear
-    static let panelInnerLine = Color.clear
-    static let barScrim = Color.black.opacity(0.42)
-    static let barHairline = Color.clear
-    static let buttonHover = Color.white.opacity(0.12)
+    static var accentFill: Color { Color.accentColor.opacity(0.20) }
+    static var rowFill: Color { Adaptive.color(light: Adaptive.white(0.00, 0.045), dark: Adaptive.white(1.00, 0.055)) }
+    static var selectedRowFill: Color { Color.accentColor.opacity(0.24) }
+
+    static var panelBase: Color {
+      Adaptive.color(
+        light: Adaptive.srgb(0.965, 0.960, 0.945),
+        dark: Adaptive.srgb(0.070, 0.078, 0.086)
+      )
+    }
+    static var panelScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.50), dark: Adaptive.white(0.00, 0.66)) }
+    static var panelBottomShade: Color { Adaptive.color(light: Adaptive.white(0.00, 0.035), dark: Adaptive.white(0.00, 0.10)) }
+    static var panelTopSheen: Color { Adaptive.color(light: Adaptive.white(1.00, 0.46), dark: Adaptive.white(1.00, 0.04)) }
+    static var panelHairline: Color { Adaptive.color(light: Adaptive.white(0.00, 0.10), dark: Adaptive.white(1.00, 0.08)) }
+    static var panelInnerLine: Color { Adaptive.color(light: Adaptive.white(1.00, 0.40), dark: Adaptive.white(1.00, 0.06)) }
+
+    static var popupScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.56), dark: Adaptive.white(0.00, 0.24)) }
+    static var popupSheen: Color { Adaptive.color(light: Adaptive.white(1.00, 0.38), dark: Adaptive.white(1.00, 0.045)) }
+    static var popupHairline: Color { Adaptive.color(light: Adaptive.white(0.00, 0.10), dark: Adaptive.white(1.00, 0.08)) }
+
+    /// Uniform legibility tint + edge for the unified Liquid Glass surface (forced-dark panel).
+    static var raisedTint: Color { Color.black.opacity(0.16) }
+    static var raisedRim: Color { Color.white.opacity(0.07) }
+
+    static var barScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.60), dark: Adaptive.white(0.00, 0.42)) }
+    static var barHairline: Color { Adaptive.color(light: Adaptive.white(0.00, 0.10), dark: Adaptive.white(1.00, 0.08)) }
+    static var barSheen: Color { Adaptive.color(light: Adaptive.white(1.00, 0.36), dark: Adaptive.white(1.00, 0.055)) }
+
+    static var separator: Color { Adaptive.color(light: Adaptive.white(0.00, 0.085), dark: Adaptive.white(1.00, 0.07)) }
+    static var keycapFill: Color { Adaptive.color(light: Adaptive.white(0.00, 0.060), dark: Adaptive.white(1.00, 0.08)) }
+    static var segmentedFill: Color { Adaptive.color(light: Adaptive.white(0.00, 0.045), dark: Adaptive.white(1.00, 0.05)) }
+    static var tagFill: Color { Adaptive.color(light: Adaptive.white(0.00, 0.060), dark: Adaptive.white(1.00, 0.075)) }
+    static var buttonHover: Color { Adaptive.color(light: Adaptive.white(0.00, 0.070), dark: Adaptive.white(1.00, 0.12)) }
+    static var toastScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.42), dark: Adaptive.white(0.00, 0.35)) }
   }
 
   enum Shadow {
-    static let panel = (color: Color.black.opacity(0.45), radius: 36.0, y: 18.0)
-    static let bar = (color: Color.black.opacity(0.36), radius: 18.0, y: 8.0)
-    static let menu = (color: Color.black.opacity(0.25), radius: 16.0, y: 8.0)
+    static var panel: (color: Color, radius: Double, y: Double) {
+      (Adaptive.color(light: Adaptive.white(0.00, 0.20), dark: Adaptive.white(0.00, 0.45)), 36.0, 18.0)
+    }
+    static var bar: (color: Color, radius: Double, y: Double) {
+      (Adaptive.color(light: Adaptive.white(0.00, 0.18), dark: Adaptive.white(0.00, 0.36)), 18.0, 8.0)
+    }
+    static var menu: (color: Color, radius: Double, y: Double) {
+      (Adaptive.color(light: Adaptive.white(0.00, 0.16), dark: Adaptive.white(0.00, 0.25)), 16.0, 8.0)
+    }
   }
 
   enum Motion {
     static let accessory = Animation.spring(response: 0.28, dampingFraction: 0.82)
     static let dismissDuration = 0.16
     static let selectionDebounce: TimeInterval = 0.10
+  }
+}
+
+// MARK: - Adaptive colors
+
+private enum Adaptive {
+  static func ns(light: NSColor, dark: NSColor) -> NSColor {
+    NSColor(name: nil) { appearance in
+      isDark(appearance) ? dark : light
+    }
+  }
+
+  static func color(light: NSColor, dark: NSColor) -> Color {
+    Color(nsColor: ns(light: light, dark: dark))
+  }
+
+  static func white(_ white: CGFloat, _ alpha: CGFloat = 1) -> NSColor {
+    NSColor(white: white, alpha: alpha)
+  }
+
+  static func srgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat = 1) -> NSColor {
+    NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+  }
+
+  private static func isDark(_ appearance: NSAppearance) -> Bool {
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
   }
 }
 
@@ -117,23 +177,62 @@ struct VisualEffectBackground: NSViewRepresentable {
   }
 }
 
+// MARK: - Shared surfaces
+
+extension View {
+  /// THE one cohesive raised surface for every floating element — menus, lists, bars, the
+  /// rail. Real Liquid Glass on macOS 26, a uniform dark-vibrancy fallback elsewhere.
+  /// Deliberately uniform (no internal gradient), so it never shifts shade over a busy
+  /// or light backdrop the way a manual sheen does.
+  @ViewBuilder
+  func floatingGlass<S: Shape>(_ shape: S) -> some View {
+    if #available(macOS 26.0, *) {
+      self
+        .clipShape(shape)
+        .background(Theme.Palette.raisedTint, in: shape)
+        .glassEffect(.regular, in: shape)
+    } else {
+      self
+        .background {
+          ZStack {
+            VisualEffectBackground(material: Theme.Material.menu, blending: .withinWindow, state: .active)
+            Theme.Palette.popupScrim
+          }
+        }
+        .clipShape(shape)
+        .shadow(color: Theme.Shadow.menu.color, radius: Theme.Shadow.menu.radius, y: Theme.Shadow.menu.y)
+    }
+  }
+
+  /// Rounded popover surface used by every menu/list overlay.
+  func composerPopupSurface(radius: CGFloat = Theme.Radius.menu) -> some View {
+    floatingGlass(RoundedRectangle(cornerRadius: radius, style: .continuous))
+  }
+}
+
 // MARK: - Panel backdrop
 
 /// The frosted, rounded, scrimmed card the whole canvas sits on.
 struct ComposerPanelBackground: View {
   var radius: CGFloat = Theme.Radius.panel
+  @AppStorage(ComposerPreferences.panelTransparencyKey) private var panelTransparency = ComposerPreferences.defaultPanelTransparency
 
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+    // 0 = Opaque, maxPanelTransparency = Glass. Normalize to 0…1 so the tint sweeps a
+    // wide, obviously-live range as the slider moves.
+    let glass = ComposerPreferences.clampedPanelTransparency(panelTransparency) / ComposerPreferences.maxPanelTransparency
+    let tint = 0.80 - 0.58 * glass
+
     ZStack {
-      VisualEffectBackground(
-        material: Theme.Material.popover,
-        blending: .withinWindow,
-        state: .active,
-        forceDark: true
-      )
-      Theme.Palette.panelBase
-      Theme.Palette.panelScrim
+      // Genuine frosted glass: `.behindWindow` samples and blurs the desktop behind the
+      // panel (Spotlight / Control Center vibrancy), not just content within the window.
+      VisualEffectBackground(material: .hudWindow, blending: .behindWindow, state: .active)
+
+      // Legibility tint over the blur — recedes toward Glass, deepens toward Opaque.
+      Color.black.opacity(tint)
+
+      // Top sheen → clear → faint floor gives the slab depth.
       LinearGradient(
         stops: [
           .init(color: Theme.Palette.panelTopSheen, location: 0),
@@ -145,7 +244,6 @@ struct ComposerPanelBackground: View {
       )
     }
     .clipShape(shape)
-    .shadow(color: Theme.Shadow.panel.color, radius: Theme.Shadow.panel.radius, y: Theme.Shadow.panel.y)
     .ignoresSafeArea()
   }
 }

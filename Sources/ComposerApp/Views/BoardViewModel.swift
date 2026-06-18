@@ -1,0 +1,806 @@
+import SwiftUI
+import SwiftData
+
+// MARK: - Per-card runtime state
+
+/// One card's editor-runtime state — the per-editor objects that were singletons in the
+/// note era, now one bundle per card. Geometry lives in `CardState` (the board model);
+/// this holds the live editing surface. Stable identity: created once per card id and
+/// cached in `BoardViewModel`, never rebuilt inside a `ForEach`.
+@MainActor
+final class CardInteraction: ObservableObject, Identifiable {
+  let id: UUID
+  let mentions = MentionState()
+  let appSearch = AppSearchState()
+  let controller = EditorController()
+  let lint = LintState()
+  let refine = RefineState()
+  private var plainTextCache: String
+  private var attributedCache: NSAttributedString?
+
+  /// The visible string (`tv.string`) — drives count/placeholder/change-detection. NOT the
+  /// persisted form; persistence and compile use `controller.plainText` (tokens preserved).
+  @Published var text: String
+  @Published var count: Int
+  @Published var selection = EditorSelection()
+  @Published var dragDelta: CGSize = .zero
+
+  init(_ card: CardState) {
+    self.id = card.id
+    self.text = card.text
+    self.count = card.text.count
+    self.plainTextCache = card.text
+  }
+
+  /// Self-contained plain text (mention tokens serialized back to `@name`). Falls back to
+  /// the last captured editor value while the heavy AppKit editor is unmounted.
+  var plainText: String {
+    controller.plainTextIfLoaded ?? plainTextCache
+  }
+
+  var attributedSnapshot: NSAttributedString? { attributedCache }
+
+  func captureEditorState() {
+    if let snapshot = controller.attributedSnapshot {
+      attributedCache = snapshot
+      plainTextCache = snapshot.composerPlainText
+      text = snapshot.string
+      count = snapshot.string.count
+    } else if let plain = controller.plainTextIfLoaded {
+      plainTextCache = plain
+    }
+  }
+
+  func cachePlainText(_ value: String) {
+    plainTextCache = value
+    count = value.count
+  }
+}
+
+// MARK: - Board view-model
+
+/// Owns the working board: the cards' geometry (`cards`) and their runtime bundles
+/// (`interactions`), plus which card is active. The single `@StateObject` the canvas holds;
+/// the only writer to the store for the current board.
+@MainActor
+final class BoardViewModel: ObservableObject {
+  private let store: DumpStore
+  private struct HistorySnapshot {
+    var cards: [CardState]
+    var selectedCardIDs: Set<UUID>
+    var primarySelectedCardID: UUID?
+    var editingCardID: UUID?
+    var nextZ: Int
+  }
+
+  /// Geometry + last-saved text + z-order, newest-placed last. Live text lives in the
+  /// matching `CardInteraction`; `text` here is only the seed/persisted snapshot.
+  @Published private(set) var cards: [CardState] = []
+  /// Selected cards — show selection rings and receive group operations.
+  @Published private(set) var selectedCardIDs: Set<UUID> = []
+  /// The lead selection. This is the card that gets destructive/action chrome when several
+  /// cards are selected.
+  @Published private(set) var primarySelectedCardID: UUID?
+  /// The card in text-edit mode (its editor holds first responder). Anchored overlays
+  /// (mentions, connector search, linter, selection bar) route here.
+  @Published var editingCardID: UUID?
+
+  private var interactions: [UUID: CardInteraction] = [:]
+  private var movePreviewIDs: Set<UUID> = []
+  private var movePreviewDelta: CGSize = .zero
+  private var nextZ = 1
+  private var undoStack: [HistorySnapshot] = []
+  private var redoStack: [HistorySnapshot] = []
+  private var textEditBaselines: [UUID: String] = [:]
+  private var isRestoringHistory = false
+  private let maxHistoryDepth = 80
+  /// Undo/redo kept per board, so flipping to another board and back doesn't lose your history.
+  private var undoCache: [PersistentIdentifier: (undo: [HistorySnapshot], redo: [HistorySnapshot])] = [:]
+  private var currentBoardID: PersistentIdentifier?
+
+  init() {
+    self.store = DumpStore.shared
+    loadFromStore()
+  }
+
+  // MARK: Access
+
+  /// The cached runtime bundle for a card (created on demand, identity-stable).
+  func interaction(for id: UUID) -> CardInteraction {
+    if let existing = interactions[id] { return existing }
+    let seed = cards.first { $0.id == id } ?? CardState.firstCard()
+    let made = CardInteraction(seed)
+    interactions[id] = made
+    return made
+  }
+
+  var selectedInteraction: CardInteraction? { selectedCardID.flatMap { interactions[$0] } }
+  var editingInteraction: CardInteraction? { editingCardID.flatMap { interactions[$0] } }
+  var selectedCardID: UUID? { primarySelectedCardID }
+
+  private func index(for id: UUID) -> Int? {
+    cards.firstIndex { $0.id == id }
+  }
+
+  private func selectionSet(for id: UUID) -> Set<UUID> {
+    guard let i = index(for: id), let groupID = cards[i].groupID else { return [id] }
+    return Set(cards.filter { $0.groupID == groupID }.map(\.id))
+  }
+
+  private func expandedGroups(_ ids: Set<UUID>) -> Set<UUID> {
+    ids.reduce(into: Set<UUID>()) { result, id in
+      result.formUnion(selectionSet(for: id))
+    }
+  }
+
+  private func unlockedIDs(in ids: Set<UUID>) -> Set<UUID> {
+    Set(cards.filter { ids.contains($0.id) && !$0.locked }.map(\.id))
+  }
+
+  /// Single-click: select without entering text edit (Excalidraw — drag then moves it).
+  func select(_ id: UUID, extending: Bool = false, toggling: Bool = false) {
+    if let editing = editingCardID, editing != id { stopEditing() }
+    let target = selectionSet(for: id)
+    if toggling {
+      if target.isSubset(of: selectedCardIDs) {
+        selectedCardIDs.subtract(target)
+        if let primarySelectedCardID, target.contains(primarySelectedCardID) {
+          self.primarySelectedCardID = selectedCardIDs.first
+        }
+      } else {
+        selectedCardIDs.formUnion(target)
+        primarySelectedCardID = id
+      }
+    } else if extending {
+      selectedCardIDs.formUnion(target)
+      primarySelectedCardID = id
+    } else {
+      selectedCardIDs = target
+      primarySelectedCardID = id
+    }
+  }
+
+  /// Double-click / freshly placed card / click into the editor: enter text edit.
+  func beginEditing(_ id: UUID) {
+    selectedCardIDs = [id]
+    primarySelectedCardID = id
+    editingCardID = id
+  }
+
+  /// The editor lost first responder.
+  func endEditing(_ id: UUID) {
+    interactions[id]?.captureEditorState()
+    if editingCardID == id { editingCardID = nil }
+  }
+
+  /// Click on empty board: drop selection and leave text edit (resigning the editor).
+  func deselectAll() {
+    stopEditing()
+    selectedCardIDs = []
+    primarySelectedCardID = nil
+    cancelMovePreview()
+  }
+
+  private func stopEditing() {
+    guard let id = editingCardID else { return }
+    interactions[id]?.captureEditorState()
+    textEditBaselines[id] = nil
+    interactions[id]?.controller.resignFocus()
+    editingCardID = nil
+  }
+
+  // MARK: Load / save
+
+  /// Pull the current board's cards into the working set, rebuilding bundles.
+  func loadFromStore() {
+    // Stash the outgoing board's undo history, then restore the incoming board's (if any).
+    if let previous = currentBoardID { undoCache[previous] = (undoStack, redoStack) }
+    currentBoardID = store.currentID
+    let loaded = store.currentCards
+    cards = loaded
+    interactions = Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, CardInteraction($0)) })
+    nextZ = (loaded.map(\.z).max() ?? 0) + 1
+    let restored = currentBoardID.flatMap { undoCache[$0] }
+    undoStack = restored?.undo ?? []
+    redoStack = restored?.redo ?? []
+    textEditBaselines = [:]
+    if let first = loaded.first?.id {
+      selectedCardIDs = [first]
+      primarySelectedCardID = first
+    } else {
+      selectedCardIDs = []
+      primarySelectedCardID = nil
+    }
+    editingCardID = nil
+  }
+
+  /// Geometry + live plain text, ready to persist.
+  private func snapshot() -> [CardState] {
+    cards.map { card in
+      var copy = card
+      copy.text = interactions[card.id]?.plainText ?? card.text
+      return copy
+    }
+  }
+
+  func scheduleSave() { store.scheduleUpdate(cards: snapshot()) }
+  func flushSave() { store.flush(cards: snapshot()) }
+
+  private func historySnapshot(cards overrideCards: [CardState]? = nil) -> HistorySnapshot {
+    HistorySnapshot(
+      cards: overrideCards ?? snapshot(),
+      selectedCardIDs: selectedCardIDs,
+      primarySelectedCardID: primarySelectedCardID,
+      editingCardID: editingCardID,
+      nextZ: nextZ
+    )
+  }
+
+  private func registerUndo(_ snapshot: HistorySnapshot? = nil) {
+    guard !isRestoringHistory else { return }
+    undoStack.append(snapshot ?? historySnapshot())
+    if undoStack.count > maxHistoryDepth { undoStack.removeFirst(undoStack.count - maxHistoryDepth) }
+    redoStack.removeAll()
+  }
+
+  private func restore(_ value: HistorySnapshot) {
+    isRestoringHistory = true
+    cards = value.cards
+    interactions = Dictionary(uniqueKeysWithValues: value.cards.map { ($0.id, CardInteraction($0)) })
+    selectedCardIDs = value.selectedCardIDs.intersection(Set(value.cards.map(\.id)))
+    primarySelectedCardID = selectedCardIDs.contains(value.primarySelectedCardID ?? UUID())
+      ? value.primarySelectedCardID
+      : selectedCardIDs.first
+    editingCardID = nil
+    nextZ = max(value.nextZ, (value.cards.map(\.z).max() ?? 0) + 1)
+    clearMovePreview()
+    textEditBaselines = [:]
+    scheduleSave()
+    isRestoringHistory = false
+  }
+
+  func undo() {
+    guard let previous = undoStack.popLast() else { return }
+    redoStack.append(historySnapshot())
+    restore(previous)
+  }
+
+  func redo() {
+    guard let next = redoStack.popLast() else { return }
+    undoStack.append(historySnapshot())
+    restore(next)
+  }
+
+  // MARK: Mutations
+
+  /// Place a new text element where you clicked — the click is the start of its first line
+  /// (Excalidraw point text), not the center of a box. Returns its id so the canvas can focus it.
+  @discardableResult
+  func addCard(at point: CGPoint) -> UUID {
+    registerUndo()
+    let size = CardState.textDefaultSize
+    let card = CardState(
+      text: "",
+      x: Double(point.x),
+      y: Double(point.y - size.height / 2),
+      w: Double(size.width),
+      h: Double(size.height),
+      z: nextZ)
+    nextZ += 1
+    cards.append(card)
+    interactions[card.id] = CardInteraction(card)
+    selectedCardIDs = [card.id]
+    primarySelectedCardID = card.id
+    editingCardID = card.id
+    scheduleSave()
+    return card.id
+  }
+
+  @discardableResult
+  func addElement(_ kind: CanvasElementKind, at center: CGPoint) -> UUID {
+    if kind == .text { return addCard(at: center) }
+    registerUndo()
+    let size: CGSize = {
+      switch kind {
+      case .line, .arrow, .freehand: CardState.lineSize
+      case .image: CardState.shapeSize
+      case .rectangle, .ellipse, .diamond: CardState.shapeSize
+      case .text: CardState.defaultSize
+      }
+    }()
+    let initialPoints: [CanvasPoint]? = {
+      switch kind {
+      case .line, .arrow:
+        return CardState.defaultLinePoints()
+      case .freehand:
+        return CardState.defaultFreehandPoints()
+      case .text, .rectangle, .ellipse, .diamond, .image:
+        return nil
+      }
+    }()
+    let card = CardState(
+      kind: kind,
+      text: "",
+      x: Double(center.x - size.width / 2),
+      y: Double(center.y - size.height / 2),
+      w: Double(size.width),
+      h: Double(size.height),
+      z: nextZ,
+      points: initialPoints
+    )
+    nextZ += 1
+    cards.append(card)
+    if kind == .arrow { bindArrowIfPossible(card.id) }
+    interactions[card.id] = CardInteraction(card)
+    selectedCardIDs = [card.id]
+    primarySelectedCardID = card.id
+    editingCardID = nil
+    scheduleSave()
+    return card.id
+  }
+
+  @discardableResult
+  func addFreehandStroke(frame: CGRect, points: [CanvasPoint]) -> UUID? {
+    guard points.count > 1 else { return nil }
+    registerUndo()
+    let size = CardState.lineMinSize
+    let normalized = CGRect(
+      x: frame.minX,
+      y: frame.minY,
+      width: max(frame.width, size.width),
+      height: max(frame.height, size.height)
+    )
+    let card = CardState(
+      kind: .freehand,
+      text: "",
+      x: Double(normalized.minX),
+      y: Double(normalized.minY),
+      w: Double(normalized.width),
+      h: Double(normalized.height),
+      z: nextZ,
+      points: points
+    )
+    nextZ += 1
+    cards.append(card)
+    interactions[card.id] = CardInteraction(card)
+    selectedCardIDs = [card.id]
+    primarySelectedCardID = card.id
+    editingCardID = nil
+    scheduleSave()
+    return card.id
+  }
+
+  @discardableResult
+  func addImageObject(path: String, at center: CGPoint) -> UUID {
+    registerUndo()
+    let size = CardState.shapeSize
+    let card = CardState(
+      kind: .image,
+      text: "",
+      x: Double(center.x - size.width / 2),
+      y: Double(center.y - size.height / 2),
+      w: Double(size.width),
+      h: Double(size.height),
+      z: nextZ,
+      imagePath: path
+    )
+    nextZ += 1
+    cards.append(card)
+    interactions[card.id] = CardInteraction(card)
+    selectedCardIDs = [card.id]
+    primarySelectedCardID = card.id
+    editingCardID = nil
+    scheduleSave()
+    return card.id
+  }
+
+  /// Commit a moved/resized card frame (board space).
+  func setFrame(_ id: UUID, _ frame: CGRect) {
+    guard let i = cards.firstIndex(where: { $0.id == id }) else { return }
+    guard !cards[i].locked else { return }
+    let minSize = cards[i].minimumSize
+    let next = CGRect(
+      x: frame.minX,
+      y: frame.minY,
+      width: max(frame.width, minSize.width),
+      height: max(frame.height, minSize.height)
+    )
+    guard cards[i].frame != next else { return }
+    registerUndo()
+    if cards[i].elementKind == .arrow {
+      cards[i].startBindingID = nil
+      cards[i].endBindingID = nil
+    }
+    cards[i].frame = next
+    refreshBoundArrows()
+    scheduleSave()
+  }
+
+  /// Grow/shrink a text card's height to fit what's typed. This is a layout consequence of
+  /// editing (the keystroke already registered undo), so it never pushes its own undo step and
+  /// only touches height — width stays where the user left it.
+  func fitTextHeight(_ id: UUID, to height: CGFloat) {
+    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text else { return }
+    let target = max(height, CardState.textMinSize.height)
+    guard abs(cards[i].h - Double(target)) > 0.5 else { return }
+    cards[i].h = Double(target)
+    scheduleSave()
+  }
+
+  func bringToFront(_ id: UUID) {
+    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].z != nextZ - 1 || nextZ == 1 else { return }
+    registerUndo()
+    cards[i].z = nextZ
+    nextZ += 1
+  }
+
+  func delete(_ id: UUID) {
+    guard let i = index(for: id), !cards[i].locked else { return }
+    registerUndo()
+    cards.removeAll { $0.id == id }
+    interactions[id] = nil
+    if editingCardID == id { editingCardID = nil }
+    selectedCardIDs.remove(id)
+    if primarySelectedCardID == id { primarySelectedCardID = selectedCardIDs.first }
+    if cards.isEmpty {
+      let fresh = CardState.firstCard()
+      cards = [fresh]
+      interactions[fresh.id] = CardInteraction(fresh)
+      selectedCardIDs = [fresh.id]
+      primarySelectedCardID = fresh.id
+    }
+    refreshBoundArrows()
+    scheduleSave()
+  }
+
+  func selectAll() {
+    selectedCardIDs = Set(cards.map(\.id))
+    primarySelectedCardID = cards.max(by: { $0.z < $1.z })?.id
+  }
+
+  func select(in rect: CGRect, extending: Bool = false, toggling: Bool = false) {
+    stopEditing()
+    let hits = expandedGroups(Set(cards.filter { $0.frame.intersects(rect) }.map(\.id)))
+    if toggling {
+      selectedCardIDs.formSymmetricDifference(hits)
+    } else if extending {
+      selectedCardIDs.formUnion(hits)
+    } else {
+      selectedCardIDs = hits
+    }
+    primarySelectedCardID = cards
+      .filter { selectedCardIDs.contains($0.id) }
+      .max(by: { $0.z < $1.z })?
+      .id
+  }
+
+  func deleteSelection() {
+    guard !selectedCardIDs.isEmpty else { return }
+    let deleting = unlockedIDs(in: selectedCardIDs)
+    guard !deleting.isEmpty else { return }
+    registerUndo()
+    cards.removeAll { deleting.contains($0.id) }
+    for id in deleting { interactions[id] = nil }
+    if let editingCardID, deleting.contains(editingCardID) { self.editingCardID = nil }
+    selectedCardIDs = []
+    primarySelectedCardID = nil
+    if cards.isEmpty {
+      let fresh = CardState.firstCard()
+      cards = [fresh]
+      interactions[fresh.id] = CardInteraction(fresh)
+      selectedCardIDs = [fresh.id]
+      primarySelectedCardID = fresh.id
+    }
+    refreshBoundArrows()
+    scheduleSave()
+  }
+
+  func selectedCardsForClipboard() -> [CardState] {
+    let selected = cards.filter { selectedCardIDs.contains($0.id) }
+    return selected.map { card in
+      var copy = card
+      copy.text = interactions[card.id]?.plainText ?? card.text
+      return copy
+    }
+  }
+
+  func duplicateSelection(offset: CGSize = CGSize(width: 28, height: 28)) {
+    _ = insertCopies(selectedCardsForClipboard(), offset: offset)
+  }
+
+  @discardableResult
+  func insertCopies(_ source: [CardState], offset: CGSize = CGSize(width: 28, height: 28)) -> [UUID] {
+    guard !source.isEmpty else { return [] }
+    registerUndo()
+    var ids: [UUID] = []
+    let ordered = source.sorted { a, b in
+      if a.z != b.z { return a.z < b.z }
+      if a.y != b.y { return a.y < b.y }
+      return a.x < b.x
+    }
+    for original in ordered {
+      var copy = original
+      copy.id = UUID()
+      copy.x += Double(offset.width)
+      copy.y += Double(offset.height)
+      copy.z = nextZ
+      copy.startBindingID = nil
+      copy.endBindingID = nil
+      nextZ += 1
+      cards.append(copy)
+      interactions[copy.id] = CardInteraction(copy)
+      ids.append(copy.id)
+    }
+    selectedCardIDs = Set(ids)
+    primarySelectedCardID = ids.last
+    editingCardID = nil
+    scheduleSave()
+    return ids
+  }
+
+  func moveSelected(by delta: CGSize) {
+    guard !selectedCardIDs.isEmpty, delta != .zero else { return }
+    let moving = unlockedIDs(in: selectedCardIDs)
+    guard !moving.isEmpty else { return }
+    registerUndo()
+    for i in cards.indices where moving.contains(cards[i].id) {
+      cards[i].x += Double(delta.width)
+      cards[i].y += Double(delta.height)
+    }
+    detachMovedArrows(moving)
+    refreshBoundArrows()
+    scheduleSave()
+  }
+
+  func updateMovePreview(by delta: CGSize) {
+    let moving = unlockedIDs(in: selectedCardIDs)
+    guard moving.count > 1 else { return }
+    if movePreviewIDs != moving {
+      clearMovePreview()
+      movePreviewIDs = moving
+    }
+    movePreviewDelta = delta
+    for id in moving {
+      interactions[id]?.dragDelta = delta
+    }
+  }
+
+  func finishMovePreview(commit: Bool) {
+    let ids = movePreviewIDs
+    let delta = movePreviewDelta
+    clearMovePreview()
+    guard commit, !ids.isEmpty, delta != .zero else { return }
+    registerUndo()
+    for i in cards.indices where ids.contains(cards[i].id) {
+      cards[i].x += Double(delta.width)
+      cards[i].y += Double(delta.height)
+    }
+    detachMovedArrows(ids)
+    refreshBoundArrows()
+    scheduleSave()
+  }
+
+  func groupSelection() {
+    let grouping = selectedCardIDs
+    guard grouping.count > 1 else { return }
+    registerUndo()
+    let groupID = UUID()
+    for i in cards.indices where grouping.contains(cards[i].id) {
+      cards[i].groupID = groupID
+    }
+    scheduleSave()
+  }
+
+  func ungroupSelection() {
+    guard !selectedCardIDs.isEmpty else { return }
+    let selectedGroups = Set(cards.compactMap { selectedCardIDs.contains($0.id) ? $0.groupID : nil })
+    guard !selectedGroups.isEmpty else { return }
+    registerUndo()
+    for i in cards.indices where cards[i].groupID.map({ selectedGroups.contains($0) }) ?? false {
+      cards[i].groupID = nil
+    }
+    scheduleSave()
+  }
+
+  func lockSelection(_ locked: Bool) {
+    guard !selectedCardIDs.isEmpty else { return }
+    guard cards.contains(where: { selectedCardIDs.contains($0.id) && $0.locked != locked }) else { return }
+    registerUndo()
+    for i in cards.indices where selectedCardIDs.contains(cards[i].id) {
+      cards[i].isLocked = locked ? true : nil
+    }
+    scheduleSave()
+  }
+
+  func cancelMovePreview() {
+    clearMovePreview()
+  }
+
+  private func clearMovePreview() {
+    for id in movePreviewIDs {
+      interactions[id]?.dragDelta = .zero
+    }
+    movePreviewIDs = []
+    movePreviewDelta = .zero
+  }
+
+  private func detachMovedArrows(_ ids: Set<UUID>) {
+    for i in cards.indices where ids.contains(cards[i].id) && cards[i].elementKind == .arrow {
+      cards[i].startBindingID = nil
+      cards[i].endBindingID = nil
+    }
+  }
+
+  private func bindArrowIfPossible(_ id: UUID) {
+    guard let i = index(for: id), cards[i].elementKind == .arrow else { return }
+    let endpoints = lineEndpoints(for: cards[i])
+    var excluded: Set<UUID> = [id]
+    if let start = nearestConnectable(to: endpoints.start, excluding: excluded) {
+      cards[i].startBindingID = start.id
+      excluded.insert(start.id)
+    }
+    if let end = nearestConnectable(to: endpoints.end, excluding: excluded) {
+      cards[i].endBindingID = end.id
+    }
+    if cards[i].startBindingID != nil || cards[i].endBindingID != nil {
+      updateBoundArrowGeometry(at: i)
+    }
+  }
+
+  private func refreshBoundArrows() {
+    let existing = Set(cards.map(\.id))
+    for i in cards.indices where cards[i].elementKind == .arrow {
+      if let start = cards[i].startBindingID, !existing.contains(start) {
+        cards[i].startBindingID = nil
+      }
+      if let end = cards[i].endBindingID, !existing.contains(end) {
+        cards[i].endBindingID = nil
+      }
+      if cards[i].startBindingID != nil || cards[i].endBindingID != nil {
+        updateBoundArrowGeometry(at: i)
+      }
+    }
+  }
+
+  private func nearestConnectable(to point: CGPoint, excluding excluded: Set<UUID>) -> CardState? {
+    let maxDistance: CGFloat = 220
+    return cards
+      .filter { card in
+        !excluded.contains(card.id) &&
+        !card.locked &&
+        card.elementKind != .line &&
+        card.elementKind != .arrow &&
+        card.elementKind != .freehand
+      }
+      .compactMap { card -> (CardState, CGFloat)? in
+        let center = center(of: card)
+        let distance = hypot(center.x - point.x, center.y - point.y)
+        return distance <= maxDistance ? (card, distance) : nil
+      }
+      .min(by: { $0.1 < $1.1 })?
+      .0
+  }
+
+  private func updateBoundArrowGeometry(at index: Int) {
+    guard cards.indices.contains(index), cards[index].elementKind == .arrow else { return }
+    let current = lineEndpoints(for: cards[index])
+    let start = cards[index].startBindingID.flatMap { card(id: $0).map(center(of:)) } ?? current.start
+    let end = cards[index].endBindingID.flatMap { card(id: $0).map(center(of:)) } ?? current.end
+    applyLineGeometry(to: index, start: start, end: end)
+  }
+
+  private func applyLineGeometry(to index: Int, start: CGPoint, end: CGPoint) {
+    let padding: CGFloat = 18
+    var minX = min(start.x, end.x) - padding
+    var minY = min(start.y, end.y) - padding
+    var maxX = max(start.x, end.x) + padding
+    var maxY = max(start.y, end.y) + padding
+    let minSize = cards[index].minimumSize
+    if maxX - minX < minSize.width {
+      let extra = (minSize.width - (maxX - minX)) / 2
+      minX -= extra
+      maxX += extra
+    }
+    if maxY - minY < minSize.height {
+      let extra = (minSize.height - (maxY - minY)) / 2
+      minY -= extra
+      maxY += extra
+    }
+    let frame = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    cards[index].frame = frame
+    cards[index].points = [
+      CanvasPoint(
+        x: Double((start.x - frame.minX) / frame.width),
+        y: Double((start.y - frame.minY) / frame.height)
+      ),
+      CanvasPoint(
+        x: Double((end.x - frame.minX) / frame.width),
+        y: Double((end.y - frame.minY) / frame.height)
+      ),
+    ]
+  }
+
+  private func lineEndpoints(for card: CardState) -> (start: CGPoint, end: CGPoint) {
+    let points = card.points ?? CardState.defaultLinePoints()
+    let start = points.first?.cgPoint ?? CGPoint(x: 0.06, y: 0.88)
+    let end = points.dropFirst().first?.cgPoint ?? CGPoint(x: 0.94, y: 0.12)
+    return (
+      CGPoint(x: card.x + start.x * card.w, y: card.y + start.y * card.h),
+      CGPoint(x: card.x + end.x * card.w, y: card.y + end.y * card.h)
+    )
+  }
+
+  private func card(id: UUID) -> CardState? {
+    cards.first { $0.id == id }
+  }
+
+  private func center(of card: CardState) -> CGPoint {
+    CGPoint(x: card.x + card.w / 2, y: card.y + card.h / 2)
+  }
+
+  /// Called when a card's text changed (debounced persistence).
+  func noteEdited(cardID: UUID, previousText: String) {
+    if textEditBaselines[cardID] == nil {
+      textEditBaselines[cardID] = previousText
+      let before = snapshot().map { card -> CardState in
+        guard card.id == cardID else { return card }
+        var copy = card
+        copy.text = previousText
+        return copy
+      }
+      registerUndo(historySnapshot(cards: before))
+    }
+    scheduleSave()
+  }
+
+  // MARK: Derived context
+
+  /// Read-only context for the linter: the OTHER cards' plain text, lightly labeled and
+  /// length-capped so it stays inside the on-device window. `nil` for a lone card.
+  func lintContext(excluding id: UUID) -> String? {
+    let others = readingOrder().filter { $0.id != id }
+      .compactMap { card -> String? in
+        let text = (interactions[card.id]?.plainText ?? card.text).trimmed
+        return text.isEmpty ? nil : text
+      }
+    guard !others.isEmpty else { return nil }
+    var budget = 2_400
+    var lines: [String] = []
+    for (index, text) in others.enumerated() {
+      let clipped = String(text.prefix(budget))
+      lines.append("Card \(index + 1): \(clipped)")
+      budget -= clipped.count
+      if budget <= 0 { break }
+    }
+    return lines.joined(separator: "\n")
+  }
+
+  /// Every card's plain text in spatial reading order — the source for both Compile
+  /// (→ engine) and self-contained Copy (→ SelfContainedRenderer).
+  func joinedPlainText() -> String {
+    readingOrder()
+      .compactMap { card -> String? in
+        let text = (interactions[card.id]?.plainText ?? card.text).trimmed
+        return text.isEmpty ? nil : text
+      }
+      .joined(separator: "\n\n")
+  }
+
+  var hasContent: Bool {
+    cards.contains { !(interactions[$0.id]?.plainText ?? $0.text).trimmed.isEmpty }
+  }
+
+  // MARK: Reading order
+
+  /// Top→bottom, then left→right, with a row band so cards roughly level read left-to-right.
+  func readingOrder() -> [CardState] {
+    let band = 64.0
+    return cards.sorted { a, b in
+      let ay = (a.y / band).rounded(.down)
+      let by = (b.y / band).rounded(.down)
+      if ay != by { return ay < by }
+      if a.x != b.x { return a.x < b.x }
+      return a.z < b.z
+    }
+  }
+}

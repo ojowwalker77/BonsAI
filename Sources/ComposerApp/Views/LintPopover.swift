@@ -30,9 +30,7 @@ struct LintPopover: View {
       askClaudeButton
     }
     .frame(width: 300, alignment: .leading)
-    .background(VisualEffectBackground(material: Theme.Material.menu, blending: .withinWindow, forceDark: true))
-    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous))
-    .shadow(color: Theme.Shadow.menu.color, radius: Theme.Shadow.menu.radius, y: Theme.Shadow.menu.y)
+    .composerPopupSurface()
     .scaleEffect(shown ? 1 : 0.96, anchor: .topLeading)
     .opacity(shown ? 1 : 0)
     .onAppear { withAnimation(Theme.Motion.accessory) { shown = true } }
@@ -44,8 +42,8 @@ struct LintPopover: View {
   private var header: some View {
     HStack(alignment: .top, spacing: 9) {
       Image(systemName: flag.kind.symbol)
-        .font(.body.weight(.semibold))
-        .foregroundStyle(flag.kind.tint)
+        .font(.body.weight(.medium))
+        .foregroundStyle(flag.kind.tint.opacity(0.72))
         .frame(width: 16)
       VStack(alignment: .leading, spacing: 2) {
         Text(flag.question)
@@ -54,7 +52,7 @@ struct LintPopover: View {
           .fixedSize(horizontal: false, vertical: true)
         Text(flag.kind.label)
           .font(.caption)
-          .foregroundStyle(Theme.Palette.title)
+          .foregroundStyle(Theme.Palette.menuDesc)
       }
       Spacer(minLength: 0)
     }
@@ -99,6 +97,6 @@ struct LintPopover: View {
   }
 
   private var hairline: some View {
-    Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+    Rectangle().fill(Theme.Palette.separator).frame(height: 1)
   }
 }

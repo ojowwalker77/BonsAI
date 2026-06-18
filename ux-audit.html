@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Composer — UX Audit</title>
+<style>
+  :root{
+    --bg:#0d1015; --panel:#151a21; --panel2:#1b212a; --line:#262d38;
+    --txt:#e7ecf3; --dim:#9aa6b6; --faint:#6b7889;
+    --hi:#ff6b6b; --med:#ffb454; --low:#5fb0ff; --ok:#43d17a;
+    --accent:#6ea8fe;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text",Segoe UI,Roboto,sans-serif;}
+  .wrap{max-width:1000px;margin:0 auto;padding:48px 28px 120px;}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:-.02em}
+  .sub{color:var(--dim);margin:0 0 28px;font-size:14px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);
+    margin:42px 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  p.lead{color:var(--dim);margin:0 0 22px;max-width:72ch}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 8px;font-size:13px;color:var(--dim)}
+  .badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;
+    padding:2px 8px;border-radius:6px;text-transform:uppercase;vertical-align:middle}
+  .b-hi{background:rgba(255,107,107,.16);color:var(--hi);border:1px solid rgba(255,107,107,.35)}
+  .b-med{background:rgba(255,180,84,.14);color:var(--med);border:1px solid rgba(255,180,84,.32)}
+  .b-low{background:rgba(95,176,255,.14);color:var(--low);border:1px solid rgba(95,176,255,.32)}
+  .b-ok{background:rgba(67,209,122,.14);color:var(--ok);border:1px solid rgba(67,209,122,.32)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;margin:10px 0;}
+  .card.fix{background:linear-gradient(180deg,rgba(67,209,122,.05),transparent);border-color:rgba(67,209,122,.22)}
+  .card h3{margin:0 0 6px;font-size:16px;font-weight:600;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+  .loc{font:12px/1.4 "SF Mono",ui-monospace,Menlo,monospace;color:var(--accent);
+    background:rgba(110,168,254,.08);border:1px solid rgba(110,168,254,.18);
+    padding:1px 7px;border-radius:5px;white-space:nowrap}
+  .sym{margin:6px 0 0;color:var(--txt)}
+  .rec{margin:8px 0 0;color:var(--dim)}
+  .rec b{color:var(--ok);font-weight:600}
+  .grid{display:grid;grid-template-columns:1fr;gap:0}
+  ol.prio{counter-reset:p;list-style:none;padding:0;margin:0}
+  ol.prio li{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:12px 16px 12px 52px;margin:8px 0;position:relative}
+  ol.prio li::before{counter-increment:p;content:counter(p);position:absolute;left:16px;top:12px;
+    width:24px;height:24px;border-radius:50%;background:var(--accent);color:#07101f;
+    font-weight:700;font-size:13px;display:grid;place-items:center}
+  .meta{color:var(--faint);font-size:12px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
+  a{color:var(--accent)}
+  .tag{font-size:11px;color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-left:auto}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Composer — UX &amp; Interaction Audit</h1>
+  <p class="sub">Generated 2026-06-18 · floating menu-bar panel · Excalidraw-style board of prompt cards</p>
+
+  <p class="lead">A read-through of the interaction layer (canvas gestures, editing/focus, persistence, and
+  chrome). Findings are curated and de-duplicated; line references are approximate anchors, not exact.
+  Severity reflects user impact, not code effort.</p>
+
+  <div class="legend">
+    <span><span class="badge b-hi">High</span> breaks a core flow or loses work</span>
+    <span><span class="badge b-med">Med</span> friction / confusion</span>
+    <span><span class="badge b-low">Low</span> polish</span>
+    <span><span class="badge b-ok">Fixed</span> done this session</span>
+  </div>
+
+  <h2>Fixed in this session</h2>
+  <p class="lead">For context — what we already addressed before this audit.</p>
+
+  <div class="card fix"><h3><span class="badge b-ok">Fixed</span> Chips degraded to plain text when a card wasn't focused</h3>
+    <p class="sym">Non-editing cards rendered the visible string as plain text, so "GitHub ▾" / "[image]" replaced the styled chip. Now non-editing cards re-render styled chips (icon + brand color) from the serialized tokens.</p></div>
+
+  <div class="card fix"><h3><span class="badge b-ok">Fixed</span> Pressing Enter in the connector popup dropped you out of the card</h3>
+    <p class="sym">The inline search field stealing first responder fired <code>endEditing</code>, tearing down the whole overlay. Editing now persists while our own search field / mention menu holds focus.</p></div>
+
+  <div class="card fix"><h3><span class="badge b-ok">Fixed</span> Card dragging jittered &amp; smeared ghost text</h3>
+    <p class="sym">Drag was tracked in the card's own moving coordinate space, feeding the move back into itself. Now tracked in stable window space.</p></div>
+
+  <div class="card fix"><h3><span class="badge b-ok">Fixed</span> Auto-grow forced a text layout pass every frame</h3>
+    <p class="sym">Height re-measurement ran on every render; now gated to actual width reflows, so pan/drag pay nothing for it.</p></div>
+
+  <div class="card fix"><h3><span class="badge b-ok">Fixed</span> Canvas stopped panning when the cursor was over a card</h3>
+    <p class="sym">Scroll/pinch are now forwarded from cards to the board so two-finger pan &amp; zoom work everywhere.</p></div>
+
+  <div class="card fix"><h3><span class="badge b-ok">Fixed</span> Image tool removed · main panel enlarged</h3>
+    <p class="sym">Removed the canvas image-object tool; bumped the panel size and reduced optical lift so the taller panel still fits a laptop.</p></div>
+
+  <!-- ============================================================ -->
+  <h2>A · Canvas input &amp; gestures</h2>
+
+  <div class="card"><h3><span class="badge b-hi">High</span> Toolbar zoom always re-centers the board <span class="loc">ComposerCanvas.swift · zoom buttons</span></h3>
+    <p class="sym">The +/− zoom buttons anchor at the viewport center, so the board lurches sideways when you zoom toward a specific card. (Pinch-zoom anchors at the cursor and feels right.)</p>
+    <p class="rec"><b>Fix:</b> anchor toolbar zoom on the current selection's center (or last cursor point) instead of viewport center.</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> No dead-zone before a click becomes a move <span class="loc">BoardCardView.swift · CardPointerCatcher</span></h3>
+    <p class="sym">The move catcher reacts to any sub-pixel drag, so a card can nudge on what the user meant as a click; there's no minimum-distance threshold like the marquee has (~4px).</p>
+    <p class="rec"><b>Fix:</b> require ~4px of movement before entering move mode, matching the marquee threshold.</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> A 1px twitch on a resize handle commits a resize + undo entry <span class="loc">BoardCardView.swift · resizeGesture (minimumDistance: 1)</span></h3>
+    <p class="sym">Grabbing a handle to nudge often resizes by a pixel and pushes an undo step, polluting history.</p>
+    <p class="rec"><b>Fix:</b> raise the resize gesture's minimum distance to 4–5px.</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> Space-to-pan has no visible state <span class="loc">ComposerCanvas.swift · isSpacePressed</span></h3>
+    <p class="sym">Holding space silently switches drag to pan mode; with no cursor/affordance change, an accidental space makes the select tool feel broken.</p>
+    <p class="rec"><b>Fix:</b> show a grab cursor or a small "hold space to pan" hint while space is down.</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> "Interactable only once selected" isn't the model yet <span class="loc">BoardCardView.swift · CardPointerCatcher.allowsHitTesting</span></h3>
+    <p class="sym">You asked for this directly: unselected cards still capture press/drag. Today a single press both selects and arms a move. A cleaner model: unselected = inert (clicks select, gestures pass to the canvas); selected = grab/resize.</p>
+    <p class="rec"><b>Fix:</b> have the canvas own hit-testing — first click selects only; movement drags only an already-selected card. (Larger change; worth a dedicated pass.)</p></div>
+
+  <div class="card"><h3><span class="badge b-low">Low</span> "Fit board" can tuck content under the rails <span class="loc">ComposerCanvas.swift · fitBoard</span></h3>
+    <p class="sym">Fit uses a flat 40px margin and ignores the rail/toolbar gutters, so fitted cards can sit under the sidebar or toolbar.</p>
+    <p class="rec"><b>Fix:</b> include the gutter insets in the fit math.</p></div>
+
+  <!-- ============================================================ -->
+  <h2>B · Editing, focus &amp; overlays</h2>
+
+  <div class="card"><h3><span class="badge b-hi">High</span> Panel opens with nothing focused — you can't just type <span class="loc">PanelController.swift:123 focusEditor</span></h3>
+    <p class="sym">On open the first card is <em>selected</em> but not editing, so no text view exists; <code>focusEditor</code> finds nothing and the caret never appears. You have to double-click a card before you can type — a brutal first impression for a "brain dump" tool.</p>
+    <p class="rec"><b>Fix:</b> auto-enter editing on the first/last-edited card when the panel shows, then focus its editor.</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> First keystroke on a freshly placed card can be dropped <span class="loc">BoardCardView.swift · enterEditing (0.06s focus delay)</span></h3>
+    <p class="sym">Placing a text card focuses the editor on a delay; type instantly and the first character can go to the board, not the card.</p>
+    <p class="rec"><b>Fix:</b> focus synchronously when the editor mounts rather than via a timed dispatch.</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> Overlay anchors are captured once, not re-derived <span class="loc">ComposerCanvas.swift · ActiveCardOverlays</span></h3>
+    <p class="sym">Mention menu / connector search / lint popover anchor to a point captured when they open. Pan or zoom while one is open and it strands off to the side.</p>
+    <p class="rec"><b>Fix:</b> recompute the anchor from the live caret/flag rect each render, or close overlays on pan/zoom.</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> Lint popover flickers when crossing from underline to popover <span class="loc">FreeWriteEditor.swift · handleHover / scheduleHide</span></h3>
+    <p class="sym">The 0.35s grace + tight hit-box means moving the mouse onto the popover across a sliver of plain text can schedule a hide, so it blinks.</p>
+    <p class="rec"><b>Fix:</b> widen the hover hit-box and/or treat the popover's own area as keeping it alive.</p></div>
+
+  <div class="card"><h3><span class="badge b-low">Low</span> Mention list doesn't scroll the selection into view on open <span class="loc">MentionMenu.swift · onChange-only scrollTo</span></h3>
+    <p class="sym">A long filtered list opens with item 0 selected but possibly scrolled off; first arrow-press appears to do nothing.</p>
+    <p class="rec"><b>Fix:</b> scroll to the selected index in <code>.onAppear</code>, not only on change.</p></div>
+
+  <!-- ============================================================ -->
+  <h2>C · Persistence &amp; data-loss</h2>
+
+  <div class="card"><h3><span class="badge b-hi">High</span> Editing a reloaded card shows raw <code>@github</code> tokens, not chips <span class="loc">FreeWriteEditor.swift makeNSView · BoardViewModel CardInteraction init</span></h3>
+    <p class="sym">Chips are an in-session layer; on reload only plain text persists. The new renderer restyles chips in the <em>display</em> state, but the moment you re-enter the card to edit, the editor loads literal <code>@github:…</code> text — no chip, and the next edit bakes it in as plain text.</p>
+    <p class="rec"><b>Fix:</b> re-chipify the plain text into an <code>NSAttributedString</code> on editor load (parse tokens → <code>ChipFactory.make</code>), so edit and display states match.</p></div>
+
+  <div class="card"><h3><span class="badge b-hi">High</span> Inline images are unrecoverable after reload <span class="loc">MentionToken.swift composerPlainText · ComposerTextView image path</span></h3>
+    <p class="sym">Only <code>[image: name]</code> is serialized — the on-disk PNG path isn't. After a reload (or app restart) the picture is gone, replaced by a placeholder, and the saved PNG is orphaned.</p>
+    <p class="rec"><b>Fix:</b> persist the attachment's file path in the serialized token and rebuild the attachment on load.</p></div>
+
+  <div class="card"><h3><span class="badge b-hi">High</span> Undo history is wiped on every board switch <span class="loc">BoardViewModel.swift:191 loadFromStore</span></h3>
+    <p class="sym"><code>loadFromStore</code> clears the undo/redo stacks. Glance at an older board and back, and you can no longer undo your edits.</p>
+    <p class="rec"><b>Fix:</b> keep undo/redo per board id, or at minimum don't reset when returning to the same board.</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> Undo baseline is the visible string, not the token form <span class="loc">BoardViewModel.swift noteEdited</span></h3>
+    <p class="sym">The "before" snapshot for an edit uses the visible text (chips collapsed to labels) rather than the serialized <code>@token</code> form, so undoing across a chip can revert to the wrong content.</p>
+    <p class="rec"><b>Fix:</b> seed undo from <code>controller.plainText</code> (the serialized form).</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> Prune-empty can delete a card you just started typing <span class="loc">DumpStore.swift pruneCurrentIfEmpty</span></h3>
+    <p class="sym">Empty-board pruning checks the persisted text mirror. Start a new card and navigate within the 0.4s autosave debounce and the just-typed content can be pruned.</p>
+    <p class="rec"><b>Fix:</b> capture editor state &amp; flush before pruning, or also check live editor content.</p></div>
+
+  <!-- ============================================================ -->
+  <h2>D · Chrome, feedback &amp; discoverability</h2>
+
+  <div class="card"><h3><span class="badge b-hi">High</span> Deleting a past board has no confirmation <span class="loc">HistoryBar.swift:105 hover ✕ → onDelete</span></h3>
+    <p class="sym">A hover-revealed ✕ permanently deletes a board (and SwiftData has no trash). Easy to hit while dismissing a row; the work is just gone.</p>
+    <p class="rec"><b>Fix:</b> confirm on delete, or soft-delete with an undo toast.</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> Settings mislabels ⌘R as "Refine the whole draft" <span class="loc">SettingsView.swift:55 · FloatingPanel.swift:102</span></h3>
+    <p class="sym">⌘R actually <em>compiles</em> the whole board into a draft; Settings says it refines. The mismatch sets the wrong expectation.</p>
+    <p class="rec"><b>Fix:</b> relabel to "Compile to draft  ⌘R" (matching the toolbar).</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> Copy says "Resolving connectors…" but never confirms completion <span class="loc">ComposerCanvas.swift copyBoard</span></h3>
+    <p class="sym">The progress toast vanishes after a fixed delay with no success/fail state, so you don't know if the resolved text reached the clipboard.</p>
+    <p class="rec"><b>Fix:</b> emit a terminal toast ("Copied · N connectors resolved" / error).</p></div>
+
+  <div class="card"><h3><span class="badge b-med">Med</span> Toasts anchor to the viewport bottom and can be missed <span class="loc">ComposerCanvas.swift toastView</span></h3>
+    <p class="sym">Feedback sits at the bottom-center of the board area; with the bigger panel and scrolled content it can land out of easy sightline.</p>
+    <p class="rec"><b>Fix:</b> pin toasts to a fixed, always-visible spot (e.g. above the toolbar).</p></div>
+
+  <div class="card"><h3><span class="badge b-low">Low</span> Shortcuts &amp; features live only in hover tooltips <span class="loc">Sidebar.swift · CanvasToolbar.swift</span></h3>
+    <p class="sym">Pan-with-space, ⌘[/], group/lock, refine intents — all undiscoverable without hovering the right control.</p>
+    <p class="rec"><b>Fix:</b> a "?" shortcuts cheat-sheet popover, or a one-time onboarding hint.</p></div>
+
+  <div class="card"><h3><span class="badge b-low">Low</span> "New dump" naming is opaque <span class="loc">HistoryBar.swift</span></h3>
+    <p class="sym">"Dump" leaks internal vocabulary; users think in "boards" / "drafts".</p>
+    <p class="rec"><b>Fix:</b> rename to "New board" (or "Start writing").</p></div>
+
+  <!-- ============================================================ -->
+  <h2>Recommended order</h2>
+  <ol class="prio">
+    <li><b>Focus on open</b> — auto-edit the first card so you can type immediately. Highest impact-per-effort; it's the first thing every session.</li>
+    <li><b>Re-chipify on load + persist image paths</b> — make tags/images survive reload in both edit and display. Core promise of the connector feature.</li>
+    <li><b>Confirm board deletion</b> — cheap, prevents irreversible data loss.</li>
+    <li><b>The "select-then-interact" canvas model</b> — unselected cards inert, canvas owns hit-testing. Removes a whole class of gesture-conflict bugs.</li>
+    <li><b>Per-board undo + cursor-aware snapshots</b> — stop losing undo on navigation.</li>
+    <li><b>Toolbar zoom anchoring, drag/resize dead-zones, label/feedback fixes</b> — polish pass.</li>
+  </ol>
+
+  <p class="meta">Curated from a four-track read-only audit (canvas input · editing/focus · persistence · chrome).
+  "Fixed" items were addressed earlier in this session. Locations are anchors to start from, not verified exact lines.</p>
+
+</div>
+</body>
+</html>

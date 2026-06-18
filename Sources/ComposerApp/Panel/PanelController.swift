@@ -6,12 +6,20 @@ import SwiftUI
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
   private var panel: FloatingPanel?
+  /// True while a refine is in flight — suppresses click-away dismissal so the panel
+  /// never vanishes mid-work and drops the result.
+  private var isBusy = false
   var isVisible: Bool { panel?.isVisible ?? false }
 
   override init() {
     super.init()
     NotificationCenter.default.addObserver(
       self, selector: #selector(handleDismiss), name: .composerDismiss, object: nil)
+    NotificationCenter.default.addObserver(
+      forName: .composerBusyChanged, object: nil, queue: .main
+    ) { [weak self] note in
+      MainActor.assumeIsolated { self?.isBusy = (note.userInfo?["busy"] as? Bool) ?? false }
+    }
   }
 
   @objc private func handleDismiss() { hide() }
@@ -31,6 +39,11 @@ final class PanelController: NSObject, NSWindowDelegate {
     panel.makeKeyAndOrderFront(nil)
     panel.orderFrontRegardless()
     focusEditor(in: panel)
+    // The active card's editor only exists once SwiftUI mounts it, so ask the canvas to enter
+    // editing — the caret is ready to type the instant the panel appears (no double-click).
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+      NotificationCenter.default.post(name: .composerEnterEditing, object: nil)
+    }
 
     if reduceMotion {
       panel.alphaValue = 1
@@ -74,7 +87,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     let host = NSHostingView(rootView: ComposerCanvas())
     host.translatesAutoresizingMaskIntoConstraints = false
 
-    let container = NSView()
+    let container = NonMovableView()
     container.wantsLayer = true
     container.layer?.backgroundColor = NSColor.clear.cgColor
     container.layer?.cornerRadius = Theme.Radius.panel
@@ -98,11 +111,13 @@ final class PanelController: NSObject, NSWindowDelegate {
     let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
       ?? NSScreen.main ?? NSScreen.screens.first
     guard let visible = screen?.visibleFrame else { panel.center(); return }
-    let w = min(max(visible.width * Theme.Size.widthFraction, Theme.Size.minWidth), Theme.Size.maxWidth)
-    let h = min(max(visible.height * Theme.Size.heightFraction, Theme.Size.minHeight), Theme.Size.maxHeight)
-    let x = visible.midX - w / 2
-    let y = visible.midY - h / 2 + h * Theme.Size.opticalLift
-    panel.setFrame(NSRect(x: x.rounded(), y: y.rounded(), width: w, height: h), display: true)
+    // The whole panel fills ~95% of the visible screen, centered. The card auto-derives from
+    // the window size minus the rail/toolbar gutters (handled by the canvas layout).
+    let w = (visible.width * Theme.Size.screenFraction).rounded()
+    let winH = (visible.height * Theme.Size.screenFraction).rounded()
+    let x = (visible.midX - w / 2).rounded()
+    let y = (visible.midY - winH / 2).rounded()
+    panel.setFrame(NSRect(x: x, y: y, width: w, height: winH), display: true)
   }
 
   // MARK: Focus the text view so typing works the instant the panel appears.
@@ -123,10 +138,16 @@ final class PanelController: NSObject, NSWindowDelegate {
   // MARK: Click-away dismissal
 
   func windowDidResignKey(_ notification: Notification) {
+    guard !isBusy else { return }
     hide()
   }
 
   private var reduceMotion: Bool {
     NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
   }
+}
+
+/// Host container that never lets a click-drag move the window — the canvas owns all dragging.
+private final class NonMovableView: NSView {
+  override var mouseDownCanMoveWindow: Bool { false }
 }

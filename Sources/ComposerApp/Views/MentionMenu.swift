@@ -6,20 +6,34 @@ struct MentionMenu: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      VStack(spacing: 0) {
-        ForEach(Array(mentions.items.enumerated()), id: \.element.id) { index, item in
-          row(item, selected: index == mentions.selectedIndex)
-            .onTapGesture { mentions.commitRequested?(item) }
+      ScrollViewReader { proxy in
+        ScrollView(.vertical) {
+          VStack(spacing: 0) {
+            ForEach(Array(mentions.items.enumerated()), id: \.element.id) { index, item in
+              row(item, selected: index == mentions.selectedIndex)
+                .id(index)
+                .onTapGesture { mentions.commitRequested?(item) }
+            }
+          }
+          .padding(.vertical, 5)
         }
+        .scrollIndicators(.never)
+        .frame(maxHeight: listMaxHeight)
+        .onChange(of: mentions.selectedIndex) { _, index in
+          withAnimation(Theme.Motion.accessory) { proxy.scrollTo(index, anchor: .center) }
+        }
+        .onAppear { proxy.scrollTo(mentions.selectedIndex, anchor: .center) }
       }
-      .padding(.vertical, 5)
 
       footer
     }
     .frame(width: Theme.Size.menuWidth)
-    .background(VisualEffectBackground(material: Theme.Material.menu, blending: .withinWindow, forceDark: true))
-    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous))
-    .shadow(color: Theme.Shadow.menu.color, radius: Theme.Shadow.menu.radius, y: Theme.Shadow.menu.y)
+    .composerPopupSurface()
+  }
+
+  private var listMaxHeight: CGFloat {
+    let rows = min(CGFloat(max(mentions.items.count, 1)), Theme.Size.menuMaxVisibleRows)
+    return rows * Theme.Size.menuRowHeight + 10
   }
 
   private func row(_ item: MentionItem, selected: Bool) -> some View {
@@ -37,12 +51,12 @@ struct MentionMenu: View {
         .foregroundStyle(selected ? Theme.Palette.body : Theme.Palette.menuDesc)
         .lineLimit(1)
     }
-    .padding(.horizontal, 10)
+    .padding(.horizontal, 12)
     .frame(height: Theme.Size.menuRowHeight)
     .background(
       RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-        .fill(selected ? Theme.Palette.selectedRowFill : Theme.Palette.rowFill)
-        .padding(.horizontal, 5)
+        .fill(selected ? Theme.Palette.selectedRowFill : Color.clear)
+        .padding(.horizontal, 6)
     )
     .contentShape(Rectangle())
   }
@@ -58,7 +72,7 @@ struct MentionMenu: View {
     .padding(.horizontal, 12)
     .frame(height: 26)
     .overlay(alignment: .top) {
-      Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+      Rectangle().fill(Theme.Palette.separator).frame(height: 1)
     }
   }
 
@@ -68,6 +82,6 @@ struct MentionMenu: View {
       .foregroundStyle(.secondary)
       .padding(.horizontal, 5)
       .padding(.vertical, 1.5)
-      .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.08)))
+      .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Palette.keycapFill))
   }
 }

@@ -1,11 +1,67 @@
 import SwiftUI
 
-struct SettingsView: View {
+/// Settings as a full-card overlay inside the panel — never a separate window.
+struct SettingsOverlay: View {
+  var onClose: () -> Void
+
+  var body: some View {
+    ZStack(alignment: .topLeading) {
+      // Same frosted-glass material as the card, dark enough to cover the editor — so
+      // Settings reads as part of the panel, not a flat sheet pasted on top.
+      ZStack {
+        VisualEffectBackground(material: .hudWindow, blending: .behindWindow, state: .active)
+        Color.black.opacity(0.9)
+      }
+      .contentShape(Rectangle())
+
+      VStack(spacing: 0) {
+        HStack {
+          Text("Settings")
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(Theme.Palette.body)
+          Spacer()
+          Button(action: onClose) {
+            Image(systemName: "xmark")
+              .font(.body.weight(.semibold))
+              .foregroundStyle(Theme.Palette.title)
+              .frame(width: 32, height: 32)
+              .background(Circle().fill(Color.white.opacity(0.06)))
+              .contentShape(Circle())
+          }
+          .buttonStyle(.plain)
+          .help("Close  Esc")
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .padding(.bottom, 12)
+
+        ScrollView {
+          SettingsContent()
+            .padding(.horizontal, 28)
+            .padding(.bottom, 28)
+        }
+        .scrollIndicators(.never)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
+  }
+}
+
+struct SettingsContent: View {
   private let shortcuts: [(String, String)] = [
     ("Summon / hide Composer", "⌃⌥Space"),
     ("Refine selection", "select text → Claude / Codex"),
+    ("Compile board to a draft", "⌘R"),
+    ("New board", "⌘N"),
+    ("Flip through past boards", "⌘[ / ⌘]"),
     ("Insert a connector", "type @"),
+    ("Pan the canvas", "hold Space + drag"),
+    ("Select all · duplicate", "⌘A · ⌘D"),
+    ("Group · ungroup", "⌘G · ⇧⌘G"),
+    ("Lock · unlock", "⌘L · ⇧⌘L"),
     ("Copy self-contained text", "⇧⌘C"),
+    ("Increase / decrease font size", "⌘+ / ⌘−"),
     ("Dismiss", "Esc"),
   ]
 
@@ -13,30 +69,27 @@ struct SettingsView: View {
   @StateObject private var appIcons = AppIconStore()
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
   @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
+  @AppStorage(ComposerPreferences.panelTransparencyKey) private var panelTransparency = ComposerPreferences.defaultPanelTransparency
+
+  private var transparencyPercent: Int {
+    Int((ComposerPreferences.clampedPanelTransparency(panelTransparency) / ComposerPreferences.maxPanelTransparency) * 100)
+  }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 18) {
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Composer").font(.headline)
-        Text("A menu-bar scratchpad for drafting prompts.")
-          .font(.caption).foregroundStyle(.secondary)
-      }
-
+    VStack(alignment: .leading, spacing: 16) {
       enginesSection
-
+      appearanceSection
       appsSection
-
       shortcutsSection
 
       Text("Type @ in the composer to drop a connector. Apps expand into self-contained context when you copy.")
         .font(.caption).foregroundStyle(.tertiary)
         .fixedSize(horizontal: false, vertical: true)
     }
-    .padding(22)
-    .frame(width: 400)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  // MARK: - Apps
+  // MARK: - Engines
 
   private var enginesSection: some View {
     VStack(alignment: .leading, spacing: 9) {
@@ -45,8 +98,8 @@ struct SettingsView: View {
       Divider().opacity(0.4)
       engineToggle(.codex, isOn: $codexEnabled)
     }
-    .padding(14)
-    .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor).opacity(0.5)))
+    .padding(16)
+    .background(RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous).fill(Color.white.opacity(0.05)))
   }
 
   private func engineToggle(_ engine: HeadlessEngine, isOn: Binding<Bool>) -> some View {
@@ -63,6 +116,38 @@ struct SettingsView: View {
     .toggleStyle(.switch)
   }
 
+  // MARK: - Appearance
+
+  private var appearanceSection: some View {
+    VStack(alignment: .leading, spacing: 11) {
+      sectionHeader("APPEARANCE")
+      HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Background transparency").font(.body.weight(.medium))
+          Text("How much of the desktop frosts through the panel.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        Spacer(minLength: 16)
+        Text("\(transparencyPercent)%")
+          .font(.caption.monospacedDigit().weight(.medium))
+          .foregroundStyle(.secondary)
+      }
+      Slider(value: $panelTransparency, in: 0...ComposerPreferences.maxPanelTransparency)
+      HStack {
+        Text("Opaque")
+        Spacer()
+        Text("Glass")
+      }
+      .font(.caption2)
+      .foregroundStyle(.tertiary)
+    }
+    .padding(16)
+    .background(RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous).fill(Color.white.opacity(0.05)))
+  }
+
+  // MARK: - Apps
+
   private var appsSection: some View {
     VStack(alignment: .leading, spacing: 9) {
       sectionHeader("APPS")
@@ -73,8 +158,8 @@ struct SettingsView: View {
         }
       }
     }
-    .padding(14)
-    .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor).opacity(0.5)))
+    .padding(16)
+    .background(RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous).fill(Color.white.opacity(0.05)))
   }
 
   private func appRow(_ app: MentionItem) -> some View {
@@ -127,8 +212,8 @@ struct SettingsView: View {
         }
       }
     }
-    .padding(14)
-    .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor).opacity(0.5)))
+    .padding(16)
+    .background(RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous).fill(Color.white.opacity(0.05)))
   }
 
   private func sectionHeader(_ text: String) -> some View {

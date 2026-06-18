@@ -7,8 +7,28 @@ final class ComposerTextView: NSTextView {
 
   /// Set by the editor coordinator; fired when an interactive app chip is clicked.
   var onChipClick: ((NSRange) -> Void)?
+  /// Fired when this card's text view gains/loses first responder, so the canvas can
+  /// track the active card and route per-card actions (font, selection refine) to it.
+  var onFocusChange: ((Bool) -> Void)?
 
-  /// Intercept clicks that land on an app chip (Context7/GitHub) and open its search
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    if ComposerPreferences.handleEditorFontKeyEquivalent(event) { return true }
+    return super.performKeyEquivalent(with: event)
+  }
+
+  override func becomeFirstResponder() -> Bool {
+    let became = super.becomeFirstResponder()
+    if became { onFocusChange?(true) }
+    return became
+  }
+
+  override func resignFirstResponder() -> Bool {
+    let resigned = super.resignFirstResponder()
+    if resigned { onFocusChange?(false) }
+    return resigned
+  }
+
+  /// Intercept clicks that land on an app chip and open its connector picker
   /// instead of placing a caret. Other clicks fall through to normal text behavior.
   override func mouseDown(with event: NSEvent) {
     if let range = appChipRange(at: event) {
@@ -42,6 +62,39 @@ final class ComposerTextView: NSTextView {
     let rect = lm.boundingRect(forGlyphRange: glyphRange, in: container).offsetBy(dx: origin.x, dy: origin.y)
     guard rect.contains(point) else { return nil }
     return range
+  }
+
+  // MARK: Treat a mention chip as one atomic block when deleting.
+  //
+  // A chip ("@github", "@finder:…") is a single `.mentionToken` run, but visually one
+  // unit — deleting it one character at a time is surprising. When the caret sits next to
+  // a chip (no selection), one press removes the whole run instead of a single glyph.
+
+  override func deleteBackward(_ sender: Any?) {
+    if deleteChipRun(adjacentTo: selectedRange(), before: true) { return }
+    super.deleteBackward(sender)
+  }
+
+  override func deleteForward(_ sender: Any?) {
+    if deleteChipRun(adjacentTo: selectedRange(), before: false) { return }
+    super.deleteForward(sender)
+  }
+
+  /// If `selection` is an empty caret touching a mention-token run on the given side,
+  /// delete that entire run undo-safely and return true; otherwise return false.
+  private func deleteChipRun(adjacentTo selection: NSRange, before: Bool) -> Bool {
+    guard selection.length == 0, let storage = textStorage, storage.length > 0 else { return false }
+    let probe = before ? selection.location - 1 : selection.location
+    guard probe >= 0, probe < storage.length else { return false }
+
+    var range = NSRange()
+    guard storage.attribute(.mentionToken, at: probe, longestEffectiveRange: &range,
+                            in: NSRange(location: 0, length: storage.length)) is String else { return false }
+    guard shouldChangeText(in: range, replacementString: "") else { return false }
+    storage.replaceCharacters(in: range, with: "")
+    didChangeText()
+    setSelectedRange(NSRange(location: range.location, length: 0))
+    return true
   }
 
   /// Required for the PASTE path: the default importsGraphics=false readable list has
@@ -102,7 +155,13 @@ final class ComposerTextView: NSTextView {
     textStorage?.replaceCharacters(in: range, with: run)
     didChangeText()
     setSelectedRange(NSRange(location: range.location + run.length, length: 0))
-    typingAttributes = [.font: font as Any, .foregroundColor: NSColor.labelColor]
+    let style = NSMutableParagraphStyle()
+    style.lineSpacing = Theme.Typography.bodyLineSpacing
+    typingAttributes = [
+      .font: font ?? Theme.Typography.body,
+      .foregroundColor: Theme.nsBodyText,
+      .paragraphStyle: style,
+    ]
   }
 
   // MARK: Geometry

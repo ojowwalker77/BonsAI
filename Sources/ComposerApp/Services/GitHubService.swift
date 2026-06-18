@@ -8,13 +8,15 @@ struct GitHubService {
     return result.status == 0
   }
 
-  /// Global GitHub search for issues or PRs.
+  /// Search issues or PRs, scoped to repos owned by the authenticated user
+  /// (`--owner @me`) so results stay within the signed-in login, not all of GitHub.
   func search(_ query: String, kind: GitHubItemKind) async throws -> [AppSearchResult] {
     let trimmed = query.trimmed
     guard !trimmed.isEmpty else { return [] }
 
     let result = try await Shell.run([
       "gh", "search", kind.ghSubcommand, trimmed,
+      "--owner", "@me",
       "--limit", "8", "--json", "number,title,state,url,repository",
     ])
     guard result.status == 0 else { throw AppSearchError.fromGH(result.stderr) }

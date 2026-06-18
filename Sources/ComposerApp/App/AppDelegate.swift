@@ -23,4 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   // Never NSApp.activate(ignoringOtherApps:) — it steals focus and breaks the feel.
   @objc private func toggle() { panelController.toggle() }
+
+  /// Summon the panel (if hidden) and open its in-panel Settings — never a separate window.
+  func showSettings() {
+    panelController.show()
+    NotificationCenter.default.post(name: .composerShowSettings, object: nil)
+  }
 }

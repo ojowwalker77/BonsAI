@@ -46,19 +46,7 @@ struct SelectionActionBar: View {
     }
     .padding(.horizontal, 5)
     .frame(height: Theme.Size.actionBarHeight)
-    .background {
-      ZStack {
-        VisualEffectBackground(material: Theme.Material.popover, blending: .withinWindow, state: .active, forceDark: true)
-        Theme.Palette.barScrim
-        LinearGradient(
-          colors: [Color.white.opacity(0.055), Color.clear],
-          startPoint: .top,
-          endPoint: .bottom
-        )
-      }
-    }
-    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.actionBar, style: .continuous))
-    .shadow(color: Theme.Shadow.bar.color, radius: Theme.Shadow.bar.radius, y: Theme.Shadow.bar.y)
+    .floatingGlass(RoundedRectangle(cornerRadius: Theme.Radius.actionBar, style: .continuous))
     .scaleEffect(shown ? 1 : 0.94, anchor: .bottom)
     .opacity(shown ? 1 : 0)
     .onAppear { withAnimation(Theme.Motion.accessory) { shown = true } }

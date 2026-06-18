@@ -14,6 +14,7 @@ final class AppSearchState: ObservableObject {
   @Published var results: [AppSearchResult] = []
   @Published var selectedIndex = 0
   @Published var isLoading = false
+  @Published var hasSearched = false
   @Published var errorText: String?
   @Published var anchorInView: CGPoint?
 
@@ -22,13 +23,15 @@ final class AppSearchState: ObservableObject {
   var onCommit: ((AppSearchResult) -> Void)?
   var onCancel: (() -> Void)?
 
-  private let context7 = Context7Service()
-  private let github = GitHubService()
   private var searchTask: Task<Void, Never>?
 
   var app: MentionItem? { MentionCatalog.all.first { $0.id == appID } }
-  var isGitHub: Bool { appID == "@github" }
-  var placeholder: String { isGitHub ? "Search \(githubKind.shortLabel.lowercased())…" : "Search libraries…" }
+  var connector: (any ComposerAppConnector)? { AppConnectorRegistry.connector(for: appID) }
+  var context: AppSearchContext { AppSearchContext(githubKind: githubKind) }
+  var isGitHub: Bool { connector?.supportsGitHubKindToggle == true }
+  var placeholder: String { connector?.placeholder(context: context) ?? "Search…" }
+  var idleMessage: String { connector?.idleMessage(context: context) ?? "Type to search." }
+  var noResultsMessage: String { connector?.noResultsMessage(query: query.trimmed, context: context) ?? "No results." }
 
   func queryChanged(_ text: String) {
     query = text
@@ -40,6 +43,10 @@ final class AppSearchState: ObservableObject {
     githubKind = kind
     selectedIndex = 0
     scheduleSearch()
+  }
+
+  func reload() {
+    scheduleSearch(debounce: false)
   }
 
   func move(_ delta: Int) {
@@ -54,29 +61,33 @@ final class AppSearchState: ObservableObject {
 
   func cancel() { onCancel?() }
 
-  private func scheduleSearch() {
+  private func scheduleSearch(debounce: Bool = true) {
     searchTask?.cancel()
-    let q = query, app = appID, kind = githubKind
-    guard !q.trimmed.isEmpty else {
-      results = []; isLoading = false; errorText = nil
+    let q = query.trimmed, app = appID, kind = githubKind, context = AppSearchContext(githubKind: githubKind)
+    guard let connector = AppConnectorRegistry.connector(for: app) else {
+      results = []; isLoading = false; hasSearched = false; errorText = "Unknown app connector."
       return
     }
-    isLoading = true; errorText = nil
+    guard q.count >= connector.minimumQueryLength else {
+      results = []; isLoading = false; hasSearched = false; errorText = nil
+      return
+    }
+    isLoading = true; hasSearched = false; errorText = nil
     searchTask = Task { [weak self] in
-      try? await Task.sleep(nanoseconds: 220_000_000)   // debounce keystrokes
+      if debounce { try? await Task.sleep(nanoseconds: 220_000_000) }   // debounce keystrokes
       guard let self, !Task.isCancelled else { return }
       do {
-        let found = app == "@github"
-          ? try await self.github.search(q, kind: kind)
-          : try await self.context7.search(q)
-        guard !Task.isCancelled, self.query == q, self.appID == app, self.githubKind == kind else { return }
+        let found = try await connector.search(q, context: context)
+        guard !Task.isCancelled, self.query.trimmed == q, self.appID == app, self.githubKind == kind else { return }
         self.results = found
         self.selectedIndex = 0
         self.isLoading = false
+        self.hasSearched = true
       } catch {
-        guard !Task.isCancelled, self.query == q, self.appID == app else { return }
+        guard !Task.isCancelled, self.query.trimmed == q, self.appID == app else { return }
         self.results = []
         self.isLoading = false
+        self.hasSearched = true
         self.errorText = (error as? LocalizedError)?.errorDescription ?? "Search failed."
       }
     }
@@ -92,31 +103,13 @@ struct AppSearchPanel: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      header
-      searchField
-      Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+      searchRow
+      Rectangle().fill(Theme.Palette.separator).frame(height: 1)
       content
       footer
     }
     .frame(width: 360)
-    .background(VisualEffectBackground(material: Theme.Material.menu, blending: .withinWindow, forceDark: true))
-    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.menu, style: .continuous))
-    .shadow(color: Theme.Shadow.menu.color, radius: Theme.Shadow.menu.radius, y: Theme.Shadow.menu.y)
-  }
-
-  // MARK: Header (app identity + GitHub Issues/PRs toggle)
-
-  private var header: some View {
-    HStack(spacing: 8) {
-      appGlyph.frame(width: 16, height: 16)
-      Text(state.app?.label ?? "App")
-        .font(.body.weight(.semibold))
-        .foregroundStyle(Theme.Palette.body)
-      Spacer(minLength: 8)
-      if state.isGitHub { kindToggle }
-    }
-    .padding(.horizontal, 12)
-    .frame(height: 36)
+    .composerPopupSurface()
   }
 
   @ViewBuilder
@@ -142,14 +135,14 @@ struct AppSearchPanel: View {
       }
     }
     .padding(2)
-    .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.05)))
+    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.Palette.segmentedFill))
   }
 
-  // MARK: Search field
+  // MARK: Search row (brand icon leads the field; identity without a title band)
 
-  private var searchField: some View {
-    HStack(spacing: 8) {
-      Image(systemName: "magnifyingglass").font(.body).foregroundStyle(.secondary)
+  private var searchRow: some View {
+    HStack(spacing: 9) {
+      appGlyph.frame(width: 17, height: 17)
       FocusedSearchField(
         text: Binding(get: { state.query }, set: { state.queryChanged($0) }),
         placeholder: state.placeholder,
@@ -162,9 +155,10 @@ struct AppSearchPanel: View {
       if state.isLoading {
         ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
       }
+      if state.isGitHub { kindToggle }
     }
-    .padding(.horizontal, 12)
-    .frame(height: 34)
+    .padding(.horizontal, 13)
+    .frame(height: 42)
   }
 
   // MARK: Content states
@@ -174,14 +168,12 @@ struct AppSearchPanel: View {
     if let error = state.errorText {
       message(error, symbol: "exclamationmark.triangle")
     } else if state.results.isEmpty {
-      if state.query.trimmed.isEmpty {
-        message(state.isGitHub ? "Type to search GitHub \(state.githubKind.shortLabel.lowercased())."
-                               : "Type to search Context7 libraries.",
-                symbol: "sparkle.magnifyingglass")
-      } else if state.isLoading {
+      if state.isLoading {
         message("Searching…", symbol: nil)
+      } else if state.hasSearched {
+        message(state.noResultsMessage, symbol: nil)
       } else {
-        message("No results.", symbol: nil)
+        message(state.idleMessage, symbol: "sparkle.magnifyingglass")
       }
     } else {
       resultsList
@@ -189,13 +181,29 @@ struct AppSearchPanel: View {
   }
 
   private var resultsList: some View {
-    VStack(spacing: 0) {
-      ForEach(Array(state.results.enumerated()), id: \.element.id) { index, result in
-        row(result, selected: index == state.selectedIndex)
-          .onTapGesture { state.onCommit?(result) }
+    ScrollViewReader { proxy in
+      ScrollView(.vertical) {
+        VStack(spacing: 0) {
+          ForEach(Array(state.results.enumerated()), id: \.element.id) { index, result in
+            row(result, selected: index == state.selectedIndex)
+              .id(index)
+              .onTapGesture { state.onCommit?(result) }
+          }
+        }
+        .padding(.vertical, 5)
       }
+      .scrollIndicators(.never)
+      .frame(maxHeight: resultsMaxHeight)
+      .onChange(of: state.selectedIndex) { _, index in
+        withAnimation(Theme.Motion.accessory) { proxy.scrollTo(index, anchor: .center) }
+      }
+      .onAppear { proxy.scrollTo(state.selectedIndex, anchor: .center) }
     }
-    .padding(.vertical, 5)
+  }
+
+  private var resultsMaxHeight: CGFloat {
+    let rows = min(CGFloat(max(state.results.count, 1)), Theme.Size.menuMaxVisibleRows)
+    return rows * 46 + 10
   }
 
   private func row(_ result: AppSearchResult, selected: Bool) -> some View {
@@ -212,11 +220,11 @@ struct AppSearchPanel: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(.horizontal, 10).padding(.vertical, 5)
+    .padding(.horizontal, 12).padding(.vertical, 6)
     .background(
       RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-        .fill(selected ? Theme.Palette.selectedRowFill : Theme.Palette.rowFill)
-        .padding(.horizontal, 5)
+        .fill(selected ? Theme.Palette.selectedRowFill : Color.clear)
+        .padding(.horizontal, 6)
     )
     .contentShape(Rectangle())
   }
@@ -239,7 +247,7 @@ struct AppSearchPanel: View {
     }
     .padding(.horizontal, 12)
     .frame(height: 26)
-    .overlay(alignment: .top) { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1) }
+    .overlay(alignment: .top) { Rectangle().fill(Theme.Palette.separator).frame(height: 1) }
   }
 
   private func keycap(_ text: String) -> some View {
@@ -247,7 +255,7 @@ struct AppSearchPanel: View {
       .font(.caption2.weight(.medium))
       .foregroundStyle(.secondary)
       .padding(.horizontal, 5).padding(.vertical, 1.5)
-      .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.08)))
+      .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Palette.keycapFill))
   }
 }
 
@@ -285,6 +293,8 @@ struct FocusedSearchField: NSViewRepresentable {
 
   func updateNSView(_ field: NSTextField, context: Context) {
     context.coordinator.parent = self
+    field.font = Theme.Typography.body
+    field.textColor = Theme.nsBodyText
     if field.placeholderString != placeholder { field.placeholderString = placeholder }
     if field.stringValue != text { field.stringValue = text }
   }

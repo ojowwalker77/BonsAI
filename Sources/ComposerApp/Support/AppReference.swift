@@ -12,6 +12,31 @@ enum GitHubItemKind: String, Equatable, Hashable, CaseIterable {
   var ghViewNoun: String { self == .issue ? "issue" : "pr" }
 }
 
+/// A Finder target captured by the `@finder` connector. `isDirectory` is advisory;
+/// rendering re-checks the path because the file system can change after insertion.
+struct FinderReference: Codable, Equatable, Hashable {
+  let path: String
+  let isDirectory: Bool?
+}
+
+/// A browser tab captured by the `@browser` connector. The first implementation is
+/// Safari-only, but the shape deliberately names the browser and bundle so Chrome/Arc/etc.
+/// can be added without changing the token format.
+struct BrowserTabReference: Codable, Equatable, Hashable {
+  let browser: String
+  let bundleID: String
+  let title: String
+  let url: String
+  let windowIndex: Int
+  let tabIndex: Int
+  let isActive: Bool
+  let capturedAt: String
+
+  var host: String {
+    URL(string: url)?.host(percentEncoded: false) ?? ""
+  }
+}
+
 /// The concrete thing a resolved app chip points at. `nil` (absent) means the app is
 /// tagged but not yet narrowed — the chip shows a disclosure so the user can search it.
 enum AppSelection: Equatable, Hashable {
@@ -20,6 +45,10 @@ enum AppSelection: Equatable, Hashable {
   case context7(libraryID: String, query: String?)
   /// A GitHub issue/PR by its html URL; kind is also derivable from the URL.
   case github(kind: GitHubItemKind, url: String)
+  /// A local file or folder found through Finder/Spotlight.
+  case finder(FinderReference)
+  /// An open browser tab. Currently populated from Safari.
+  case browser(BrowserTabReference)
 }
 
 // MARK: - Token codec
@@ -34,25 +63,31 @@ enum AppSelection: Equatable, Hashable {
 /// - `@github`                                      (unresolved)
 /// - `@github:https://github.com/owner/repo/issues/1`
 /// - `@github:https://github.com/owner/repo/pull/2`
+/// - `@finder:/Users/me/Project/README.md`
+/// - `@browser:<base64url-json>`                    (Safari tab metadata)
 enum AppToken {
-  static let appIDs: Set<String> = ["@context7", "@github"]
+  static var appIDs: Set<String> { Set(MentionCatalog.apps.map(\.id)) }
 
   /// Build the serialized token for an app + optional resolved selection.
   static func string(appID: String, selection: AppSelection?) -> String {
     guard let selection else { return appID }
     switch selection {
     case let .context7(libraryID, query):
-      if let query, !query.isEmpty, let encoded = percentEncode(query) {
+      if let query, !query.isEmpty, let encoded = percentEncodeTokenComponent(query) {
         return "\(appID):\(libraryID)?q=\(encoded)"
       }
       return "\(appID):\(libraryID)"
     case let .github(_, url):
       return "\(appID):\(url)"
+    case let .finder(reference):
+      return "\(appID):\(percentEncodePath(reference.path))"
+    case let .browser(reference):
+      return "\(appID):\(encodeJSONPayload(reference) ?? percentEncodeTokenComponent(reference.url) ?? reference.url)"
     }
   }
 
-  /// Parse one token. Returns nil unless it's a known app token (`@context7`/`@github`),
-  /// so non-app mentions (skills, clipboard) are left untouched and non-interactive.
+  /// Parse one token. Returns nil unless it's a known app token, so non-app mentions
+  /// (skills, clipboard) are left untouched and non-interactive.
   static func parse(_ token: String) -> (appID: String, selection: AppSelection?)? {
     guard let colon = token.firstIndex(of: ":") else {
       return appIDs.contains(token) ? (token, nil) : nil
@@ -72,6 +107,17 @@ enum AppToken {
       return (appID, .context7(libraryID: payload, query: nil))
     case "@github":
       return (appID, .github(kind: gitHubKind(forURL: payload), url: payload))
+    case "@finder":
+      return (appID, .finder(FinderReference(path: percentDecode(payload), isDirectory: nil)))
+    case "@browser":
+      if let reference = decodeJSONPayload(payload, as: BrowserTabReference.self) {
+        return (appID, .browser(reference))
+      }
+      // Backward-compatible/fallback shape: treat the payload as a URL-only tab.
+      let url = percentDecode(payload)
+      return (appID, .browser(BrowserTabReference(
+        browser: "Browser", bundleID: "", title: shortBrowserTitle(url: url), url: url,
+        windowIndex: 0, tabIndex: 0, isActive: false, capturedAt: "")))
     default:
       return (appID, nil)
     }
@@ -87,12 +133,17 @@ enum AppToken {
       return shortLibrary(libraryID)
     case let .github(_, url):
       return shortGitHub(url)
+    case let .finder(reference):
+      return shortPath(reference.path)
+    case let .browser(reference):
+      return shortBrowser(reference)
     }
   }
 
   /// Every app token in a plain-text note, in order, de-duplicated by exact token string.
   static func scan(_ plain: String) -> [(token: String, appID: String, selection: AppSelection?)] {
-    let pattern = "@(?:context7|github)(?::\\S+)?"
+    let ids = MentionCatalog.apps.map { NSRegularExpression.escapedPattern(for: $0.id) }.joined(separator: "|")
+    let pattern = "(?:\(ids))(?::\\S+)?"
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
     let ns = plain as NSString
     var seen = Set<String>()
@@ -132,22 +183,63 @@ enum AppToken {
     url.contains("/pull/") ? .pr : .issue
   }
 
+  private static func shortPath(_ path: String) -> String {
+    let name = URL(fileURLWithPath: path).lastPathComponent
+    return name.isEmpty ? path : name
+  }
+
+  private static func shortBrowser(_ reference: BrowserTabReference) -> String {
+    let title = reference.title.trimmed
+    if !title.isEmpty { return String(title.prefix(28)) }
+    if !reference.host.isEmpty { return reference.host }
+    return shortBrowserTitle(url: reference.url)
+  }
+
+  private static func shortBrowserTitle(url: String) -> String {
+    URL(string: url)?.host(percentEncoded: false) ?? "Browser tab"
+  }
+
   // MARK: Encoding
 
-  private static func percentEncode(_ s: String) -> String? {
+  private static func percentEncodeTokenComponent(_ s: String) -> String? {
     var allowed = CharacterSet.alphanumerics
     allowed.insert(charactersIn: "-._~")
     return s.addingPercentEncoding(withAllowedCharacters: allowed)
   }
+
+  private static func percentEncodePath(_ s: String) -> String {
+    var allowed = CharacterSet.alphanumerics
+    allowed.insert(charactersIn: "-._~/")
+    return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
+  }
+
   private static func percentDecode(_ s: String) -> String { s.removingPercentEncoding ?? s }
+
+  private static func encodeJSONPayload<T: Encodable>(_ value: T) -> String? {
+    guard let data = try? JSONEncoder().encode(value) else { return nil }
+    return data.base64EncodedString()
+      .replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "=", with: "")
+  }
+
+  private static func decodeJSONPayload<T: Decodable>(_ payload: String, as type: T.Type) -> T? {
+    var normalized = payload
+      .replacingOccurrences(of: "-", with: "+")
+      .replacingOccurrences(of: "_", with: "/")
+    let padding = (4 - normalized.count % 4) % 4
+    if padding > 0 { normalized += String(repeating: "=", count: padding) }
+    guard let data = Data(base64Encoded: normalized) else { return nil }
+    return try? JSONDecoder().decode(T.self, from: data)
+  }
 }
 
 // MARK: - Search result
 
 /// One row in the inline app-search panel. Committing it stamps `selection` into the chip.
 struct AppSearchResult: Identifiable, Hashable {
-  let id: String        // stable: library id or gh url
+  let id: String        // stable: library id, gh url, local path, or tab id
   let title: String     // primary line
-  let subtitle: String  // secondary line (description, or "owner/repo · state")
+  let subtitle: String  // secondary line
   let selection: AppSelection
 }

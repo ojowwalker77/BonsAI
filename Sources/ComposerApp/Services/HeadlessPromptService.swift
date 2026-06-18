@@ -19,6 +19,30 @@ struct HeadlessPromptService {
     return try await run(prompt: prompt, engine: engine)
   }
 
+  /// Rewrite the ENTIRE draft per a chosen intent (Tighten / Concise / Spec / Checklist).
+  /// `@mention` tokens are preserved verbatim so the prompt stays valid.
+  func refineDraft(text: String, intent: RefineIntent, engine: HeadlessEngine) async throws -> String {
+    let prompt = """
+    \(intent.instruction)
+
+    ===== DRAFT =====
+    \(text)
+    """
+    return try await run(prompt: prompt, engine: engine)
+  }
+
+  /// Merge a board's cards (already joined in reading order) into one ordered, paste-ready
+  /// prompt. `@mention` tokens are preserved verbatim so the result stays valid.
+  func compileBoard(source: String, engine: HeadlessEngine) async throws -> String {
+    let prompt = """
+    \(BoardCompile.instruction)
+
+    ===== CARDS (in reading order) =====
+    \(source)
+    """
+    return try await run(prompt: prompt, engine: engine)
+  }
+
   private func run(prompt: String, engine: HeadlessEngine) async throws -> String {
     try await Task.detached(priority: .userInitiated) {
       let process = Process()

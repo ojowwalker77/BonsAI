@@ -33,6 +33,12 @@ final class EditorController: ObservableObject {
     tv.window?.makeFirstResponder(tv)
   }
 
+  /// Drop first responder so the card leaves text-edit mode (back to selected/movable).
+  func resignFocus() {
+    guard let tv = coordinator?.textView, tv.window?.firstResponder == tv else { return }
+    tv.window?.makeFirstResponder(nil)
+  }
+
   func replace(range: NSRange, with string: String) {
     coordinator?.replace(range: range, with: string)
   }
@@ -45,8 +51,28 @@ final class EditorController: ObservableObject {
 
   /// Self-contained plain text with mention tokens serialized back to "@name".
   var plainText: String {
-    guard let tv = coordinator?.textView else { return "" }
+    plainTextIfLoaded ?? ""
+  }
+
+  var plainTextIfLoaded: String? {
+    guard let tv = coordinator?.textView else { return nil }
     return tv.attributedString().composerPlainText
+  }
+
+  /// A lossless copy of the whole document (chips + attachments) for revert.
+  var attributedSnapshot: NSAttributedString? {
+    guard let storage = coordinator?.textView?.textStorage else { return nil }
+    return storage.attributedSubstring(from: NSRange(location: 0, length: storage.length))
+  }
+
+  /// Replace the entire draft with refined plain text (whole-draft refine).
+  func replaceWholeDraft(with string: String) {
+    coordinator?.replaceWholeDraft(with: string)
+  }
+
+  /// Restore a previously captured snapshot — used to revert a refine.
+  func restore(_ snapshot: NSAttributedString) {
+    coordinator?.restore(snapshot)
   }
 }
 
@@ -55,14 +81,25 @@ final class EditorController: ObservableObject {
 /// A chromeless free-write editor: a transparent `NSTextView` over the panel vibrancy.
 struct FreeWriteEditor: NSViewRepresentable {
   @Binding var text: String
+  var initialAttributedText: NSAttributedString?
   var placeholder = "Start writing\u{2026}"
   var onCountChange: (Int) -> Void = { _ in }
   var onSelectionChange: (EditorSelection) -> Void = { _ in }
   var onEscape: () -> Void = {}
+  /// Fired when this editor gains/loses first responder (canvas active-card tracking).
+  var onFocusChange: (Bool) -> Void = { _ in }
+  /// Reports the editor's intrinsic content height (laid-out text + container inset) so a text
+  /// card can auto-grow to fit what's typed — Excalidraw point text, not a fixed box.
+  var onHeightChange: (CGFloat) -> Void = { _ in }
+  /// Supplies the rest of the board's text as read-only context for the linter. `nil` ⇒
+  /// behaves exactly as the single-editor era.
+  var boardContext: () -> String? = { nil }
   @ObservedObject var mentions: MentionState
   @ObservedObject var appSearch: AppSearchState
   @ObservedObject var controller: EditorController
   @ObservedObject var lint: LintState
+  @ObservedObject var refine: RefineState
+  @ObservedObject var store: DumpStore
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -94,7 +131,6 @@ struct FreeWriteEditor: NSViewRepresentable {
     tv.backgroundColor = .clear
     tv.isRichText = true            // keep: styled chips + image attachments persist in-session
     tv.importsGraphics = false      // keep FALSE: ComposerTextView is the only image path
-    tv.appearance = NSAppearance(named: .darkAqua)
     tv.isAutomaticQuoteSubstitutionEnabled = false
     tv.isAutomaticDashSubstitutionEnabled = false
     tv.isAutomaticTextReplacementEnabled = false
@@ -123,32 +159,44 @@ struct FreeWriteEditor: NSViewRepresentable {
     tv.onHoverPoint = { [weak coordinator = context.coordinator] point in
       coordinator?.handleHover(point)
     }
+    tv.onFocusChange = { [weak coordinator = context.coordinator] active in
+      coordinator?.parent.onFocusChange(active)
+    }
 
-    if !text.isEmpty {
+    if let initialAttributedText {
+      tv.textStorage?.setAttributedString(initialAttributedText)
+    } else if !text.isEmpty {
+      // `text` is the serialized form (e.g. "@github") — rebuild it into styled chips so a
+      // reloaded card edits with real chips, not raw tokens.
       tv.textStorage?.setAttributedString(
-        NSAttributedString(string: text, attributes: context.coordinator.bodyAttributes()))
+        ChipFactory.attributedDocument(fromPlainText: text, font: Theme.Typography.body,
+                                       paragraph: context.coordinator.paragraphStyle()))
     }
     context.coordinator.installPlaceholder(in: tv, text: placeholder)
     context.coordinator.updatePlaceholderVisibility()
-
-    // Restyle inserted chips when async favicons arrive.
-    MentionStyleCache.shared.onUpdate = { [weak coordinator = context.coordinator] in
-      coordinator?.updateExistingChips()
-    }
+    context.coordinator.reportHeight(force: true)
+    // Chip restyle on async favicon arrival is wired per-coordinator via the
+    // .composerStyleCacheUpdated notification (see Coordinator.init) so N cards all update,
+    // instead of a single shared closure the last card would clobber.
     return scrollView
   }
 
   func updateNSView(_ scrollView: NSScrollView, context: Context) {
     guard let tv = scrollView.documentView as? NSTextView else { return }
     context.coordinator.parent = self
-    if tv.string != text {
+    // Compare against the serialized form so chip styling (visible ≠ serialized) isn't mistaken
+    // for an external edit — only a real change to the bound text re-seeds the editor.
+    if tv.attributedString().composerPlainText != text {
       let sel = tv.selectedRange()
       tv.textStorage?.setAttributedString(
-        NSAttributedString(string: text, attributes: context.coordinator.bodyAttributes()))
-      let clamped = NSRange(location: min(sel.location, (text as NSString).length), length: 0)
-      tv.setSelectedRange(clamped)
+        ChipFactory.attributedDocument(fromPlainText: text, font: Theme.Typography.body,
+                                       paragraph: context.coordinator.paragraphStyle()))
+      let length = (tv.string as NSString).length
+      tv.setSelectedRange(NSRange(location: min(sel.location, length), length: 0))
     }
     context.coordinator.updatePlaceholderVisibility()
+    // Width may have changed (card resized) → reflow can change line count → refit height.
+    context.coordinator.reportHeight()
   }
 }
 
@@ -163,8 +211,16 @@ extension FreeWriteEditor {
     private var selectionWork: DispatchWorkItem?
     private var lintWork: DispatchWorkItem?
     private var hideWork: DispatchWorkItem?
+    private var fontSizeObserver: NSObjectProtocol?
+    private var styleObserver: NSObjectProtocol?
+    private var isNormalizingFormatting = false
     /// Monotonic guard so a slow analysis can't apply onto newer text.
     private var lintVersion = 0
+    /// Last height pushed up to the card, so repeated layout passes don't thrash the binding.
+    private var lastReportedHeight: CGFloat = -1
+    /// Width the last height was measured at — lets `updateNSView` skip the (non-trivial) text
+    /// layout pass on renders that only moved the card (pan/drag), measuring only on a reflow.
+    private var lastLayoutWidth: CGFloat = -1
 
     init(_ parent: FreeWriteEditor) {
       self.parent = parent
@@ -172,8 +228,25 @@ extension FreeWriteEditor {
       parent.mentions.commitRequested = { [weak self] item in self?.commit(item) }
       parent.lint.cancelHide = { [weak self] in self?.hideWork?.cancel() }
       parent.lint.requestHide = { [weak self] in self?.scheduleHide() }
+      fontSizeObserver = NotificationCenter.default.addObserver(
+        forName: .composerFontSizeChanged, object: nil, queue: .main
+      ) { [weak self] _ in
+        MainActor.assumeIsolated { self?.applyCurrentFormatting() }
+      }
+      // Restyle this card's chips when an async favicon/brand color lands. Per-coordinator
+      // (not a single shared closure) so every card on the board updates, not just the last.
+      styleObserver = NotificationCenter.default.addObserver(
+        forName: .composerStyleCacheUpdated, object: nil, queue: .main
+      ) { [weak self] _ in
+        MainActor.assumeIsolated { self?.updateExistingChips() }
+      }
       // Warm the on-device model so the first pause doesn't pay cold-start latency.
       SemanticLintService.shared.prewarm()
+    }
+
+    deinit {
+      if let fontSizeObserver { NotificationCenter.default.removeObserver(fontSizeObserver) }
+      if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
     }
 
     // MARK: Typography
@@ -188,18 +261,92 @@ extension FreeWriteEditor {
        .paragraphStyle: paragraphStyle()]
     }
 
+    func textView(_ textView: NSTextView,
+                  shouldChangeTypingAttributes oldTypingAttributes: [String: Any],
+                  toAttributes newTypingAttributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
+      bodyAttributes()
+    }
+
+    /// Re-apply the current editor font/color to plain text while preserving chips and images.
+    /// This strips pasted rich-text colors (the black-on-dark bug) and handles ⌘+/⌘− live.
+    func applyCurrentFormatting() {
+      guard let tv = textView else { return }
+      tv.font = Theme.Typography.body
+      tv.textColor = Theme.nsBodyText
+      tv.defaultParagraphStyle = paragraphStyle()
+      tv.typingAttributes = bodyAttributes()
+      placeholderView.font = Theme.Typography.body
+      placeholderView.textColor = Theme.nsPlaceholderText
+      normalizeBodyRuns(in: tv)
+      restyleExistingChips(notifyTextView: false)
+      tv.needsDisplay = true
+      reportHeight(force: true)
+    }
+
+    private func normalizeBodyRuns(in tv: NSTextView) {
+      guard !isNormalizingFormatting, let storage = tv.textStorage, storage.length > 0 else {
+        tv.typingAttributes = bodyAttributes()
+        return
+      }
+
+      let full = NSRange(location: 0, length: storage.length)
+      let attrs = bodyAttributes()
+      var bodyRanges: [NSRange] = []
+      storage.enumerateAttributes(in: full, options: []) { attributes, range, _ in
+        guard attributes[.mentionToken] == nil, attributes[.attachment] == nil else { return }
+        bodyRanges.append(range)
+      }
+      guard !bodyRanges.isEmpty else { return }
+
+      isNormalizingFormatting = true
+      storage.beginEditing()
+      for range in bodyRanges { storage.setAttributes(attrs, range: range) }
+      storage.endEditing()
+      isNormalizingFormatting = false
+      tv.typingAttributes = attrs
+    }
+
     // MARK: Text change → binding + count + mention scan
     func textDidChange(_ notification: Notification) {
       guard let tv = textView else { return }
-      let value = tv.string
-      if parent.text != value { parent.text = value }
-      parent.onCountChange(value.count)
+      normalizeBodyRuns(in: tv)
+      let serialized = tv.attributedString().composerPlainText
+      if parent.text != serialized { parent.text = serialized }
+      parent.onCountChange(tv.string.count)
       updatePlaceholderVisibility()
       refreshMentionMenu(tv)
       publishSelection(tv)
       // Editing invalidates any existing flags; clear now, re-lint once you pause.
       resetLint()
       scheduleLint(tv)
+      reportHeight(force: true)
+    }
+
+    // MARK: Auto-height (point text grows to fit content)
+
+    /// Push the laid-out content height up to the card. Async + epsilon-guarded so it's safe to
+    /// call from `updateNSView` (no "modifying state during view update") and can't loop: the
+    /// card resizes height only, content height is stable for a fixed width, so it converges.
+    ///
+    /// `force` runs the measurement now (text/font changed). Otherwise it's skipped unless the
+    /// width changed — so panning or dragging the card, which re-renders the editor but doesn't
+    /// reflow it, never pays for a text layout pass.
+    func reportHeight(force: Bool = false) {
+      guard let tv = textView else { return }
+      let width = tv.bounds.width
+      if !force, abs(width - lastLayoutWidth) < 0.5 { return }
+      lastLayoutWidth = width
+      let height = contentHeight(of: tv)
+      guard height > 0, abs(height - lastReportedHeight) > 0.5 else { return }
+      lastReportedHeight = height
+      let callback = parent.onHeightChange
+      DispatchQueue.main.async { callback(height) }
+    }
+
+    private func contentHeight(of tv: NSTextView) -> CGFloat {
+      guard let lm = tv.layoutManager, let container = tv.textContainer else { return 0 }
+      lm.ensureLayout(for: container)
+      return lm.usedRect(for: container).height + tv.textContainerInset.height * 2
     }
 
     // MARK: Selection change → debounced snapshot (anti-flicker on drag)
@@ -237,11 +384,35 @@ extension FreeWriteEditor {
         in: range, with: NSAttributedString(string: string, attributes: bodyAttributes()))
       tv.didChangeText()
       tv.setSelectedRange(NSRange(location: range.location, length: (string as NSString).length))
-      parent.text = tv.string
+      parent.text = tv.attributedString().composerPlainText
       parent.onCountChange(tv.string.count)
       updatePlaceholderVisibility()
       publishSelection(tv)
       return true
+    }
+
+    // MARK: - Whole-draft refine
+
+    /// Replace the entire document with refined plain text, keeping it undo-safe.
+    func replaceWholeDraft(with string: String) {
+      guard let tv = textView else { return }
+      let whole = NSRange(location: 0, length: (tv.string as NSString).length)
+      _ = replace(range: whole, with: string)
+      tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+    }
+
+    /// Restore a snapshot verbatim (chips + attachments intact) to revert a refine.
+    func restore(_ snapshot: NSAttributedString) {
+      guard let tv = textView, let storage = tv.textStorage else { return }
+      let whole = NSRange(location: 0, length: storage.length)
+      guard tv.shouldChangeText(in: whole, replacementString: snapshot.string) else { return }
+      storage.replaceCharacters(in: whole, with: snapshot)
+      tv.didChangeText()
+      tv.setSelectedRange(NSRange(location: 0, length: 0))
+      tv.typingAttributes = bodyAttributes()
+      parent.text = tv.attributedString().composerPlainText
+      parent.onCountChange(tv.string.count)
+      updatePlaceholderVisibility()
     }
 
     // MARK: - Semantic linter
@@ -255,18 +426,23 @@ extension FreeWriteEditor {
         self.runLint(tv)
       }
       lintWork = work
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1.1, execute: work)
     }
 
     private func runLint(_ tv: NSTextView) {
-      let snapshot = tv.string
+      let visibleSnapshot = tv.string
+      let plainSnapshot = tv.attributedString().composerPlainText
+      let boardContext = parent.boardContext()
       lintVersion &+= 1
       let version = lintVersion
       Task { [weak self] in
-        let flags = await SemanticLintService.shared.analyze(snapshot)
+        let flags = await SemanticLintService.shared.analyze(
+          visibleText: visibleSnapshot, plainText: plainSnapshot, boardContext: boardContext)
         guard let self, let tv = self.textView else { return }
         // Discard if the text changed or a newer pass started while we were thinking.
-        guard version == self.lintVersion, tv.string == snapshot else { return }
+        guard version == self.lintVersion,
+              tv.string == visibleSnapshot,
+              tv.attributedString().composerPlainText == plainSnapshot else { return }
         self.applyLintFlags(flags)
       }
     }
@@ -280,11 +456,14 @@ extension FreeWriteEditor {
 
       var resolved: [LintFlag] = []
       for var flag in flags {
-        guard flag.range.location >= 0, flag.range.location + flag.range.length <= length else { continue }
+        guard flag.range.location >= 0,
+              flag.range.location + flag.range.length <= length,
+              !intersectsMentionToken(flag.range, in: tv),
+              !intersectsAttachment(flag.range, in: tv) else { continue }
         lm.addTemporaryAttributes(
-          [.underlineStyle: NSUnderlineStyle.thick.rawValue,
-           .underlineColor: flag.kind.nsTint.withAlphaComponent(0.9),
-           .backgroundColor: flag.kind.nsTint.withAlphaComponent(0.10)],
+          [.underlineStyle: NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue,
+           .underlineColor: flag.kind.nsTint.withAlphaComponent(0.48),
+           .backgroundColor: flag.kind.nsTint.withAlphaComponent(0.025)],
           forCharacterRange: flag.range)
         flag.rectInView = rectInPanel(for: flag.range)
         resolved.append(flag)
@@ -294,6 +473,24 @@ extension FreeWriteEditor {
       if let active = parent.lint.activeFlagID, !resolved.contains(where: { $0.id == active }) {
         parent.lint.activeFlagID = nil
       }
+    }
+
+    private func intersectsMentionToken(_ range: NSRange, in tv: NSTextView) -> Bool {
+      guard let storage = tv.textStorage else { return false }
+      var hit = false
+      storage.enumerateAttribute(.mentionToken, in: range, options: []) { value, _, stop in
+        if value != nil { hit = true; stop.pointee = true }
+      }
+      return hit
+    }
+
+    private func intersectsAttachment(_ range: NSRange, in tv: NSTextView) -> Bool {
+      guard let storage = tv.textStorage else { return false }
+      var hit = false
+      storage.enumerateAttribute(.attachment, in: range, options: []) { value, _, stop in
+        if value != nil { hit = true; stop.pointee = true }
+      }
+      return hit
     }
 
     /// Full reset on edit: drop decorations and any open popover until the next pause.
@@ -318,7 +515,7 @@ extension FreeWriteEditor {
       guard let point, !parent.lint.flags.isEmpty else { scheduleHide(); return }
       let hit = parent.lint.flags.first {
         guard let r = viewRect(for: $0.range) else { return false }
-        return r.insetBy(dx: -2, dy: -3).contains(point)
+        return r.insetBy(dx: -5, dy: -7).contains(point)
       }
       guard let flag = hit else { scheduleHide(); return }
       hideWork?.cancel()
@@ -330,7 +527,7 @@ extension FreeWriteEditor {
       hideWork?.cancel()
       let work = DispatchWorkItem { [weak self] in self?.parent.lint.activeFlagID = nil }
       hideWork = work
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.55, execute: work)
     }
 
     func applyLintFix(range: NSRange, expecting phrase: String, with replacement: String) {
@@ -404,7 +601,13 @@ extension FreeWriteEditor {
     // MARK: Keyboard — Escape always handled; nav keys only while the menu is open
     func textView(_ tv: NSTextView, doCommandBy selector: Selector) -> Bool {
       if selector == #selector(NSResponder.cancelOperation(_:)) {
-        if parent.mentions.isOpen { closeMenu() } else { parent.onEscape() }
+        if parent.store.compiledDraft != nil { parent.store.compiledDraft = nil }
+        else if parent.store.isSettingsOpen { parent.store.isSettingsOpen = false }
+        else if parent.mentions.isOpen { closeMenu() }
+        else if parent.store.isHistoryOpen { parent.store.isHistoryOpen = false }
+        else if parent.refine.isMenuOpen { parent.refine.isMenuOpen = false }
+        else if parent.refine.pending != nil { parent.refine.revert?() }
+        else { parent.onEscape() }
         return true
       }
       guard parent.mentions.isOpen else { return false }
@@ -437,7 +640,7 @@ extension FreeWriteEditor {
       tv.didChangeText()
       tv.setSelectedRange(NSRange(location: query.range.location + token.length, length: 0))
       tv.typingAttributes = bodyAttributes()
-      parent.text = tv.string
+      parent.text = tv.attributedString().composerPlainText
       parent.onCountChange(tv.string.count)
       closeMenu()
 
@@ -448,9 +651,14 @@ extension FreeWriteEditor {
       }
     }
 
-    /// Restyle already-inserted chips in place when async favicons land. One
-    /// shouldChangeText/didChangeText pair; edits applied descending so ranges stay valid.
+    /// Restyle already-inserted chips in place when async favicons land.
     func updateExistingChips() {
+      restyleExistingChips(notifyTextView: true)
+    }
+
+    /// Rebuild chip runs with the current font/cache while preserving the selection.
+    /// Edits are applied descending so stored ranges stay valid.
+    private func restyleExistingChips(notifyTextView: Bool) {
       guard let tv = textView, let storage = tv.textStorage else { return }
       let saved = tv.selectedRange()
 
@@ -463,25 +671,34 @@ extension FreeWriteEditor {
       }
       guard !edits.isEmpty else { return }
 
-      let descending = edits.sorted { $0.0.location > $1.0.location }
       let full = NSRange(location: 0, length: storage.length)
-      guard tv.shouldChangeText(in: full, replacementString: tv.string) else { return }
+      if notifyTextView, !tv.shouldChangeText(in: full, replacementString: tv.string) { return }
+
+      let descending = edits.sorted { $0.0.location > $1.0.location }
       storage.beginEditing()
       for (range, rebuilt) in descending {
         storage.replaceCharacters(in: range, with: rebuilt)
       }
       storage.endEditing()
-      tv.didChangeText()
+      if notifyTextView { tv.didChangeText() }
 
-      var delta = 0
-      for (range, rebuilt) in edits where range.location + range.length <= saved.location {
-        delta += rebuilt.length - range.length
+      func adjusted(_ point: Int) -> Int {
+        var value = point
+        for (range, rebuilt) in edits where range.location + range.length <= point {
+          value += rebuilt.length - range.length
+        }
+        return min(max(value, 0), storage.length)
       }
-      tv.setSelectedRange(NSRange(location: min(saved.location + delta, storage.length), length: 0))
-      parent.text = tv.string
+
+      let newLocation = adjusted(saved.location)
+      let newEnd = adjusted(saved.location + saved.length)
+      tv.setSelectedRange(NSRange(location: newLocation, length: max(0, newEnd - newLocation)))
+      tv.typingAttributes = bodyAttributes()
+      parent.text = tv.attributedString().composerPlainText
+      parent.onCountChange(tv.string.count)
     }
 
-    // MARK: - Inline app search (Context7 / GitHub)
+    // MARK: - Inline app search (connectors)
 
     /// Open the search popover for the app token at `targetRange`, anchored under the chip.
     func openAppSearch(appID: String, targetRange: NSRange, kind: GitHubItemKind?) {
@@ -494,11 +711,13 @@ extension FreeWriteEditor {
       state.results = []
       state.selectedIndex = 0
       state.isLoading = false
+      state.hasSearched = false
       state.errorText = nil
       state.anchorInView = anchor
       state.onCommit = { [weak self] result in self?.resolveSelection(result) }
       state.onCancel = { [weak self] in self?.closeAppSearchAndFocus() }
       state.isOpen = true
+      state.reload()
     }
 
     /// Clicking an app chip re-opens its search, pre-scoped to its current kind.
@@ -531,7 +750,7 @@ extension FreeWriteEditor {
       tv.didChangeText()
       tv.setSelectedRange(NSRange(location: range.location + chip.length, length: 0))
       tv.typingAttributes = bodyAttributes()
-      parent.text = tv.string
+      parent.text = tv.attributedString().composerPlainText
       parent.onCountChange(tv.string.count)
       closeAppSearch()
       tv.window?.makeFirstResponder(tv)
@@ -543,6 +762,7 @@ extension FreeWriteEditor {
       state.isOpen = false
       state.targetRange = nil
       state.results = []
+      state.hasSearched = false
       state.anchorInView = nil
       state.onCommit = nil
       state.onCancel = nil
