@@ -54,6 +54,7 @@ struct BoardCardView: View {
 
   var body: some View {
     cardBody
+      .opacity(card.isArchived ? 0.4 : 1)   // superseded ideas fade but stay for lineage
       .frame(width: liveFrame.width, height: liveFrame.height, alignment: .topLeading)
       .background(surface)
       .overlay(selectionChrome)

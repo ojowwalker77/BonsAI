@@ -476,12 +476,13 @@ final class BoardViewModel: ObservableObject {
     return max(ceil(measured) + 36, CardState.textMinSize.height)   // 18pt vertical padding each side
   }
 
-  /// Draw an arrow bound between two existing cards (its geometry tracks their centers).
+  /// Draw an arrow bound between two existing cards (its geometry tracks their centers). An
+  /// optional `reason` rides the arrow as its label — the "why" behind the link.
   @discardableResult
-  func connectCards(from: UUID, to: UUID) -> UUID? {
+  func connectCards(from: UUID, to: UUID, reason: String = "") -> UUID? {
     guard from != to, cards.contains(where: { $0.id == from }), cards.contains(where: { $0.id == to }) else { return nil }
     registerUndo()
-    let card = CardState(kind: .arrow, text: "",
+    let card = CardState(kind: .arrow, text: reason,
                          x: 0, y: 0, w: Double(CardState.lineSize.width), h: Double(CardState.lineSize.height),
                          z: nextZ, startBindingID: from, endBindingID: to)
     nextZ += 1
@@ -492,6 +493,25 @@ final class BoardViewModel: ObservableObject {
     primarySelectedCardID = card.id
     scheduleSave()
     return card.id
+  }
+
+  /// Mark a card superseded (faded) or active again.
+  func setArchived(_ id: UUID, _ value: Bool) {
+    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].isArchived != value else { return }
+    registerUndo()
+    cards[i].archived = value ? true : nil
+    scheduleSave()
+  }
+
+  /// Provenance: archive `oldID`, drop a new card below it, and link old → new with the reason —
+  /// so an idea's evolution (and the "why") stays visible on the board instead of being lost.
+  @discardableResult
+  func supersede(oldID: UUID, newText: String, reason: String) -> UUID? {
+    guard let old = cards.first(where: { $0.id == oldID }) else { return nil }
+    setArchived(oldID, true)
+    let newID = insertText(newText, at: CGPoint(x: old.x, y: old.y + old.h + 64))
+    _ = connectCards(from: oldID, to: newID, reason: reason)
+    return newID
   }
 
   /// Commit a moved/resized card frame (board space).

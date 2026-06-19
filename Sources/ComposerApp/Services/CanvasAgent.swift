@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 struct AgentMessage: Identifiable, Equatable {
   enum Role { case user, assistant, tool, error }
@@ -15,9 +16,47 @@ struct AgentMessage: Identifiable, Equatable {
 final class CanvasAgent: ObservableObject {
   @Published private(set) var messages: [AgentMessage] = []
   @Published private(set) var isRunning = false
+  /// A folder the agent may read (repo or not) to ground its suggestions in real files. When set,
+  /// the agent runs there with read-only file tools; otherwise it's canvas-only.
+  @Published private(set) var groundingDirectory: URL?
 
   private var sessionID: String?
   private var process: Process?
+  private static let groundingKey = "agent.groundingDirectory"
+
+  init() {
+    if let path = UserDefaults.standard.string(forKey: Self.groundingKey) {
+      var isDir: ObjCBool = false
+      if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+        groundingDirectory = URL(fileURLWithPath: path)
+      }
+    }
+  }
+
+  /// Pick (or clear) the folder the agent can read.
+  func chooseDirectory() {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.allowsMultipleSelection = false
+    panel.prompt = "Ground"
+    panel.message = "Pick a folder the agent can read to ground its suggestions in real files."
+    if let dir = groundingDirectory { panel.directoryURL = dir }
+    let apply: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+      guard response == .OK, let url = panel.url else { return }
+      self?.setGroundingDirectory(url)
+    }
+    if let window = NSApp.keyWindow {
+      panel.beginSheetModal(for: window, completionHandler: apply)
+    } else {
+      apply(panel.runModal())
+    }
+  }
+
+  func setGroundingDirectory(_ url: URL?) {
+    groundingDirectory = url
+    UserDefaults.standard.set(url?.path, forKey: Self.groundingKey)
+  }
 
   func send(_ text: String) {
     let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -48,17 +87,22 @@ final class CanvasAgent: ObservableObject {
       return
     }
     let mcp = #"{"mcpServers":{"canvas":{"type":"http","url":"http://127.0.0.1:\#(CanvasServer.port)/mcp"}}}"#
+    // Grounded: run in the chosen folder with read-only file tools so the agent can argue from
+    // real files. Otherwise: canvas-only, in a neutral scratch dir.
+    let grounded = groundingDirectory
+    let tools = grounded != nil ? "mcp__canvas__*,Read,Grep,Glob" : "mcp__canvas__*"
+    let systemPrompt = grounded != nil ? Self.systemPrompt + "\n\n" + Self.groundingAddendum : Self.systemPrompt
     var args = ["-p", prompt,
                 "--output-format", "stream-json", "--verbose",
                 "--mcp-config", mcp,
-                "--allowedTools", "mcp__canvas__*",
-                "--append-system-prompt", Self.systemPrompt]
+                "--allowedTools", tools,
+                "--append-system-prompt", systemPrompt]
     if let resume { args += ["--resume", resume] }
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: claude)
     process.arguments = args
-    process.currentDirectoryURL = Self.workdir
+    process.currentDirectoryURL = grounded ?? Self.workdir
     var env = ProcessInfo.processInfo.environment
     env["PATH"] = Self.augmentedPATH(env["PATH"])
     process.environment = env
@@ -148,9 +192,18 @@ final class CanvasAgent: ObservableObject {
   You are a thinking partner working ON a spatial idea canvas with the user. Use the canvas tools \
   (mcp__canvas__*) to read and shape the board directly — start by calling get_canvas. As you talk, \
   evolve the board: add concise cards for new ideas, sharpen vague ones with set_text, connect \
-  related cards, remove dead ends. When you change the user's mind about an approach, keep the old \
-  card, add the new one, and connect them so the reasoning stays visible. Prefer many small surgical \
-  cards over walls of text. Keep chat replies short — let the canvas hold the detail.
+  related cards (use connect's reason to label WHY they relate). \
+  Crucial — capture how ideas evolve: when an approach changes or you talk the user out of \
+  something, call `supersede` (it fades the old card, adds the new one, and links them with your \
+  reason). Never silently overwrite or delete an idea that's being replaced — the board should read \
+  as a history of decisions and the "why" behind them, not just the latest state. Prefer many small \
+  surgical cards over walls of text. Keep chat replies short — let the canvas hold the detail.
+  """
+
+  static let groundingAddendum = """
+  You're running inside a folder you can READ (its files and code) with Read/Grep/Glob. Ground your \
+  suggestions in what's actually there — open the relevant files before asserting how something \
+  works. You cannot modify files; your thinking goes onto the canvas.
   """
 
   static let workdir: URL = {

@@ -42,6 +42,8 @@ struct CardState: Codable, Identifiable, Equatable {
   var groupID: UUID?
   var isLocked: Bool?
   var imagePath: String?
+  /// A superseded idea — kept on the board for lineage but visually faded (provenance).
+  var archived: Bool?
 
   init(id: UUID = UUID(),
        kind: CanvasElementKind = .text,
@@ -56,7 +58,8 @@ struct CardState: Codable, Identifiable, Equatable {
        endBindingID: UUID? = nil,
        groupID: UUID? = nil,
        isLocked: Bool = false,
-       imagePath: String? = nil) {
+       imagePath: String? = nil,
+       archived: Bool = false) {
     self.id = id
     self.kind = kind == .text ? nil : kind
     self.text = text
@@ -71,10 +74,12 @@ struct CardState: Codable, Identifiable, Equatable {
     self.groupID = groupID
     self.isLocked = isLocked ? true : nil
     self.imagePath = imagePath
+    self.archived = archived ? true : nil
   }
 
   var elementKind: CanvasElementKind { kind ?? .text }
   var locked: Bool { isLocked ?? false }
+  var isArchived: Bool { archived ?? false }
 
   var frame: CGRect {
     get { CGRect(x: x, y: y, width: w, height: h) }

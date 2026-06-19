@@ -17,6 +17,8 @@ struct CanvasGraph: Codable {
     var z: Int
     var group: String?
     var locked: Bool
+    /// A superseded idea, kept for lineage — faded on the board.
+    var archived: Bool
   }
 
   /// A directional relationship between two nodes, realized by a bound arrow/line node.

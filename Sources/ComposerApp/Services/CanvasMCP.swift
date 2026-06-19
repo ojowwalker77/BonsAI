@@ -47,6 +47,7 @@ enum CanvasMCP {
   private static let opForTool: [String: String] = [
     "add_text": "add_text", "add_shape": "add_shape", "set_text": "update_text",
     "move_node": "move", "resize_node": "resize", "delete_node": "delete", "connect": "connect",
+    "archive": "set_archived", "supersede": "supersede",
   ]
 
   private static func callTool(_ name: String, arguments: [String: Any]) -> [String: Any] {
@@ -84,8 +85,14 @@ enum CanvasMCP {
     tool("resize_node", "Resize a node.",
          ["id": str("Node id"), "w": num("New width"), "h": num("New height")], ["id", "w", "h"]),
     tool("delete_node", "Delete a node by id.", ["id": str("Node id")], ["id"]),
-    tool("connect", "Draw an arrow from one node to another.",
-         ["from": str("Source node id"), "to": str("Target node id")], ["from", "to"]),
+    tool("connect", "Draw an arrow from one node to another, optionally labeled with the reason.",
+         ["from": str("Source node id"), "to": str("Target node id"), "reason": str("Why they're linked (becomes the arrow label)")],
+         ["from", "to"]),
+    tool("archive", "Fade a node as superseded (or revive it) without deleting it — keeps lineage.",
+         ["id": str("Node id"), "archived": ["type": "boolean", "description": "true to supersede, false to revive"]], ["id"]),
+    tool("supersede", "Evolve an idea: fade the old card, add the new one below it, and link them with the reason. Use this whenever an approach changes.",
+         ["id": str("Old node id"), "text": str("The new idea's text"), "reason": str("Why it changed")],
+         ["id", "text", "reason"]),
   ]
 
   private static func tool(_ name: String, _ description: String,

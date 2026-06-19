@@ -22,7 +22,8 @@ final class CanvasBridge {
         text: board.interaction(for: card.id).plainText,
         x: card.x, y: card.y, w: card.w, h: card.h, z: card.z,
         group: card.groupID?.uuidString,
-        locked: card.locked)
+        locked: card.locked,
+        archived: card.isArchived)
     }
     let edges = board.cards.compactMap { card -> CanvasGraph.Edge? in
       guard card.elementKind == .arrow || card.elementKind == .line,
@@ -83,7 +84,18 @@ final class CanvasBridge {
 
     case "connect":
       guard let from = uuid(op["from"]), let to = uuid(op["to"]) else { return fail("bad \"from\"/\"to\"") }
-      guard let id = board.connectCards(from: from, to: to) else { return fail("could not connect") }
+      guard let id = board.connectCards(from: from, to: to, reason: string(op["reason"]) ?? "") else { return fail("could not connect") }
+      return ok(["id": id.uuidString])
+
+    case "set_archived":
+      guard let id = uuid(op["id"]) else { return fail("bad \"id\"") }
+      board.setArchived(id, (op["archived"] as? Bool) ?? true)
+      return ok()
+
+    case "supersede":
+      guard let old = uuid(op["id"]) else { return fail("bad \"id\"") }
+      guard let id = board.supersede(oldID: old, newText: string(op["text"]) ?? "", reason: string(op["reason"]) ?? "")
+      else { return fail("could not supersede") }
       return ok(["id": id.uuidString])
 
     default:

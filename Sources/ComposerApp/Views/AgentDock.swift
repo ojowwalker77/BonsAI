@@ -34,11 +34,33 @@ struct AgentDock: View {
       AgentEngineIcon(size: 16)
       Text("Agent").font(.body.weight(.semibold)).foregroundStyle(Theme.Palette.body)
       if agent.isRunning { ProgressView().controlSize(.small).scaleEffect(0.65) }
-      Spacer()
+      Spacer(minLength: 6)
+      groundingControl
       iconButton("arrow.counterclockwise", help: "New conversation") { agent.reset(); draft = "" }
       iconButton("xmark", help: "Close  ⌘J", action: onClose)
     }
     .padding(.horizontal, 14).frame(height: 48)
+  }
+
+  @ViewBuilder
+  private var groundingControl: some View {
+    if let dir = agent.groundingDirectory {
+      Button { agent.chooseDirectory() } label: {
+        HStack(spacing: 4) {
+          Image(systemName: "folder.fill").font(.system(size: 10))
+          Text(dir.lastPathComponent).font(.caption).lineLimit(1).truncationMode(.middle)
+            .frame(maxWidth: 96, alignment: .leading)
+        }
+        .foregroundStyle(Color.accentColor)
+        .padding(.horizontal, 8).frame(height: 22)
+        .background(Capsule().fill(Color.accentColor.opacity(0.16)))
+        .contentShape(Capsule())
+      }
+      .buttonStyle(.plain)
+      .help("Grounded in \(dir.path) — click to change")
+    } else {
+      iconButton("folder.badge.plus", help: "Ground the agent in a folder it can read") { agent.chooseDirectory() }
+    }
   }
 
   // MARK: Transcript
