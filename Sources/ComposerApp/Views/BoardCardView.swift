@@ -125,9 +125,10 @@ struct BoardCardView: View {
           onPress: { modifiers in
             let extending = modifiers.contains(.shift)
             let toggling = modifiers.contains(.command)
-            // Only an already-selected card (read before this press changes selection) is armed
-            // to move — first click selects, second drag moves.
-            armedForMove = isSelected && !extending && !toggling
+            // A plain press selects (if needed) AND arms the move, so one click + drag moves the
+            // card in a single gesture; a click with no drag just selects. The 4px drag dead-zone
+            // keeps a plain click from nudging it.
+            armedForMove = !extending && !toggling
             if extending || toggling || !isSelected {
               board.select(card.id, extending: extending, toggling: toggling)
             }

@@ -55,22 +55,22 @@ struct CanvasToolbar: View {
 
   var body: some View {
     HStack(spacing: 5) {
-      ToolButton(symbol: "cursorarrow", help: "Select  ·  move & edit cards",
-                 active: tool == .select) { tool = .select }
-      ToolButton(symbol: "character", help: "Text  ·  click the board, then type",
-                 active: tool == .text) { tool = .text }
-      ToolButton(symbol: "rectangle", help: "Rectangle  ·  click the board to place",
-                 active: tool == .rectangle) { tool = .rectangle }
-      ToolButton(symbol: "circle", help: "Ellipse  ·  click the board to place",
-                 active: tool == .ellipse) { tool = .ellipse }
-      ToolButton(symbol: "diamond", help: "Diamond  ·  click the board to place",
-                 active: tool == .diamond) { tool = .diamond }
-      ToolButton(symbol: "line.diagonal", help: "Line  ·  click the board to place",
-                 active: tool == .line) { tool = .line }
-      ToolButton(symbol: "arrow.up.right", help: "Arrow  ·  click the board to place",
-                 active: tool == .arrow) { tool = .arrow }
-      ToolButton(symbol: "scribble.variable", help: "Freehand stroke  ·  click the board to place",
-                 active: tool == .freehand) { tool = .freehand }
+      ToolButton(symbol: "cursorarrow", help: "Select  ·  move & edit cards  ⌘1",
+                 active: tool == .select, shortcut: 1) { tool = .select }
+      ToolButton(symbol: "character", help: "Text  ·  click the board, then type  ⌘2",
+                 active: tool == .text, shortcut: 2) { tool = .text }
+      ToolButton(symbol: "rectangle", help: "Rectangle  ·  drag to draw  ⌘3",
+                 active: tool == .rectangle, shortcut: 3) { tool = .rectangle }
+      ToolButton(symbol: "circle", help: "Ellipse  ·  drag to draw  ⌘4",
+                 active: tool == .ellipse, shortcut: 4) { tool = .ellipse }
+      ToolButton(symbol: "diamond", help: "Diamond  ·  drag to draw  ⌘5",
+                 active: tool == .diamond, shortcut: 5) { tool = .diamond }
+      ToolButton(symbol: "line.diagonal", help: "Line  ·  drag to draw  ⌘6",
+                 active: tool == .line, shortcut: 6) { tool = .line }
+      ToolButton(symbol: "arrow.up.right", help: "Arrow  ·  drag to draw  ⌘7",
+                 active: tool == .arrow, shortcut: 7) { tool = .arrow }
+      ToolButton(symbol: "scribble.variable", help: "Freehand stroke  ·  drag to draw  ⌘8",
+                 active: tool == .freehand, shortcut: 8) { tool = .freehand }
 
       divider
 
@@ -113,6 +113,8 @@ private struct ToolButton: View {
   let help: String
   var active = false
   var disabled = false
+  /// The ⌘-number that activates this tool, shown as a small corner badge.
+  var shortcut: Int? = nil
   var action: () -> Void
   @State private var hovering = false
 
@@ -127,6 +129,14 @@ private struct ToolButton: View {
             .fill(active ? Color.accentColor.opacity(0.22)
                   : (hovering && !disabled ? Color.white.opacity(0.12) : Color.clear))
         )
+        .overlay(alignment: .bottomTrailing) {
+          if let shortcut {
+            Text("\(shortcut)")
+              .font(.system(size: 8, weight: .bold))
+              .foregroundStyle(active ? Color.accentColor : Color.white.opacity(hovering ? 0.6 : 0.34))
+              .padding(.trailing, 3).padding(.bottom, 2)
+          }
+        }
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
