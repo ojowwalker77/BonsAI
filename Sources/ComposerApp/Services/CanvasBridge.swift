@@ -45,20 +45,48 @@ final class CanvasBridge {
 
     switch name {
     case "add_text":
-      let id = board.insertText(string(op["text"]) ?? "",
-                                at: CGPoint(x: double(op["x"]) ?? 0, y: double(op["y"]) ?? 0))
-      return ok(["id": id.uuidString])
+      let text = string(op["text"]) ?? ""
+      // Coordinates are optional: when omitted, the board auto-places without overlap.
+      if let x = double(op["x"]), let y = double(op["y"]) {
+        return ok(["id": board.insertText(text, at: CGPoint(x: x, y: y)).uuidString])
+      }
+      return ok(["id": board.insertTextAutoPlaced(text).uuidString])
 
     case "add_shape":
       guard let kind = string(op["kind"]).flatMap(CanvasElementKind.init(rawValue:)) else {
         return fail("bad \"kind\"")
       }
-      let x = double(op["x"]) ?? 0, y = double(op["y"]) ?? 0
       let w = double(op["w"]) ?? 180, h = double(op["h"]) ?? 120
-      guard let id = board.addDrawnElement(kind, from: CGPoint(x: x, y: y), to: CGPoint(x: x + w, y: y + h)) else {
+      let origin: CGPoint
+      if let x = double(op["x"]), let y = double(op["y"]) {
+        origin = CGPoint(x: x, y: y)
+      } else {
+        origin = board.autoPlacePoint(for: CGSize(width: w, height: h))
+      }
+      guard let id = board.addDrawnElement(kind, from: origin, to: CGPoint(x: origin.x + w, y: origin.y + h)) else {
         return fail("could not add \(kind.rawValue)")
       }
       return ok(["id": id.uuidString])
+
+    case "create_diagram":
+      guard let rawNodes = op["nodes"] as? [[String: Any]] else { return fail("missing \"nodes\"") }
+      let specs = rawNodes.compactMap { node -> BoardViewModel.DiagramNodeSpec? in
+        guard let key = string(node["key"]) ?? string(node["id"]), let text = string(node["text"]) else { return nil }
+        return BoardViewModel.DiagramNodeSpec(key: key, text: text)
+      }
+      guard !specs.isEmpty else { return fail("no valid nodes (each needs a \"key\" and \"text\")") }
+      let edgeSpecs = (op["edges"] as? [[String: Any]] ?? []).compactMap { edge -> BoardViewModel.DiagramEdgeSpec? in
+        guard let from = string(edge["from"]), let to = string(edge["to"]) else { return nil }
+        return BoardViewModel.DiagramEdgeSpec(from: from, to: to, reason: string(edge["reason"]) ?? "")
+      }
+      let map = board.createDiagram(nodes: specs, edges: edgeSpecs, direction: layoutDirection(op["direction"]))
+      frameBoard()
+      return ok(["nodes": map.mapValues { $0.uuidString }, "count": map.count])
+
+    case "relayout":
+      board.relayout(direction: layoutDirection(op["direction"]))
+      frameBoard()
+      return ok()
 
     case "update_text":
       guard let id = uuid(op["id"]) else { return fail("bad \"id\"") }
@@ -111,6 +139,15 @@ final class CanvasBridge {
     return result
   }
   private func fail(_ message: String) -> [String: Any] { ["ok": false, "error": message] }
+
+  private func layoutDirection(_ value: Any?) -> LayoutDirection {
+    (value as? String) == "right" ? .right : .down
+  }
+
+  /// Re-frame the viewport on the board after a layout pass, so the agent's diagram lands in view.
+  private func frameBoard() {
+    NotificationCenter.default.post(name: .composerZoomFit, object: nil)
+  }
 
   private func string(_ value: Any?) -> String? { value as? String }
   private func uuid(_ value: Any?) -> UUID? { (value as? String).flatMap(UUID.init(uuidString:)) }

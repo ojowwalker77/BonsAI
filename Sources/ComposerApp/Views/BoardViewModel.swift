@@ -94,6 +94,10 @@ final class BoardViewModel: ObservableObject {
   private var redoStack: [HistorySnapshot] = []
   private var textEditBaselines: [UUID: String] = [:]
   private var isRestoringHistory = false
+  /// Set while a compound mutation (e.g. building a whole diagram) runs, so the inner
+  /// `insertText`/`connectCards` calls don't each push their own undo step — the batch registers
+  /// exactly one at the top.
+  private var suppressUndo = false
   private let maxHistoryDepth = 80
   /// Undo/redo kept per board, so flipping to another board and back doesn't lose your history.
   private var undoCache: [PersistentIdentifier: (undo: [HistorySnapshot], redo: [HistorySnapshot])] = [:]
@@ -242,7 +246,7 @@ final class BoardViewModel: ObservableObject {
   }
 
   private func registerUndo(_ snapshot: HistorySnapshot? = nil) {
-    guard !isRestoringHistory else { return }
+    guard !isRestoringHistory, !suppressUndo else { return }
     undoStack.append(snapshot ?? historySnapshot())
     if undoStack.count > maxHistoryDepth { undoStack.removeFirst(undoStack.count - maxHistoryDepth) }
     redoStack.removeAll()
@@ -512,6 +516,149 @@ final class BoardViewModel: ObservableObject {
     let newID = insertText(newText, at: CGPoint(x: old.x, y: old.y + old.h + 64))
     _ = connectCards(from: oldID, to: newID, reason: reason)
     return newID
+  }
+
+  // MARK: Structured layout (agent draws by declaring structure, not coordinates)
+
+  /// One declared diagram node: a stable `key` the caller invents (referenced by edges) and its text.
+  struct DiagramNodeSpec { let key: String; let text: String }
+  /// A declared directed link by node key, optionally labeled with the "why".
+  struct DiagramEdgeSpec { let from: String; let to: String; let reason: String }
+
+  /// Build a whole diagram from a declaration of nodes + edges in ONE undo step: the agent says
+  /// *what connects to what*, and `BoardLayout` computes clean, non-overlapping board positions —
+  /// the spatial work an LLM can't do reliably by hand. Returns the caller's keys → created ids.
+  @discardableResult
+  func createDiagram(nodes specs: [DiagramNodeSpec], edges edgeSpecs: [DiagramEdgeSpec],
+                     direction: LayoutDirection) -> [String: UUID] {
+    guard !specs.isEmpty else { return [:] }
+    registerUndo()
+    suppressUndo = true
+    defer { suppressUndo = false; refreshBoundArrows(); scheduleSave() }
+
+    // Where the diagram starts: a fresh, empty board gets a clean margin (and we drop the lone
+    // blank starter card); otherwise it drops below whatever's already there.
+    let origin = diagramOrigin()
+    if cards.count == 1, cards[0].elementKind == .text, cards[0].isBlank {
+      interactions[cards[0].id] = nil
+      cards.removeAll()
+    }
+
+    // 1. Create the node cards (positions filled in once the layout is computed).
+    var keyToID: [String: UUID] = [:]
+    var layoutNodes: [BoardLayout.Node] = []
+    for spec in specs where keyToID[spec.key] == nil {
+      let size = Self.fittedTextSize(spec.text)
+      let card = CardState(text: spec.text, x: origin.x, y: origin.y,
+                           w: Double(size.width), h: Double(size.height), z: nextZ)
+      nextZ += 1
+      cards.append(card)
+      interactions[card.id] = CardInteraction(card)
+      keyToID[spec.key] = card.id
+      layoutNodes.append(BoardLayout.Node(id: card.id, size: size))
+    }
+
+    // 2. Lay out and apply positions before wiring edges, so bound arrows snap to final centers.
+    var config = BoardLayout.Config()
+    config.direction = direction
+    config.origin = origin
+    let edgesForLayout = edgeSpecs.compactMap { spec -> BoardLayout.Edge? in
+      guard let from = keyToID[spec.from], let to = keyToID[spec.to], from != to else { return nil }
+      return BoardLayout.Edge(from: from, to: to)
+    }
+    let positions = BoardLayout.layout(nodes: layoutNodes, edges: edgesForLayout, config: config)
+    for (id, point) in positions {
+      guard let i = cards.firstIndex(where: { $0.id == id }) else { continue }
+      cards[i].x = Double(point.x)
+      cards[i].y = Double(point.y)
+    }
+
+    // 3. Wire the labeled arrows.
+    for spec in edgeSpecs {
+      guard let from = keyToID[spec.from], let to = keyToID[spec.to], from != to else { continue }
+      _ = connectCards(from: from, to: to, reason: spec.reason)
+    }
+
+    // 4. Select the new diagram so a Fit frames exactly it.
+    selectedCardIDs = Set(keyToID.values)
+    primarySelectedCardID = keyToID.values.first
+    editingCardID = nil
+    return keyToID
+  }
+
+  /// Re-flow everything on the board into a clean layered layout, anchored near where it already
+  /// sits. Bound arrows/lines become the edges; freehand strokes are left untouched.
+  func relayout(direction: LayoutDirection = .down) {
+    let nodeCards = cards.filter { Self.isLayoutNode($0) }
+    guard nodeCards.count > 1 else { return }
+    let nodeIDs = Set(nodeCards.map(\.id))
+    let edges: [BoardLayout.Edge] = cards.compactMap { card in
+      guard card.elementKind == .arrow || card.elementKind == .line,
+            let from = card.startBindingID, let to = card.endBindingID,
+            nodeIDs.contains(from), nodeIDs.contains(to), from != to
+      else { return nil }
+      return BoardLayout.Edge(from: from, to: to)
+    }
+
+    registerUndo()
+    suppressUndo = true
+    defer { suppressUndo = false; refreshBoundArrows(); scheduleSave() }
+
+    var config = BoardLayout.Config()
+    config.direction = direction
+    config.origin = CGPoint(x: nodeCards.map(\.x).min() ?? 120, y: nodeCards.map(\.y).min() ?? 120)
+    let layoutNodes = nodeCards.map { BoardLayout.Node(id: $0.id, size: CGSize(width: $0.w, height: $0.h)) }
+    let positions = BoardLayout.layout(nodes: layoutNodes, edges: edges, config: config)
+    for (id, point) in positions {
+      guard let i = cards.firstIndex(where: { $0.id == id }) else { continue }
+      cards[i].x = Double(point.x)
+      cards[i].y = Double(point.y)
+    }
+  }
+
+  /// Insert a text card and let the board pick a non-overlapping spot — used when an agent adds a
+  /// one-off card without (or not caring about) coordinates.
+  @discardableResult
+  func insertTextAutoPlaced(_ text: String) -> UUID {
+    let size = Self.fittedTextSize(text)
+    return insertText(text, at: autoPlacePoint(for: size))
+  }
+
+  /// A clear board point below existing content for an auto-placed element.
+  func autoPlacePoint(for size: CGSize) -> CGPoint {
+    guard !cards.isEmpty else { return CGPoint(x: 120, y: 120) }
+    let maxY = cards.map { $0.y + $0.h }.max() ?? 80
+    let minX = cards.map(\.x).min() ?? 120
+    return CGPoint(x: minX, y: maxY + 48)
+  }
+
+  /// Origin for a freshly-built diagram: a clean margin on an empty board, otherwise below content.
+  private func diagramOrigin() -> CGPoint {
+    let meaningful = cards.filter { !($0.elementKind == .text && $0.isBlank) }
+    guard !meaningful.isEmpty else { return CGPoint(x: 140, y: 120) }
+    let maxY = meaningful.map { $0.y + $0.h }.max() ?? 80
+    let minX = meaningful.map(\.x).min() ?? 140
+    return CGPoint(x: minX, y: maxY + 72)
+  }
+
+  private static func isLayoutNode(_ card: CardState) -> Bool {
+    switch card.elementKind {
+    case .text, .rectangle, .ellipse, .diamond, .image: return true
+    case .line, .arrow, .freehand: return false
+    }
+  }
+
+  /// A comfortable card size for a diagram label: natural single-line width capped to a tidy
+  /// column, with the height fitted to the wrapped text — so short labels read as small pills and
+  /// long ones wrap instead of stretching the whole board.
+  static func fittedTextSize(_ text: String, maxWidth: CGFloat = 232) -> CGSize {
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.lineSpacing = Theme.Typography.bodyLineSpacing
+    let attributes: [NSAttributedString.Key: Any] = [.font: Theme.Typography.body, .paragraphStyle: paragraph]
+    let natural = ((text.isEmpty ? " " : text) as NSString).size(withAttributes: attributes).width
+    let contentWidth = min(max(natural, 64), maxWidth - 32)   // inside the 16pt horizontal padding
+    let width = ceil(contentWidth) + 32
+    return CGSize(width: width, height: fittedTextHeight(text, width: width))
   }
 
   /// Commit a moved/resized card frame (board space).

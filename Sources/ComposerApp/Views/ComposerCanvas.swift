@@ -366,6 +366,7 @@ struct ComposerCanvas: View {
       onFolder: { agent.chooseDirectory() },
       agentOpen: showAgent,
       onAgent: { showAgent.toggle() },
+      onTidy: { tidyBoard(in: innerSize) },
       onZoomOut: { zoom(0.8, anchoredAt: zoomAnchor) },
       onZoomIn: { zoom(1.25, anchoredAt: zoomAnchor) },
       onZoomReset: { withAnimation(Theme.Motion.accessory) { scale = 1 } },
@@ -526,6 +527,13 @@ struct ComposerCanvas: View {
     let s = clampZoom(min(avail.width / contentW, avail.height / contentH, 1))
     scale = s
     pan = CGSize(width: margin - CGFloat(minX) * s, height: margin - CGFloat(minY) * s)
+  }
+
+  /// Auto-arrange the whole board into a clean layered layout, then frame the result.
+  private func tidyBoard(in size: CGSize) {
+    board.deselectAll()
+    board.relayout()
+    withAnimation(Theme.Motion.accessory) { fitBoard(in: size) }
   }
 
   private func resetView() { scale = 1; pan = .zero }

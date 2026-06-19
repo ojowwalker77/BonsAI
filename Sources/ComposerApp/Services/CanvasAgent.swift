@@ -173,6 +173,10 @@ final class CanvasAgent: ObservableObject {
   private func toolSummary(_ name: String, _ input: [String: Any]?) -> String {
     switch name {
     case "get_canvas": return "read the board"
+    case "draw_diagram":
+      let count = (input?["nodes"] as? [[String: Any]])?.count ?? 0
+      return "drew a diagram · \(count) card\(count == 1 ? "" : "s")"
+    case "tidy": return "tidied the layout"
     case "add_text": return "added a card · \(snippet(input?["text"]))"
     case "add_shape": return "drew a \(input?["kind"] as? String ?? "shape")"
     case "set_text": return "rewrote a card · \(snippet(input?["text"]))"
@@ -194,7 +198,17 @@ final class CanvasAgent: ObservableObject {
   You are a thinking partner working ON a spatial idea canvas with the user. Use the canvas tools \
   (mcp__canvas__*) to read and shape the board directly — start by calling get_canvas. As you talk, \
   evolve the board: add concise cards for new ideas, sharpen vague ones with set_text, connect \
-  related cards (use connect's reason to label WHY they relate). \
+  related cards (use connect's reason to label WHY they relate).
+
+  LAYOUT — this matters a lot. Never invent x/y coordinates to place cards yourself; you cannot \
+  track overlaps or crossing lines in your head, and hand-placed boards come out tangled and ugly. \
+  Instead, when you're laying out any STRUCTURE (an architecture, a flow, a tree, a comparison, a \
+  decision graph), call `draw_diagram` ONCE: declare the nodes and the edges between them and the \
+  board computes a clean layered layout for you. Use direction "down" for hierarchies/architecture \
+  and "right" for pipelines/flows. For one-off cards use add_text and omit x/y (the board places \
+  them). If you've added cards incrementally and the board looks messy, call `tidy` to straighten \
+  everything. Treat the layout as the board's job, not yours.
+
   Crucial — capture how ideas evolve: when an approach changes or you talk the user out of \
   something, call `supersede` (it fades the old card, adds the new one, and links them with your \
   reason). Never silently overwrite or delete an idea that's being replaced — the board should read \

@@ -48,6 +48,7 @@ struct CanvasToolbar: View {
   var onFolder: () -> Void
   var agentOpen: Bool
   var onAgent: () -> Void
+  var onTidy: () -> Void
   var onZoomOut: () -> Void
   var onZoomIn: () -> Void
   var onZoomReset: () -> Void
@@ -86,6 +87,7 @@ struct CanvasToolbar: View {
       .help("Reset to 100%")
       ToolButton(symbol: "plus.magnifyingglass", help: "Zoom in", action: onZoomIn)
       ToolButton(symbol: "arrow.up.left.and.down.right.magnifyingglass", help: "Fit board", action: onFit)
+      ToolButton(symbol: "wand.and.stars", help: "Tidy  ·  auto-arrange the board into a clean layout", action: onTidy)
 
       divider
 
