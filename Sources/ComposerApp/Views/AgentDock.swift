@@ -31,16 +31,14 @@ struct AgentDock: View {
 
   private var header: some View {
     HStack(spacing: 8) {
-      Image(systemName: "sparkles").font(.body.weight(.semibold)).foregroundStyle(Color.accentColor)
+      AgentEngineIcon(size: 16)
       Text("Agent").font(.body.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-      if agent.isRunning {
-        ProgressView().controlSize(.small).scaleEffect(0.7)
-      }
+      if agent.isRunning { ProgressView().controlSize(.small).scaleEffect(0.65) }
       Spacer()
       iconButton("arrow.counterclockwise", help: "New conversation") { agent.reset(); draft = "" }
       iconButton("xmark", help: "Close  ⌘J", action: onClose)
     }
-    .padding(.horizontal, 14).frame(height: 46)
+    .padding(.horizontal, 14).frame(height: 48)
   }
 
   // MARK: Transcript
@@ -88,16 +86,21 @@ struct AgentDock: View {
         .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.accentColor.opacity(0.20)))
         .frame(maxWidth: .infinity, alignment: .trailing)
     case .assistant:
-      Text(message.text)
+      Text(Self.markdown(message.text))
         .font(.callout).foregroundStyle(Theme.Palette.body).textSelection(.enabled)
+        .lineSpacing(2.5)
+        .tint(Color.accentColor)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
     case .tool:
-      HStack(spacing: 6) {
-        Image(systemName: "square.on.square.dashed").font(.caption2)
+      HStack(spacing: 7) {
+        Image(systemName: "wand.and.sparkles").font(.system(size: 10))
         Text(message.text).font(.caption)
+        Spacer(minLength: 0)
       }
       .foregroundStyle(Theme.Palette.title)
+      .padding(.horizontal, 9).padding(.vertical, 5)
+      .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.045)))
       .frame(maxWidth: .infinity, alignment: .leading)
     case .error:
       Text(message.text)
@@ -126,28 +129,38 @@ struct AgentDock: View {
         .focused($inputFocused)
         .onSubmit(submit)
       if agent.isRunning {
-        iconButton("stop.fill", help: "Stop") { agent.stop() }
+        Button(action: agent.stop) {
+          Image(systemName: "stop.circle.fill").font(.title3).foregroundStyle(Theme.Palette.title)
+        }.buttonStyle(.plain).help("Stop")
       } else {
         Button(action: submit) {
           Image(systemName: "arrow.up.circle.fill")
             .font(.title3)
-            .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.Palette.title : Color.accentColor)
-        }
-        .buttonStyle(.plain)
-        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .foregroundStyle(canSend ? Color.accentColor : Theme.Palette.title.opacity(0.6))
+        }.buttonStyle(.plain).disabled(!canSend)
       }
     }
-    .padding(.horizontal, 12).padding(.vertical, 10)
-    .background(Rectangle().fill(Color.white.opacity(0.04)))
-    .overlay(alignment: .top) { Rectangle().fill(Theme.Palette.separator).frame(height: 1) }
+    .padding(.leading, 14).padding(.trailing, 10).padding(.vertical, 9)
+    .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.white.opacity(0.06)))
+    .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(Color.white.opacity(0.09), lineWidth: 1))
+    .padding(12)
     .onAppear { inputFocused = true }
   }
+
+  private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
   private func submit() {
     let text = draft
     draft = ""
     agent.send(text)
     inputFocused = true
+  }
+
+  /// Render inline markdown (**bold**, `code`, _italic_, links) while keeping newlines.
+  private static func markdown(_ text: String) -> AttributedString {
+    (try? AttributedString(
+      markdown: text,
+      options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
   }
 
   private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {

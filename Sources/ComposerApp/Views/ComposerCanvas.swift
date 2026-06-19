@@ -360,17 +360,12 @@ struct ComposerCanvas: View {
     CanvasToolbar(
       tool: $tool,
       zoomPercent: Int((effectiveScale * 100).rounded()),
-      canCompile: board.hasContent && !isWorking,
-      isCompiling: isWorking,
-      canCopy: board.hasContent,
       agentOpen: showAgent,
       onAgent: { showAgent.toggle() },
       onZoomOut: { zoom(0.8, anchoredAt: zoomAnchor) },
       onZoomIn: { zoom(1.25, anchoredAt: zoomAnchor) },
       onZoomReset: { withAnimation(Theme.Motion.accessory) { scale = 1 } },
-      onFit: { withAnimation(Theme.Motion.accessory) { fitBoard(in: innerSize) } },
-      onCompile: { runCompile() },
-      onCopy: { copyBoard() }
+      onFit: { withAnimation(Theme.Motion.accessory) { fitBoard(in: innerSize) } }
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .padding(.top, 12)

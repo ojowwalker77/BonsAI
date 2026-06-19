@@ -43,17 +43,12 @@ enum CanvasTool: Equatable {
 struct CanvasToolbar: View {
   @Binding var tool: CanvasTool
   let zoomPercent: Int
-  var canCompile: Bool
-  var isCompiling: Bool
-  var canCopy: Bool
   var agentOpen: Bool
   var onAgent: () -> Void
   var onZoomOut: () -> Void
   var onZoomIn: () -> Void
   var onZoomReset: () -> Void
   var onFit: () -> Void
-  var onCompile: () -> Void
-  var onCopy: () -> Void
 
   var body: some View {
     HStack(spacing: 5) {
@@ -91,19 +86,7 @@ struct CanvasToolbar: View {
 
       divider
 
-      if isCompiling {
-        ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 32, height: 30)
-      } else {
-        ToolButton(symbol: "wand.and.rays", help: "Compile to draft  ⌘R",
-                   disabled: !canCompile, action: onCompile)
-      }
-      ToolButton(symbol: "doc.on.doc", help: "Copy self-contained  ⇧⌘C",
-                 disabled: !canCopy, action: onCopy)
-
-      divider
-
-      ToolButton(symbol: "sparkles", help: "Chat with the agent on this board  ⌘J",
-                 active: agentOpen, action: onAgent)
+      AgentToolButton(active: agentOpen, action: onAgent)
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 5)
@@ -157,5 +140,29 @@ private struct ToolButton: View {
     if disabled { return AnyShapeStyle(Color.white.opacity(0.26)) }
     if active { return AnyShapeStyle(Color.accentColor) }
     return AnyShapeStyle(Color.white.opacity(hovering ? 0.95 : 0.62))
+  }
+}
+
+/// The agent toggle — shows the active engine's brand mark instead of a generic glyph.
+private struct AgentToolButton: View {
+  var active: Bool
+  var action: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button(action: action) {
+      AgentEngineIcon(size: 16)
+        .frame(width: 32, height: 30)
+        .opacity(active ? 1 : (hovering ? 0.95 : 0.78))
+        .background(
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(active ? Color.accentColor.opacity(0.22) : (hovering ? Color.white.opacity(0.12) : Color.clear))
+        )
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+    .help("Chat with the agent on this board  ⌘J")
+    .animation(.easeOut(duration: 0.12), value: hovering)
   }
 }
