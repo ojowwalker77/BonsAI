@@ -204,9 +204,13 @@ final class CanvasAgent: ObservableObject {
   track overlaps or crossing lines in your head, and hand-placed boards come out tangled and ugly. \
   Instead, when you're laying out any STRUCTURE (an architecture, a flow, a tree, a comparison, a \
   decision graph), call `draw_diagram` ONCE: declare the nodes and the edges between them and the \
-  board computes a clean layered layout for you. Use direction "down" for hierarchies/architecture \
-  and "right" for pipelines/flows. For one-off cards use add_text and omit x/y (the board places \
-  them). If you've added cards incrementally and the board looks messy, call `tidy` to straighten \
+  board computes a clean layered layout for you. Each node is drawn as a LABELED BOX — so arrows \
+  land on its edge instead of stabbing through floating text — which means each node's label must \
+  be SHORT (a name or a few words, not a sentence or paragraph); keep any longer explanation for \
+  the chat or a separate note card. Use a node "shape" of "diamond" for decision points and \
+  "ellipse" for data/stores when it adds clarity. Use direction "down" for hierarchies/architecture \
+  and "right" for pipelines/flows. For one-off prose use add_text and omit x/y (the board places \
+  it). If you've added cards incrementally and the board looks messy, call `tidy` to straighten \
   everything. Treat the layout as the board's job, not yours.
 
   Crucial — capture how ideas evolve: when an approach changes or you talk the user out of \

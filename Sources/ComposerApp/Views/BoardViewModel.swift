@@ -520,8 +520,9 @@ final class BoardViewModel: ObservableObject {
 
   // MARK: Structured layout (agent draws by declaring structure, not coordinates)
 
-  /// One declared diagram node: a stable `key` the caller invents (referenced by edges) and its text.
-  struct DiagramNodeSpec { let key: String; let text: String }
+  /// One declared diagram node: a stable `key` the caller invents (referenced by edges), its label
+  /// text, and the box shape to draw it as (rectangle by default — a labeled box arrows can land on).
+  struct DiagramNodeSpec { let key: String; let text: String; var shape: CanvasElementKind = .rectangle }
   /// A declared directed link by node key, optionally labeled with the "why".
   struct DiagramEdgeSpec { let from: String; let to: String; let reason: String }
 
@@ -544,12 +545,14 @@ final class BoardViewModel: ObservableObject {
       cards.removeAll()
     }
 
-    // 1. Create the node cards (positions filled in once the layout is computed).
+    // 1. Create the node cards as labeled boxes (positions filled in once the layout is computed).
+    //    A box gives every arrow a real boundary to terminate on, so connections read cleanly
+    //    instead of stabbing through floating text.
     var keyToID: [String: UUID] = [:]
     var layoutNodes: [BoardLayout.Node] = []
     for spec in specs where keyToID[spec.key] == nil {
-      let size = Self.fittedTextSize(spec.text)
-      let card = CardState(text: spec.text, x: origin.x, y: origin.y,
+      let size = Self.fittedShapeSize(spec.text, shape: spec.shape)
+      let card = CardState(kind: spec.shape, text: spec.text, x: origin.x, y: origin.y,
                            w: Double(size.width), h: Double(size.height), z: nextZ)
       nextZ += 1
       cards.append(card)
@@ -659,6 +662,41 @@ final class BoardViewModel: ObservableObject {
     let contentWidth = min(max(natural, 64), maxWidth - 32)   // inside the 16pt horizontal padding
     let width = ceil(contentWidth) + 32
     return CGSize(width: width, height: fittedTextHeight(text, width: width))
+  }
+
+  /// A box sized to hold a centered node label (the diagram-node font/padding), wrapping rather
+  /// than truncating. Ellipses/diamonds get extra room so the label fits inside the inscribed area.
+  static func fittedShapeSize(_ text: String, shape: CanvasElementKind = .rectangle, maxWidth: CGFloat = 216) -> CGSize {
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.alignment = .center
+    let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+                                                      .paragraphStyle: paragraph]
+    let ns = (text.isEmpty ? " " : text) as NSString
+    let natural = ns.size(withAttributes: attributes).width
+    let contentWidth = min(max(natural, 72), maxWidth - 24)   // 12pt horizontal padding each side
+    let measured = ns.boundingRect(with: NSSize(width: contentWidth, height: .greatestFiniteMagnitude),
+                                   options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height
+    var width = ceil(contentWidth) + 24
+    var height = max(ceil(measured) + 22, 54)
+    switch shape {
+    case .ellipse: width = ceil(width * 1.24); height = ceil(height * 1.35)
+    case .diamond: width = ceil(width * 1.5); height = ceil(height * 1.5)
+    default: break
+    }
+    return CGSize(width: width, height: height)
+  }
+
+  /// The point on `rect`'s edge along the line toward `target`, pushed out by `margin`. Used to land
+  /// a bound arrow on a node's boundary instead of its center.
+  static func boundaryPoint(of rect: CGRect, toward target: CGPoint, margin: CGFloat) -> CGPoint {
+    let c = CGPoint(x: rect.midX, y: rect.midY)
+    let dx = target.x - c.x, dy = target.y - c.y
+    guard dx != 0 || dy != 0 else { return c }
+    let tx = dx != 0 ? (rect.width / 2) / abs(dx) : .greatestFiniteMagnitude
+    let ty = dy != 0 ? (rect.height / 2) / abs(dy) : .greatestFiniteMagnitude
+    let t = Swift.min(tx, ty)
+    let len = hypot(dx, dy)
+    return CGPoint(x: c.x + dx * t + dx / len * margin, y: c.y + dy * t + dy / len * margin)
   }
 
   /// Commit a moved/resized card frame (board space).
@@ -951,8 +989,14 @@ final class BoardViewModel: ObservableObject {
   private func updateBoundArrowGeometry(at index: Int) {
     guard cards.indices.contains(index), cards[index].elementKind == .arrow else { return }
     let current = lineEndpoints(for: cards[index])
-    let start = cards[index].startBindingID.flatMap { card(id: $0).map(center(of:)) } ?? current.start
-    let end = cards[index].endBindingID.flatMap { card(id: $0).map(center(of:)) } ?? current.end
+    let startCard = cards[index].startBindingID.flatMap { card(id: $0) }
+    let endCard = cards[index].endBindingID.flatMap { card(id: $0) }
+    let rawStart = startCard.map(center(of:)) ?? current.start
+    let rawEnd = endCard.map(center(of:)) ?? current.end
+    // Land each bound endpoint on its node's boundary (aiming at the other end), with a small gap
+    // at the arrowhead — so the arrow touches the box edge instead of piercing the label.
+    let start = startCard.map { Self.boundaryPoint(of: $0.frame, toward: rawEnd, margin: 1) } ?? rawStart
+    let end = endCard.map { Self.boundaryPoint(of: $0.frame, toward: rawStart, margin: 7) } ?? rawEnd
     applyLineGeometry(to: index, start: start, end: end)
   }
 

@@ -373,10 +373,39 @@ private struct CanvasElementContent: View {
         }
       }
 
-      if card.elementKind != .text, !text.trimmed.isEmpty {
-        CanvasLabel(text: text.trimmed)
+      if !text.trimmed.isEmpty {
+        switch card.elementKind {
+        case .rectangle, .ellipse, .diamond:
+          // A diagram node: the label fills the box (the box is the boundary).
+          NodeLabel(text: text.trimmed)
+        case .arrow, .line:
+          // A connector label: a floating pill so it stays legible over the canvas.
+          CanvasLabel(text: text.trimmed)
+        default:
+          EmptyView()
+        }
       }
     }
+  }
+}
+
+/// The centered label inside a diagram-node box. No pill background — the surrounding shape is the
+/// container — and it wraps/scales to fit rather than truncating mid-word.
+private struct NodeLabel: View {
+  let text: String
+
+  var body: some View {
+    Text(text)
+      .font(.system(size: 14, weight: .semibold))
+      .multilineTextAlignment(.center)
+      .lineLimit(5)
+      .minimumScaleFactor(0.82)
+      .foregroundStyle(Color.white.opacity(0.95))
+      .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .allowsHitTesting(false)
   }
 }
 
@@ -480,9 +509,9 @@ private struct ShapeBox: View {
 
   var body: some View {
     BoxShape(kind: kind)
-      .fill(Color.black.opacity(0.10))
+      .fill(Color.black.opacity(0.22))
       .overlay(BoxShape(kind: kind).stroke(Color.white.opacity(0.72), lineWidth: 2))
-      .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+      .shadow(color: .black.opacity(0.22), radius: 10, y: 4)
       .padding(2)
   }
 }

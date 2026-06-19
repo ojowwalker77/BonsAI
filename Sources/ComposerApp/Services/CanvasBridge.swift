@@ -72,7 +72,10 @@ final class CanvasBridge {
       guard let rawNodes = op["nodes"] as? [[String: Any]] else { return fail("missing \"nodes\"") }
       let specs = rawNodes.compactMap { node -> BoardViewModel.DiagramNodeSpec? in
         guard let key = string(node["key"]) ?? string(node["id"]), let text = string(node["text"]) else { return nil }
-        return BoardViewModel.DiagramNodeSpec(key: key, text: text)
+        // Only box shapes are valid nodes; anything else falls back to a rectangle.
+        let shape = string(node["shape"]).flatMap(CanvasElementKind.init(rawValue:))
+          .flatMap { [.rectangle, .ellipse, .diamond].contains($0) ? $0 : nil } ?? .rectangle
+        return BoardViewModel.DiagramNodeSpec(key: key, text: text, shape: shape)
       }
       guard !specs.isEmpty else { return fail("no valid nodes (each needs a \"key\" and \"text\")") }
       let edgeSpecs = (op["edges"] as? [[String: Any]] ?? []).compactMap { edge -> BoardViewModel.DiagramEdgeSpec? in
