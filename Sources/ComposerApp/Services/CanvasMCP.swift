@@ -72,7 +72,7 @@ enum CanvasMCP {
   }
 
   private static let toolSpecs: [[String: Any]] = [
-    tool("get_canvas", "Read the entire board as a graph: nodes (cards/shapes with id, kind, text, x/y/w/h), edges (bound arrows/lines), and reading order. Positions are auto-managed — prefer draw_diagram/tidy over moving cards by hand.", [:], []),
+    tool("get_canvas", "Read the entire board as a graph: nodes (cards/shapes with id, kind, text, x/y/w/h, and whoWrote: 1 = the human wrote/edited it, 2 = you drew it, 0 = unknown), edges (bound arrows/lines), and reading order. Positions are auto-managed — prefer draw_diagram/tidy over moving cards by hand. Re-read before acting on a board you've touched before; nodes with whoWrote=1 are what the human added or changed.", [:], []),
     tool("draw_diagram",
          "PREFERRED for any structure (architecture, flow, tree, comparison): declare the nodes and how they connect in ONE call and the board lays them out cleanly — layered, evenly spaced, no overlaps, few crossings. Each node is drawn as a LABELED BOX so arrows land on its edge; keep each label a short title or phrase (not a paragraph). Do NOT invent x/y yourself; you can't track overlaps in your head and it comes out tangled. Returns a map of your node keys → created ids.",
          ["nodes": ["type": "array", "description": "The boxes to create.",

@@ -23,7 +23,8 @@ final class CanvasBridge {
         x: card.x, y: card.y, w: card.w, h: card.h, z: card.z,
         group: card.groupID?.uuidString,
         locked: card.locked,
-        archived: card.isArchived)
+        archived: card.isArchived,
+        whoWrote: card.author)
     }
     let edges = board.cards.compactMap { card -> CanvasGraph.Edge? in
       guard card.elementKind == .arrow || card.elementKind == .line,
@@ -41,6 +42,10 @@ final class CanvasBridge {
   /// Applies one `{ "op": …, … }` mutation; returns a JSON-serializable result.
   func apply(_ op: [String: Any]) -> [String: Any] {
     guard let board else { return fail("no active canvas") }
+    // Everything the agent applies is tagged as agent-authored (whoWrote = 2); direct user
+    // gestures stay human (1). This is how the agent later tells its own work from the user's.
+    board.nextAuthor = BoardViewModel.Author.agent
+    defer { board.nextAuthor = BoardViewModel.Author.human }
     guard let name = op["op"] as? String else { return fail("missing \"op\"") }
 
     switch name {

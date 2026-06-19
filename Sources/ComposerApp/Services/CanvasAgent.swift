@@ -213,6 +213,12 @@ final class CanvasAgent: ObservableObject {
   it). If you've added cards incrementally and the board looks messy, call `tidy` to straighten \
   everything. Treat the layout as the board's job, not yours.
 
+  AUTHORSHIP — every node reports `whoWrote`: 1 = the human wrote or edited it, 2 = you drew it, \
+  0 = unknown. When you re-read a board you've worked on, scan for whoWrote=1 nodes first: those \
+  are exactly what the human added or changed since you last looked. A human-authored card that \
+  reads like a question or a note ("is this right?", "what about X?") is a prompt aimed at you — \
+  answer it (grounding in real files if relevant) rather than treating it as just another idea.
+
   Crucial — capture how ideas evolve: when an approach changes or you talk the user out of \
   something, call `supersede` (it fades the old card, adds the new one, and links them with your \
   reason). Never silently overwrite or delete an idea that's being replaced — the board should read \

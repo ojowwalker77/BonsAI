@@ -44,6 +44,9 @@ struct CardState: Codable, Identifiable, Equatable {
   var imagePath: String?
   /// A superseded idea — kept on the board for lineage but visually faded (provenance).
   var archived: Bool?
+  /// Who last authored this card: 1 = human, 2 = agent. Nil on legacy cards (treated as unknown).
+  /// Lets an agent reading the board tell its own work from what the human wrote or changed.
+  var whoWrote: Int?
 
   init(id: UUID = UUID(),
        kind: CanvasElementKind = .text,
@@ -59,7 +62,8 @@ struct CardState: Codable, Identifiable, Equatable {
        groupID: UUID? = nil,
        isLocked: Bool = false,
        imagePath: String? = nil,
-       archived: Bool = false) {
+       archived: Bool = false,
+       whoWrote: Int? = nil) {
     self.id = id
     self.kind = kind == .text ? nil : kind
     self.text = text
@@ -75,11 +79,14 @@ struct CardState: Codable, Identifiable, Equatable {
     self.isLocked = isLocked ? true : nil
     self.imagePath = imagePath
     self.archived = archived ? true : nil
+    self.whoWrote = whoWrote
   }
 
   var elementKind: CanvasElementKind { kind ?? .text }
   var locked: Bool { isLocked ?? false }
   var isArchived: Bool { archived ?? false }
+  /// 1 = human, 2 = agent, 0 = unknown/legacy.
+  var author: Int { whoWrote ?? 0 }
 
   var frame: CGRect {
     get { CGRect(x: x, y: y, width: w, height: h) }

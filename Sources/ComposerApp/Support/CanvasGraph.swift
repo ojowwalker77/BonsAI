@@ -19,6 +19,9 @@ struct CanvasGraph: Codable {
     var locked: Bool
     /// A superseded idea, kept for lineage — faded on the board.
     var archived: Bool
+    /// Who last authored this node: 1 = human, 2 = agent, 0 = unknown. Lets the agent tell its own
+    /// work from what the human wrote or changed.
+    var whoWrote: Int
   }
 
   /// A directional relationship between two nodes, realized by a bound arrow/line node.

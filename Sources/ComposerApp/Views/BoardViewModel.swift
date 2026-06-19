@@ -98,6 +98,11 @@ final class BoardViewModel: ObservableObject {
   /// `insertText`/`connectCards` calls don't each push their own undo step — the batch registers
   /// exactly one at the top.
   private var suppressUndo = false
+  /// Who authored the next mutation: `Author.human` by default; the canvas bridge flips it to
+  /// `Author.agent` while applying an agent's edits, so every card records who last wrote it.
+  var nextAuthor = Author.human
+
+  enum Author { static let human = 1; static let agent = 2 }
   private let maxHistoryDepth = 80
   /// Undo/redo kept per board, so flipping to another board and back doesn't lose your history.
   private var undoCache: [PersistentIdentifier: (undo: [HistorySnapshot], redo: [HistorySnapshot])] = [:]
@@ -294,7 +299,8 @@ final class BoardViewModel: ObservableObject {
       y: Double(point.y - size.height / 2),
       w: Double(size.width),
       h: Double(size.height),
-      z: nextZ)
+      z: nextZ,
+      whoWrote: nextAuthor)
     nextZ += 1
     cards.append(card)
     interactions[card.id] = CardInteraction(card)
@@ -335,7 +341,8 @@ final class BoardViewModel: ObservableObject {
       w: Double(size.width),
       h: Double(size.height),
       z: nextZ,
-      points: initialPoints
+      points: initialPoints,
+      whoWrote: nextAuthor
     )
     nextZ += 1
     cards.append(card)
@@ -368,7 +375,7 @@ final class BoardViewModel: ObservableObject {
     let card = CardState(
       kind: kind, text: "",
       x: Double(frame.minX), y: Double(frame.minY), w: Double(frame.width), h: Double(frame.height),
-      z: nextZ, points: points)
+      z: nextZ, points: points, whoWrote: nextAuthor)
     nextZ += 1
     cards.append(card)
     if kind == .arrow { bindArrowIfPossible(card.id) }
@@ -399,7 +406,8 @@ final class BoardViewModel: ObservableObject {
       w: Double(normalized.width),
       h: Double(normalized.height),
       z: nextZ,
-      points: points
+      points: points,
+      whoWrote: nextAuthor
     )
     nextZ += 1
     cards.append(card)
@@ -423,7 +431,8 @@ final class BoardViewModel: ObservableObject {
       w: Double(size.width),
       h: Double(size.height),
       z: nextZ,
-      imagePath: path
+      imagePath: path,
+      whoWrote: nextAuthor
     )
     nextZ += 1
     cards.append(card)
@@ -444,7 +453,8 @@ final class BoardViewModel: ObservableObject {
     registerUndo()
     let width = CardState.textDefaultSize.width
     let card = CardState(text: text, x: Double(point.x), y: Double(point.y),
-                         w: Double(width), h: Double(Self.fittedTextHeight(text, width: width)), z: nextZ)
+                         w: Double(width), h: Double(Self.fittedTextHeight(text, width: width)), z: nextZ,
+                         whoWrote: nextAuthor)
     nextZ += 1
     cards.append(card)
     interactions[card.id] = CardInteraction(card)
@@ -459,6 +469,7 @@ final class BoardViewModel: ObservableObject {
     guard let i = cards.firstIndex(where: { $0.id == id }) else { return }
     registerUndo()
     cards[i].text = text
+    cards[i].whoWrote = nextAuthor
     let bundle = interaction(for: id)
     bundle.text = text
     bundle.cachePlainText(text)
@@ -488,7 +499,7 @@ final class BoardViewModel: ObservableObject {
     registerUndo()
     let card = CardState(kind: .arrow, text: reason,
                          x: 0, y: 0, w: Double(CardState.lineSize.width), h: Double(CardState.lineSize.height),
-                         z: nextZ, startBindingID: from, endBindingID: to)
+                         z: nextZ, startBindingID: from, endBindingID: to, whoWrote: nextAuthor)
     nextZ += 1
     cards.append(card)
     interactions[card.id] = CardInteraction(card)
@@ -553,7 +564,7 @@ final class BoardViewModel: ObservableObject {
     for spec in specs where keyToID[spec.key] == nil {
       let size = Self.fittedShapeSize(spec.text, shape: spec.shape)
       let card = CardState(kind: spec.shape, text: spec.text, x: origin.x, y: origin.y,
-                           w: Double(size.width), h: Double(size.height), z: nextZ)
+                           w: Double(size.width), h: Double(size.height), z: nextZ, whoWrote: nextAuthor)
       nextZ += 1
       cards.append(card)
       interactions[card.id] = CardInteraction(card)
@@ -829,6 +840,7 @@ final class BoardViewModel: ObservableObject {
       copy.x += Double(offset.width)
       copy.y += Double(offset.height)
       copy.z = nextZ
+      copy.whoWrote = nextAuthor
       copy.startBindingID = nil
       copy.endBindingID = nil
       nextZ += 1
@@ -1051,6 +1063,11 @@ final class BoardViewModel: ObservableObject {
 
   /// Called when a card's text changed (debounced persistence).
   func noteEdited(cardID: UUID, previousText: String) {
+    // A live keystroke edit means the human authored this card now — flip its tag (e.g. when they
+    // change a card the agent drew), so the agent can spot what changed on its next read.
+    if editingCardID == cardID, let i = cards.firstIndex(where: { $0.id == cardID }), cards[i].whoWrote != Author.human {
+      cards[i].whoWrote = Author.human
+    }
     if textEditBaselines[cardID] == nil {
       textEditBaselines[cardID] = previousText
       let before = snapshot().map { card -> CardState in
