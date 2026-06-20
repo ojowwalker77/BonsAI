@@ -6,6 +6,10 @@ APP_NAME="BonsAI"
 PRODUCT_NAME="Composer"   # SwiftPM executable output; the staged .app binary is renamed to APP_NAME
 BUNDLE_ID="dev.jow.BonsAI"
 MIN_SYSTEM_VERSION="26.0"
+# Sparkle EdDSA public key — the public half of the pair from Sparkle's `generate_keys`. Safe to commit
+# (only the private key is secret; it lives in the SPARKLE_PRIVATE_KEY CI secret). Fill this in after
+# running setup; until then the updater stays idle (no SUPublicEDKey is emitted, so no insecure feed).
+SPARKLE_PUBLIC_KEY=""
 BUILD_CONFIGURATION="release"
 
 # Normal launches should exercise the same optimized, compact binary users get. Keep an explicit
@@ -23,6 +27,17 @@ APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 
 cd "$ROOT_DIR"
+
+# App version: CI injects the exact tag via BONSAI_VERSION; local builds derive it from the most recent
+# git tag (falling back to a dev marker). Feeds CFBundleShortVersionString/CFBundleVersion below — the
+# values Sparkle compares to decide whether a published release is newer than what's installed.
+VERSION="${BONSAI_VERSION:-}"
+if [[ -z "$VERSION" ]]; then
+  VERSION="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+  VERSION="${VERSION#v}"
+fi
+VERSION="${VERSION:-0.0.0-dev}"
+
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
 swift build -c "$BUILD_CONFIGURATION"
@@ -42,6 +57,19 @@ chmod +x "$APP_BINARY"
 if [[ -d "$RESOURCE_BUNDLE" ]]; then
   cp -R "$RESOURCE_BUNDLE" "$APP_BUNDLE/"
 fi
+
+# Sparkle auto-updater. SwiftPM links Sparkle but does not bundle it into our hand-staged .app, so copy
+# Sparkle.framework into Contents/Frameworks and add the loader rpath that resolves @rpath/Sparkle...
+# at runtime. This is bundling only — it does not touch the board/dock layout CLAUDE.md guards. The
+# framework is signed (inside-out) by the release workflow; local unsigned builds run it as-is.
+SPARKLE_FRAMEWORK="$(find "$ROOT_DIR/.build" -path '*macos*/Sparkle.framework' -type d 2>/dev/null | head -1)"
+if [[ -z "$SPARKLE_FRAMEWORK" ]]; then
+  echo "error: Sparkle.framework not found under .build — run 'swift package resolve' first." >&2
+  exit 1
+fi
+mkdir -p "$APP_CONTENTS/Frameworks"
+ditto "$SPARKLE_FRAMEWORK" "$APP_CONTENTS/Frameworks/Sparkle.framework"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BINARY"
 
 # App icon: bake AppIcon.icns from a 1024×1024 source PNG if present (drop yours at icon/BonsAI.png).
 # macOS Dock icons sit inside an ~80% safe area with a transparent margin, so a full-bleed square
@@ -68,6 +96,14 @@ if [[ -f "$ICON_SRC" ]]; then
   /usr/bin/iconutil -c icns "$ICONSET" -o "$APP_CONTENTS/Resources/AppIcon.icns"
 fi
 
+# Only emit SUPublicEDKey when a key is configured. Sparkle treats an empty value as a misconfigured,
+# insecure feed; omitting the key instead leaves the updater cleanly idle on un-set-up local builds.
+SPARKLE_KEY_ENTRY=""
+if [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
+  SPARKLE_KEY_ENTRY="  <key>SUPublicEDKey</key>
+  <string>$SPARKLE_PUBLIC_KEY</string>"
+fi
+
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -79,6 +115,10 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$VERSION</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundlePackageType</key>
@@ -89,6 +129,13 @@ cat >"$INFO_PLIST" <<PLIST
   <true/>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>SUFeedURL</key>
+  <string>https://github.com/kiwi-init/BonsAI/releases/latest/download/appcast.xml</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
+  <key>SUScheduledCheckInterval</key>
+  <integer>86400</integer>
+$SPARKLE_KEY_ENTRY
 </dict>
 </plist>
 PLIST

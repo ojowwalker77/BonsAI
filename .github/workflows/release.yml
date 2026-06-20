@@ -1,7 +1,19 @@
 name: Release
 
-# Publish a built BonsAI.app whenever a v* tag is pushed. Can also be run
-# manually against an existing or new tag via the Actions tab.
+# Publish a signed, notarized BonsAI.app whenever a v* tag is pushed. Can also be run manually against
+# an existing or new tag via the Actions tab. Releases carry an EdDSA-signed appcast.xml so installed
+# copies auto-update via Sparkle.
+#
+# Required repository secrets (one-time owner setup — see docs/releasing.md):
+#   MACOS_CERTIFICATE       base64 of the Developer ID Application .p12
+#   MACOS_CERTIFICATE_PWD   password for that .p12
+#   KEYCHAIN_PASSWORD       any string; password for the ephemeral CI keychain
+#   NOTARY_KEY              base64 of the App Store Connect API key (.p8)
+#   NOTARY_KEY_ID           the API key's Key ID
+#   NOTARY_ISSUER_ID        the API key's Issuer ID
+#   SPARKLE_PRIVATE_KEY     the Sparkle EdDSA private key (from `generate_keys -x`)
+# The matching Sparkle EdDSA *public* key is committed in script/build_and_run.sh (SPARKLE_PUBLIC_KEY).
+
 on:
   push:
     tags: ['v*']
@@ -18,6 +30,9 @@ jobs:
   release:
     name: Build & publish
     runs-on: macos-26
+    env:
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,49 +41,127 @@ jobs:
       - name: Swift toolchain
         run: swift --version
 
-      # Reuses the same staging path developers run locally, minus the launch.
-      - name: Build & stage BonsAI.app
-        run: ./script/build_and_run.sh bundle
+      # Import the Developer ID Application cert into an ephemeral keychain and capture the identity
+      # hash for codesign. The keychain is temporary to this runner.
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE" ]; then
+            echo "::error::MACOS_CERTIFICATE secret is not set — see docs/releasing.md." >&2
+            exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/bonsai-signing.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed s/\"//g)
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application" | head -1 | grep -oE '[0-9A-F]{40}' || true)
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No 'Developer ID Application' identity found in the imported certificate." >&2
+            exit 1
+          fi
+          echo "SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/cert.p12"
 
+      # Reuses the same staging path developers run locally, minus the launch. BONSAI_VERSION pins the
+      # bundle's CFBundleShortVersionString/CFBundleVersion to the tag.
+      - name: Build & stage BonsAI.app
+        run: BONSAI_VERSION="${TAG#v}" ./script/build_and_run.sh bundle
+
+      # Sign inside-out (Sparkle's helpers first, then the framework, then the app) with the hardened
+      # runtime so the bundle is notarizable. Same-team signing keeps library validation happy.
+      - name: Code-sign (Sparkle inside-out, hardened runtime)
+        run: |
+          APP="dist/BonsAI.app"
+          FW="$APP/Contents/Frameworks/Sparkle.framework"
+          sign() { codesign --force --options runtime --timestamp --keychain "$SIGNING_KEYCHAIN" --sign "$SIGNING_IDENTITY" "$1"; }
+          sign "$FW/Versions/B/XPCServices/Downloader.xpc"
+          sign "$FW/Versions/B/XPCServices/Installer.xpc"
+          sign "$FW/Versions/B/Autoupdate"
+          sign "$FW/Versions/B/Updater.app"
+          sign "$FW"
+          sign "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Notarize & staple
+        env:
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          echo "$NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --keepParent "dist/BonsAI.app" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --wait
+          xcrun stapler staple "dist/BonsAI.app"
+          spctl -a -vvv --type execute "dist/BonsAI.app"
+          rm -f "$RUNNER_TEMP/notary.p8"
+
+      # Package the signed, stapled app — this zip is what users download AND what Sparkle installs.
       - name: Package the app bundle
         run: |
           ditto -c -k --sequesterRsrc --keepParent dist/BonsAI.app dist/BonsAI.app.zip
           shasum -a 256 dist/BonsAI.app.zip | tee dist/BonsAI.app.zip.sha256
 
       - name: Assemble release notes
-        env:
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           version="${TAG#v}"
-          # Lift the matching section out of the changelog (everything between this
-          # version's heading and the next "## " heading), trimming leading blanks.
+          # Lift the matching section out of the changelog (everything between this version's heading
+          # and the next "## " heading), trimming leading blanks.
           awk -v v="$version" '
             index($0, "## [" v "]") == 1 { grab = 1; next }
             grab && index($0, "## ") == 1 { exit }
             grab { print }
           ' CHANGELOG.md | sed -e '/./,$!d' > dist/RELEASE_NOTES.md
           if ! grep -q '[^[:space:]]' dist/RELEASE_NOTES.md; then
-            cat > dist/RELEASE_NOTES.md <<EOF
-          Unsigned macOS build of **BonsAI** ($TAG).
-
-          This build is not notarized. On first launch, right-click the app and choose **Open**, or clear the quarantine flag:
-
-          \`\`\`
-          xattr -dr com.apple.quarantine /Applications/BonsAI.app
-          \`\`\`
-
-          See the [README](https://github.com/$REPO/blob/main/README.md) for details.
-          EOF
+            echo "Signed, notarized macOS build of **BonsAI** ($TAG)." > dist/RELEASE_NOTES.md
           fi
+
+      # Build the EdDSA-signed appcast Sparkle reads. sign_update emits the ready-to-embed
+      # `sparkle:edSignature="…" length="…"` attributes for the enclosure.
+      - name: Generate appcast.xml
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          version="${TAG#v}"
+          SIGN_UPDATE=$(find .build/artifacts -name sign_update -path '*/bin/*' | head -1)
+          if [ -z "$SIGN_UPDATE" ]; then echo "::error::sign_update not found in .build/artifacts" >&2; exit 1; fi
+          SIGN_ATTRS=$("$SIGN_UPDATE" -s "$SPARKLE_PRIVATE_KEY" dist/BonsAI.app.zip)
+          PUBDATE=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
+          NOTES=$(cat dist/RELEASE_NOTES.md)
+          cat > dist/appcast.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+          <channel>
+          <title>BonsAI</title>
+          <link>https://github.com/$REPO/releases/latest/download/appcast.xml</link>
+          <item>
+          <title>BonsAI $version</title>
+          <pubDate>$PUBDATE</pubDate>
+          <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+          <description><![CDATA[
+          $NOTES
+          ]]></description>
+          <enclosure url="https://github.com/$REPO/releases/download/$TAG/BonsAI.app.zip" sparkle:version="$version" sparkle:shortVersionString="$version" $SIGN_ATTRS type="application/octet-stream" />
+          </item>
+          </channel>
+          </rss>
+          XML
+          echo "--- appcast.xml ---"
+          cat dist/appcast.xml
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          assets=(dist/BonsAI.app.zip dist/BonsAI.app.zip.sha256)
+          assets=(dist/BonsAI.app.zip dist/BonsAI.app.zip.sha256 dist/appcast.xml)
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$REPO" --clobber "${assets[@]}"
           else

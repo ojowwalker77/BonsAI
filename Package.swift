@@ -10,9 +10,16 @@ let package = Package(
   products: [
     .executable(name: "Composer", targets: ["ComposerApp"])
   ],
+  dependencies: [
+    // Sparkle drives the in-app auto-update (periodic check → download → install → relaunch). It is
+    // bundled into the hand-staged .app by script/build_and_run.sh, which copies Sparkle.framework
+    // into Contents/Frameworks and adds the loader rpath. The only external dependency.
+    .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
+  ],
   targets: [
     .executableTarget(
       name: "ComposerApp",
+      dependencies: [.product(name: "Sparkle", package: "Sparkle")],
       path: "Sources/ComposerApp",
       resources: [.process("Resources")],
       // Tools-version 6 defaults to the Swift 6 language mode (strict

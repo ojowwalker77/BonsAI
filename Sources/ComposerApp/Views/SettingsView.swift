@@ -111,6 +111,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
   case appearance
   case connectors
   case shortcuts
+  case about
 
   var id: String { rawValue }
   var title: String {
@@ -119,6 +120,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
     case .appearance: "Appearance"
     case .connectors: "Connectors"
     case .shortcuts: "Shortcuts"
+    case .about: "About"
     }
   }
   var symbol: String {
@@ -127,6 +129,7 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
     case .appearance: "circle.lefthalf.filled"
     case .connectors: "at"
     case .shortcuts: "command"
+    case .about: "info.circle"
     }
   }
 }
@@ -165,6 +168,7 @@ private struct SettingsContent: View {
     case .appearance: appearancePage
     case .connectors: connectorsPage
     case .shortcuts: shortcutsPage
+    case .about: aboutPage
     }
   }
 
@@ -522,6 +526,60 @@ private struct SettingsContent: View {
           .frame(minHeight: 46)
           .settingsCard()
         }
+      }
+    }
+  }
+
+  // MARK: About
+
+  private var aboutPage: some View {
+    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+    return VStack(alignment: .leading, spacing: 16) {
+      pageHeader("Updates",
+                 "BonsAI checks GitHub for new releases automatically, then downloads and installs them in place.")
+
+      VStack(spacing: 8) {
+        // Identity + manual check — the version readout in the mono "instrument" voice the rails use.
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("BonsAI").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+            Text("Version \(version)")
+              .font(.system(size: 10.5).monospaced())
+              .foregroundStyle(Theme.Palette.menuDesc)
+          }
+          Spacer(minLength: 8)
+          Button(action: { UpdaterController.shared.checkForUpdates() }) {
+            Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+              .padding(.horizontal, 11)
+              .frame(height: 28)
+          }
+          .buttonStyle(SettingsPillButtonStyle())
+          .help("Check GitHub for a newer BonsAI now")
+        }
+        .padding(.horizontal, 13)
+        .frame(minHeight: 56)
+        .settingsCard()
+
+        // Automatic-check toggle, bound straight to Sparkle's scheduled-update preference.
+        HStack(spacing: 10) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Check automatically").font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
+            Text("Look for updates daily in the background")
+              .font(.caption2).foregroundStyle(Theme.Palette.menuDesc)
+          }
+          Spacer(minLength: 8)
+          Toggle("", isOn: Binding(
+            get: { UpdaterController.shared.automaticallyChecksForUpdates },
+            set: { UpdaterController.shared.automaticallyChecksForUpdates = $0 }))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 13)
+        .frame(minHeight: 52)
+        .settingsCard()
       }
     }
   }

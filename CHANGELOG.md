@@ -11,7 +11,14 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-20
+
 ### Added
+- **In-app auto-update (Sparkle)** — BonsAI checks GitHub for new releases on launch
+  and once a day, then downloads and installs them in place. **Check for Updates…**
+  is in the app menu and **Settings → About** (with a toggle for automatic checks).
+  Releases are now **Developer ID-signed and notarized** and ship an EdDSA-signed
+  `appcast.xml`, so updates install without the old quarantine workaround.
 - **App connectors** — `@figma`, `@linear`, `@notion`, `@sentry`, and `@xcode`:
   resolve a reference and drop a live chip into a prompt. Personal tokens are
   stored in the Keychain.
