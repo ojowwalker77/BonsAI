@@ -43,6 +43,20 @@ struct HeadlessPromptService {
     return try await run(prompt: prompt, engine: engine)
   }
 
+  /// Describe the WHOLE board — text cards, shapes, diagrams, and how they connect — as one
+  /// self-contained, paste-ready brief. `state` is the board graph JSON (the same snapshot the
+  /// canvas MCP `get_canvas` exposes); unlike `compileBoard` (which merges card prose) this reads
+  /// the full graph, so the description covers everything the board holds.
+  func describeBoard(state: String, engine: HeadlessEngine) async throws -> String {
+    let prompt = """
+    \(BoardDescribe.instruction)
+
+    ===== BOARD STATE (JSON graph: nodes, edges, reading order) =====
+    \(state)
+    """
+    return try await run(prompt: prompt, engine: engine)
+  }
+
   private func run(prompt: String, engine: HeadlessEngine) async throws -> String {
     guard let executable = CommandLineToolLocator.executableURL(for: engine) else {
       throw HeadlessPromptError.failed("\(engine.title) CLI is not installed. Check Settings to install or re-detect it.")

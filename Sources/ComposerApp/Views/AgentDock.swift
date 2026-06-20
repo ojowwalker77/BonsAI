@@ -123,15 +123,18 @@ struct AgentDock: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
     case .tool:
+      // One compact line per tool call: the summary never wraps — it truncates with an ellipsis,
+      // and the full text is available on hover.
       HStack(spacing: 7) {
         Image(systemName: "wand.and.sparkles").font(.system(size: 10))
-        Text(message.text).font(.caption)
+        Text(message.text).font(.caption).lineLimit(1).truncationMode(.tail)
         Spacer(minLength: 0)
       }
       .foregroundStyle(Theme.Palette.title)
       .padding(.horizontal, 9).padding(.vertical, 5)
       .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.045)))
       .frame(maxWidth: .infinity, alignment: .leading)
+      .help(message.text)
     case .error:
       Text(message.text)
         .font(.caption).foregroundStyle(.orange)

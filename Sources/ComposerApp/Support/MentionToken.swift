@@ -130,8 +130,12 @@ extension NSAttributedString {
         out += "[image: \((path as NSString).lastPathComponent)]"
         index = range.location + range.length
       } else {
-        out += ns.substring(with: NSRange(location: index, length: 1))
-        index += 1
+        // Advance by a whole composed-character sequence, not a single UTF-16 unit: emoji and
+        // other non-BMP scalars are surrogate pairs (and ZWJ/skin-tone/flag emoji span several),
+        // so a length-1 slice severs them and they corrupt to U+FFFD (the tofu glyph).
+        let charRange = ns.rangeOfComposedCharacterSequence(at: index)
+        out += ns.substring(with: charRange)
+        index = charRange.location + charRange.length
       }
     }
     return out

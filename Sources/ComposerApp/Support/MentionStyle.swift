@@ -126,6 +126,10 @@ final class MentionStyleCache {
         let image = githubOctocatImage()
         images[item.id] = image
         colors[item.id] = dominantColor(of: image)   // white glyph → legible light neutral
+      } else if item.id == "@figma" {
+        // Official multi-color Figma mark instead of a fetched favicon.
+        images[item.id] = figmaLogoImage()
+        colors[item.id] = figmaColor(0xA259FF)        // brand purple for the chip tint
       } else if item.id == "@finder", let image = localAppIcon(bundleID: "com.apple.finder", fallbackPath: "/System/Library/CoreServices/Finder.app") {
         images[item.id] = image
         colors[item.id] = dominantColor(of: image)
@@ -328,6 +332,45 @@ func githubOctocatImage(size: CGFloat = 64) -> NSImage {
     path.windingRule = .evenOdd
     NSColor.white.setFill()
     path.fill()
+    return true
+  }
+}
+
+// MARK: - Figma logo (vector)
+
+/// The official Figma mark — five colored tiles in a 54×80 (portrait) viewBox. Like the Octocat we
+/// draw it from vector paths rather than NSImage's SVG rep, which renders blank in the offscreen
+/// bitmap contexts color extraction and chip sizing rely on. Each tile keeps its brand color.
+private let figmaLogoTiles: [(data: String, fill: NSColor)] = [
+  ("M13.3333 80.0002C20.6933 80.0002 26.6667 74.0268 26.6667 66.6668V53.3335H13.3333C5.97333 53.3335 0 59.3068 0 66.6668C0 74.0268 5.97333 80.0002 13.3333 80.0002Z", figmaColor(0x0ACF83)),
+  ("M0 39.9998C0 32.6398 5.97333 26.6665 13.3333 26.6665H26.6667V53.3332H13.3333C5.97333 53.3332 0 47.3598 0 39.9998Z", figmaColor(0xA259FF)),
+  ("M0 13.3333C0 5.97333 5.97333 0 13.3333 0H26.6667V26.6667H13.3333C5.97333 26.6667 0 20.6933 0 13.3333Z", figmaColor(0xF24E1E)),
+  ("M26.6667 0H40.0001C47.3601 0 53.3334 5.97333 53.3334 13.3333C53.3334 20.6933 47.3601 26.6667 40.0001 26.6667H26.6667V0Z", figmaColor(0xFF7262)),
+  ("M53.3334 39.9998C53.3334 47.3598 47.3601 53.3332 40.0001 53.3332C32.6401 53.3332 26.6667 47.3598 26.6667 39.9998C26.6667 32.6398 32.6401 26.6665 40.0001 26.6665C47.3601 26.6665 53.3334 32.6398 53.3334 39.9998Z", figmaColor(0x1ABCFE)),
+]
+
+private func figmaColor(_ hex: UInt32) -> NSColor {
+  NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+          green: CGFloat((hex >> 8) & 0xFF) / 255,
+          blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+}
+
+/// The Figma mark, drawn from its vector tiles so it rasterizes crisply at any size. The portrait
+/// artwork is fit by height and centered in the square icon so it never distorts.
+func figmaLogoImage(size: CGFloat = 64) -> NSImage {
+  NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+    let viewW: CGFloat = 54, viewH: CGFloat = 80
+    let scale = rect.height / viewH
+    let xOffset = (rect.width - viewW * scale) / 2
+    for tile in figmaLogoTiles {
+      let path = parseSVGPath(tile.data, box: viewH)
+      let scaleT = NSAffineTransform(); scaleT.scale(by: scale)
+      path.transform(using: scaleT as AffineTransform)
+      let moveT = NSAffineTransform(); moveT.translateX(by: xOffset, yBy: 0)
+      path.transform(using: moveT as AffineTransform)
+      tile.fill.setFill()
+      path.fill()
+    }
     return true
   }
 }

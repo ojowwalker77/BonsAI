@@ -39,12 +39,14 @@ enum CanvasTool: Equatable {
 
 /// The floating top tool cluster — the canvas's analog of the left `Sidebar`, using the same
 /// `railSurface()` recipe so it reads as a sibling rail floating above the card. Holds the
-/// canvas tools + zoom + Tidy. (The agent and its grounding folder live on the left `Sidebar`,
-/// grouped with the other board-session actions.)
+/// canvas tools + zoom + the board Copy. (The agent and its grounding folder live on the left
+/// `Sidebar`, grouped with the other board-session actions.)
 struct CanvasToolbar: View {
   @Binding var tool: CanvasTool
   let zoomPercent: Int
-  var onTidy: () -> Void
+  var onCopy: () -> Void
+  /// True while the Copy action's `claude -p` describe is in flight — the button shows a spinner.
+  var isCopying: Bool
   var onZoomOut: () -> Void
   var onZoomIn: () -> Void
   var onZoomReset: () -> Void
@@ -83,7 +85,9 @@ struct CanvasToolbar: View {
       .help("Reset to 100%")
       ToolButton(symbol: "plus.magnifyingglass", help: "Zoom in", action: onZoomIn)
       ToolButton(symbol: "arrow.up.left.and.down.right.magnifyingglass", help: "Fit board", action: onFit)
-      ToolButton(symbol: "wand.and.stars", help: "Tidy  ·  auto-arrange the board into a clean layout", action: onTidy)
+      ToolButton(symbol: "doc.on.doc",
+                 help: "Copy board  ·  Claude reads the whole board and writes a self-contained description",
+                 busy: isCopying, action: onCopy)
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 5)
@@ -107,6 +111,9 @@ private struct ToolButton: View {
   let help: String
   var active = false
   var disabled = false
+  /// While true the glyph is swapped for a spinner and the button is inert — for actions that
+  /// run a `claude -p` call (e.g. board Copy).
+  var busy = false
   /// The ⌘-number that activates this tool, shown as a small corner badge.
   var shortcut: Int? = nil
   var action: () -> Void
@@ -114,28 +121,36 @@ private struct ToolButton: View {
 
   var body: some View {
     Button(action: action) {
-      Image(systemName: symbol)
-        .font(.system(size: ToolMetrics.icon, weight: .medium))
-        .foregroundStyle(foreground)
-        .frame(width: ToolMetrics.side, height: ToolMetrics.side)
-        // No blue fill for the active state — the accent-tinted glyph is the signal; the only
-        // background is a neutral hover wash.
-        .background(
-          RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(hovering && !disabled ? Color.white.opacity(0.12) : Color.clear)
-        )
-        .overlay(alignment: .bottomTrailing) {
-          if let shortcut {
-            Text("\(shortcut)")
-              .font(.system(size: 8, weight: .bold))
-              .foregroundStyle(active ? Color.accentColor : Color.white.opacity(hovering ? 0.6 : 0.34))
-              .padding(.trailing, 3).padding(.bottom, 2)
-          }
+      Group {
+        if busy {
+          ProgressView()
+            .controlSize(.small)
+            .tint(Color.white.opacity(0.9))
+        } else {
+          Image(systemName: symbol)
+            .font(.system(size: ToolMetrics.icon, weight: .medium))
+            .foregroundStyle(foreground)
         }
-        .contentShape(Rectangle())
+      }
+      .frame(width: ToolMetrics.side, height: ToolMetrics.side)
+      // No blue fill for the active state — the accent-tinted glyph is the signal; the only
+      // background is a neutral hover wash.
+      .background(
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .fill(hovering && !disabled && !busy ? Color.white.opacity(0.12) : Color.clear)
+      )
+      .overlay(alignment: .bottomTrailing) {
+        if let shortcut, !busy {
+          Text("\(shortcut)")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(active ? Color.accentColor : Color.white.opacity(hovering ? 0.6 : 0.34))
+            .padding(.trailing, 3).padding(.bottom, 2)
+        }
+      }
+      .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .disabled(disabled)
+    .disabled(disabled || busy)
     .onHover { hovering = $0 }
     .help(help)
     .animation(.easeOut(duration: 0.12), value: hovering)

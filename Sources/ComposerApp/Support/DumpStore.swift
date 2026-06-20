@@ -76,6 +76,7 @@ final class DumpStore: ObservableObject {
       container = try! ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     }
     migrateLegacyNoteIfNeeded()
+    seedWelcomeBoardIfFirstRun()
     reload()
     ensureCurrent()
   }
@@ -218,6 +219,24 @@ final class DumpStore: ObservableObject {
   private func reload() {
     let descriptor = FetchDescriptor<Dump>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
     dumps = (try? context.fetch(descriptor)) ?? []
+  }
+
+  /// Seed the bundled welcome board the first time the app runs with an empty store, so new users
+  /// land on it. Guarded by a flag so deleting it never brings it back, and so an existing user
+  /// (who already has boards, or a migrated legacy note) never has it injected on a later launch.
+  private func seedWelcomeBoardIfFirstRun() {
+    let seededKey = "composer.didSeedWelcomeBoard"
+    guard !UserDefaults.standard.bool(forKey: seededKey) else { return }
+    let existing = (try? context.fetchCount(FetchDescriptor<Dump>())) ?? 0
+    guard existing == 0, let cards = WelcomeBoard.seedCards() else {
+      // Returning user (or unreadable resource): mark seeded so we never inject it later.
+      if existing > 0 { UserDefaults.standard.set(true, forKey: seededKey) }
+      return
+    }
+    let data = try? JSONEncoder().encode(cards)
+    context.insert(Dump(text: Self.titleMirror(for: cards), cardsData: data))
+    try? context.save()
+    UserDefaults.standard.set(true, forKey: seededKey)
   }
 
   private func migrateLegacyNoteIfNeeded() {

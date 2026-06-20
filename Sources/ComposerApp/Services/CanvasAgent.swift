@@ -188,8 +188,11 @@ final class CanvasAgent: ObservableObject {
     }
   }
   private func snippet(_ value: Any?) -> String {
-    let s = (value as? String) ?? ""
-    return s.count > 44 ? String(s.prefix(44)) + "…" : s
+    // Collapse whitespace (including newlines) so a card's multi-line text stays on one
+    // transcript line; the bubble itself also clamps to a single line.
+    let collapsed = ((value as? String) ?? "")
+      .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    return collapsed.count > 44 ? String(collapsed.prefix(44)) + "…" : collapsed
   }
 
   // MARK: Environment

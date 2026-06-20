@@ -36,8 +36,10 @@ enum Theme {
     /// here instead of as point constants: opening the dock must redistribute the *actual* window
     /// width, whether Composer is on a compact laptop display or a wide external screen.
     static func railGutter(in windowWidth: CGFloat) -> CGFloat {
-      // This owns the rail itself *and* its breathing room before the board card begins.
-      (max(windowWidth, 0) * 0.090).rounded()
+      // This owns the rail itself plus a small gap before the board card begins. Kept tight
+      // (6%) so the rail reads as attached to the board rather than marooned at the screen edge;
+      // it's the floor before the fixed-width rail starts crowding the card.
+      (max(windowWidth, 0) * 0.060).rounded()
     }
     static func railInset(in windowWidth: CGFloat) -> CGFloat {
       (max(windowWidth, 0) * 0.014).rounded()
