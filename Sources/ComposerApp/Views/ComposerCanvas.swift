@@ -479,7 +479,8 @@ struct ComposerCanvas: View {
 
   // MARK: Zoom helpers
 
-  private func clampZoom(_ value: CGFloat) -> CGFloat { min(max(value, 0.35), 1) }
+  /// Board zoom is clamped to 35%–200% (Fit applies its own ≤100% cap so it never enlarges).
+  private func clampZoom(_ value: CGFloat) -> CGFloat { min(max(value, 0.35), 2) }
 
   private var viewportCenter: CGPoint {
     CGPoint(x: lastViewportSize.width / 2, y: lastViewportSize.height / 2)
