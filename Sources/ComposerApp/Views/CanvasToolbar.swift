@@ -39,15 +39,11 @@ enum CanvasTool: Equatable {
 
 /// The floating top tool cluster — the canvas's analog of the left `Sidebar`, using the same
 /// `railSurface()` recipe so it reads as a sibling rail floating above the card. Holds the
-/// canvas tools + zoom + the board-level Compile and Copy.
+/// canvas tools + zoom + Tidy. (The agent and its grounding folder live on the left `Sidebar`,
+/// grouped with the other board-session actions.)
 struct CanvasToolbar: View {
   @Binding var tool: CanvasTool
   let zoomPercent: Int
-  /// The grounding folder's display name, or nil when the agent is canvas-only.
-  var groundedFolder: String?
-  var onFolder: () -> Void
-  var agentOpen: Bool
-  var onAgent: () -> Void
   var onTidy: () -> Void
   var onZoomOut: () -> Void
   var onZoomIn: () -> Void
@@ -88,11 +84,6 @@ struct CanvasToolbar: View {
       ToolButton(symbol: "plus.magnifyingglass", help: "Zoom in", action: onZoomIn)
       ToolButton(symbol: "arrow.up.left.and.down.right.magnifyingglass", help: "Fit board", action: onFit)
       ToolButton(symbol: "wand.and.stars", help: "Tidy  ·  auto-arrange the board into a clean layout", action: onTidy)
-
-      divider
-
-      FolderToolButton(folder: groundedFolder, action: onFolder)
-      AgentToolButton(active: agentOpen, action: onAgent)
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 5)
@@ -154,79 +145,5 @@ private struct ToolButton: View {
     if disabled { return AnyShapeStyle(Color.white.opacity(0.26)) }
     if active { return AnyShapeStyle(Color.accentColor) }
     return AnyShapeStyle(Color.white.opacity(hovering ? 0.95 : 0.62))
-  }
-}
-
-/// The grounding control: a plain folder glyph when canvas-only, or — once grounded — an
-/// accent-tinted folder that expands to show the directory name, so the agent's context is visible
-/// at a glance.
-private struct FolderToolButton: View {
-  /// The grounded directory's display name, or nil when canvas-only.
-  let folder: String?
-  var action: () -> Void
-  @State private var hovering = false
-
-  /// Keep the pill compact: show at most 8 characters, then an ellipsis.
-  static func trimmed(_ name: String) -> String {
-    name.count > 8 ? String(name.prefix(8)) + "\u{2026}" : name
-  }
-
-  var body: some View {
-    Button(action: action) {
-      Group {
-        if let folder {
-          HStack(spacing: 6) {
-            Image(systemName: "folder.fill").font(.system(size: 14, weight: .medium))
-            Text(Self.trimmed(folder))
-              .font(.system(size: 12.5, weight: .medium))
-              .lineLimit(1)
-              .fixedSize()
-          }
-          .foregroundStyle(Color.white.opacity(hovering ? 0.98 : 0.82))
-          .padding(.horizontal, 10)
-          .frame(height: ToolMetrics.side)
-        } else {
-          Image(systemName: "folder.badge.plus")
-            .font(.system(size: ToolMetrics.icon, weight: .medium))
-            .foregroundStyle(Color.white.opacity(hovering ? 0.95 : 0.62))
-            .frame(width: ToolMetrics.side, height: ToolMetrics.side)
-        }
-      }
-      .background(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(hovering ? Color.white.opacity(0.12) : Color.clear)
-      )
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .onHover { hovering = $0 }
-    .help(folder.map { "Agent grounded in \($0)  ·  click to change" } ?? "Ground the agent in a folder it can read")
-    .animation(.easeOut(duration: 0.12), value: hovering)
-    .animation(Theme.Motion.accessory, value: folder)
-  }
-}
-
-/// The agent toggle — shows the active engine's brand mark. Just the brand icon (no active ring or
-/// fill); the open/closed state reads from the dock itself.
-private struct AgentToolButton: View {
-  var active: Bool
-  var action: () -> Void
-  @State private var hovering = false
-
-  var body: some View {
-    Button(action: action) {
-      AgentEngineIcon(size: 18)
-        .frame(width: ToolMetrics.side, height: ToolMetrics.side)
-        .opacity(active ? 1 : (hovering ? 0.95 : 0.78))
-        .background(
-          RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(hovering ? Color.white.opacity(0.12) : Color.clear)
-        )
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .onHover { hovering = $0 }
-    .help("Chat with the agent on this board  ⌘J")
-    .animation(.easeOut(duration: 0.12), value: hovering)
   }
 }

@@ -384,11 +384,15 @@ struct ComposerCanvas: View {
   private func sidebar(in windowSize: CGSize) -> some View {
     Sidebar(
       store: store,
+      groundedFolder: groundingPath.isEmpty ? nil : URL(fileURLWithPath: groundingPath).lastPathComponent,
+      agentOpen: showAgent,
       onNew: { newBoard() },
       onHistory: {
         store.isHistoryOpen.toggle()
         if store.isHistoryOpen { closeAuxiliaryPanel() }
       },
+      onAgent: { toggleAgent() },
+      onFolder: { agent.chooseDirectory() },
       onSettings: { openSettings() }
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -404,10 +408,6 @@ struct ComposerCanvas: View {
     CanvasToolbar(
       tool: $tool,
       zoomPercent: Int((effectiveScale * 100).rounded()),
-      groundedFolder: groundingPath.isEmpty ? nil : URL(fileURLWithPath: groundingPath).lastPathComponent,
-      onFolder: { agent.chooseDirectory() },
-      agentOpen: showAgent,
-      onAgent: { toggleAgent() },
       onTidy: { tidyBoard(in: innerSize) },
       onZoomOut: { zoom(0.8, anchoredAt: zoomAnchor) },
       onZoomIn: { zoom(1.25, anchoredAt: zoomAnchor) },
