@@ -40,7 +40,7 @@ enum CommandLineToolLocator {
     let home = NSHomeDirectory()
     let preferredDirectories = [
       "\(home)/.local/bin", "\(home)/.npm-global/bin", "\(home)/.bun/bin",
-      "\(home)/.cargo/bin", "\(home)/.codex/bin", "\(home)/.claude/bin",
+      "\(home)/.cargo/bin", "\(home)/.claude/bin",
       "\(home)/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
     ]
     let pathDirectories = (Shell.augmentedEnvironment()["PATH"] ?? "")

@@ -1,7 +1,7 @@
 import Foundation
 
-/// Runs `claude -p` / `codex exec` headlessly to refine a selection in-place,
-/// always passing the whole note as context for better answers.
+/// Runs `claude -p` headlessly to refine a selection in-place, always passing the whole note as
+/// context for better answers.
 struct HeadlessPromptService {
   func refineSelection(whole: String, selection: String, engine: HeadlessEngine) async throws -> String {
     let prompt = """
@@ -51,8 +51,6 @@ struct HeadlessPromptService {
     switch engine {
     case .claude:
       arguments = [executable.path, "-p", prompt]
-    case .codex:
-      arguments = [executable.path, "exec", "--ask-for-approval", "never", prompt]
     }
     let result = try await Shell.run(arguments)
     let out = result.stdout.trimmed

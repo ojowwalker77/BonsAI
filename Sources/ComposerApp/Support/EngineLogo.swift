@@ -3,7 +3,6 @@ import AppKit
 
 struct EngineLogo: View {
   let engine: HeadlessEngine
-  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
     Group {
@@ -19,21 +18,15 @@ struct EngineLogo: View {
     .accessibilityHidden(true)
   }
 
-  @ViewBuilder
   private func logoImage(_ image: NSImage) -> some View {
-    let view = Image(nsImage: image)
+    Image(nsImage: image)
       .resizable()
       .scaledToFit()
-    if engine == .codex, colorScheme == .light {
-      view.colorInvert()
-    } else {
-      view
-    }
   }
 }
 
-/// The mark for the in-canvas agent: the active engine's brand logo (Claude preferred, then
-/// Codex), falling back to the Apple Intelligence mark when the user has neither enabled.
+/// The mark for the in-canvas agent: the active engine's brand logo (Claude today), falling back to
+/// the Apple Intelligence mark when no CLI engine is enabled and available.
 struct AgentEngineIcon: View {
   var size: CGFloat = 15
   @ObservedObject private var capabilities = EngineCapabilityStore.shared
@@ -41,8 +34,6 @@ struct AgentEngineIcon: View {
   var body: some View {
     if EnginePreferences.isEnabled(.claude), capabilities.isAvailable(.claude) {
       EngineLogo(engine: .claude)
-    } else if EnginePreferences.isEnabled(.codex), capabilities.isAvailable(.codex) {
-      EngineLogo(engine: .codex)
     } else {
       Image(systemName: "apple.intelligence")
         .resizable()
