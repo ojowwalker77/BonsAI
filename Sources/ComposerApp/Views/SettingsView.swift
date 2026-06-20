@@ -2,9 +2,9 @@ import SwiftUI
 
 /// Settings as a right-docked glass panel — a sibling of the agent chat, not a modal over a dimmed
 /// board. It wears the same frosted `ComposerPanelBackground` as the main window and the agent dock,
-/// so it reads as a second panel floating in the gutter. The hero is an honest ledger of the local
-/// intelligence this Mac can actually run right now: which engines are installed, what command each
-/// one runs, and where it lives on disk.
+/// so it reads as a second panel floating in the gutter. It follows the same quiet-by-default
+/// language as the rails: neutral surfaces, accent reserved as a single signal (the selected tab),
+/// brand marks for identity — no decorative color, glows, or status confetti.
 struct SettingsOverlay: View {
   /// Sized by the canvas relative to the window so the panel adapts to the display.
   var width: CGFloat
@@ -34,21 +34,19 @@ struct SettingsOverlay: View {
 
   // MARK: Header
 
+  /// Mirrors the agent dock's header rhythm: a single quiet glyph, the title, and a plain close
+  /// button — no tinted tile.
   private var header: some View {
     HStack(spacing: 10) {
-      RoundedRectangle(cornerRadius: 9, style: .continuous)
-        .fill(Color.accentColor.opacity(0.16))
-        .frame(width: 30, height: 30)
-        .overlay(
-          Image(systemName: "slider.horizontal.3")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Color.accentColor)
-        )
+      Image(systemName: "slider.horizontal.3")
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundStyle(Theme.Palette.body)
+        .frame(width: 18)
       Text("Settings").font(.body.weight(.semibold)).foregroundStyle(Theme.Palette.body)
       Spacer(minLength: 8)
       Button(action: onClose) {
         Image(systemName: "xmark")
-          .font(.caption.weight(.bold))
+          .font(.caption.weight(.medium))
           .foregroundStyle(Theme.Palette.title)
           .frame(width: 24, height: 24)
           .contentShape(Rectangle())
@@ -62,35 +60,49 @@ struct SettingsOverlay: View {
   // MARK: Tabs
 
   private var tabStrip: some View {
-    HStack(spacing: 6) {
-      ForEach(SettingsDestination.allCases) { tab($0) }
+    HStack(spacing: 4) {
+      ForEach(SettingsDestination.allCases) { item in
+        SettingsTab(item: item, selected: destination == item) { destination = item }
+      }
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 10)
   }
+}
 
-  private func tab(_ item: SettingsDestination) -> some View {
-    let selected = destination == item
-    return Button { destination = item } label: {
+/// One segment of the settings nav. Quiet by default, lights up on hover, and marks the selection
+/// with an accent-tinted glyph over a neutral fill — the same "tint is the signal, no colored box"
+/// rule the canvas rails follow.
+private struct SettingsTab: View {
+  let item: SettingsDestination
+  let selected: Bool
+  var action: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button(action: action) {
       VStack(spacing: 5) {
-        Image(systemName: item.symbol).font(.system(size: 15, weight: .semibold))
-        Text(item.title).font(.system(size: 10.5, weight: selected ? .semibold : .medium))
+        Image(systemName: item.symbol).font(.system(size: 15, weight: .medium))
+        Text(item.title).font(.system(size: 10.5, weight: .medium))
       }
       .frame(maxWidth: .infinity)
-      .frame(height: 48)
-      .foregroundStyle(selected ? Color.accentColor : Theme.Palette.menuDesc)
+      .frame(height: 46)
+      .foregroundStyle(foreground)
       .background(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .fill(selected ? Color.accentColor.opacity(0.14) : Color.white.opacity(0.04))
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .strokeBorder(selected ? Color.accentColor.opacity(0.32) : Color.white.opacity(0.05), lineWidth: 1)
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .fill(selected ? Color.white.opacity(0.08) : (hovering ? Color.white.opacity(0.045) : Color.clear))
       )
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .onHover { hovering = $0 }
     .help(item.title)
+    .animation(.easeOut(duration: 0.12), value: hovering)
+  }
+
+  private var foreground: AnyShapeStyle {
+    if selected { return AnyShapeStyle(Color.accentColor) }
+    return AnyShapeStyle(hovering ? Theme.Palette.body : Theme.Palette.menuDesc)
   }
 }
 
@@ -156,6 +168,18 @@ private struct SettingsContent: View {
     }
   }
 
+  /// A quiet page intro: a plain heading and a single line of guidance. No accent eyebrow, no hero —
+  /// the selected tab is the title; this just orients.
+  private func pageHeader(_ title: String, _ subtitle: String) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(title).font(.headline).foregroundStyle(Theme.Palette.body)
+      Text(subtitle)
+        .font(.caption)
+        .foregroundStyle(Theme.Palette.menuDesc)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
   // MARK: Runtime
 
   private var runtimePage: some View {
@@ -166,37 +190,25 @@ private struct SettingsContent: View {
     let ready = states.filter { $0.isAvailable }.count
 
     return VStack(alignment: .leading, spacing: 16) {
-      // Hero — the honest readout.
-      VStack(alignment: .leading, spacing: 8) {
-        Text("RUNTIME").pageEyebrow()
-        Text("Local intelligence, honestly represented")
-          .font(.title3.weight(.semibold))
-          .foregroundStyle(Theme.Palette.body)
-          .fixedSize(horizontal: false, vertical: true)
-        Text("Composer only offers engines that are installed and answering on this Mac.")
-          .font(.callout)
-          .foregroundStyle(Theme.Palette.menuDesc)
-          .fixedSize(horizontal: false, vertical: true)
-
+      VStack(alignment: .leading, spacing: 10) {
+        pageHeader("Local intelligence",
+                   "Only engines installed and answering on this Mac are offered.")
         HStack(spacing: 8) {
           readout(ready: ready, total: states.count)
           Spacer(minLength: 8)
           Button(action: capabilities.refresh) {
             Label("Recheck", systemImage: "arrow.clockwise")
               .font(.caption.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
               .padding(.horizontal, 11)
               .frame(height: 28)
           }
           .buttonStyle(SettingsPillButtonStyle())
-          .foregroundStyle(Color.accentColor)
           .help("Re-scan this Mac for installed engines")
         }
-        .padding(.top, 2)
       }
 
-      // The ledger.
-      VStack(alignment: .leading, spacing: 8) {
-        Text("ENGINES").sectionLabel()
+      VStack(spacing: 8) {
         engineRow(
           name: HeadlessEngine.claude.title,
           command: HeadlessEngine.claude.commandLabel,
@@ -210,6 +222,8 @@ private struct SettingsContent: View {
           availability: capabilities.appleIntelligence,
           toggle: nil
         ) {
+          // The genuine Apple Intelligence mark — brand identity, the same rainbow the agent icon
+          // uses — not decorative color.
           Image(systemName: "apple.intelligence")
             .font(.system(size: 19, weight: .medium))
             .foregroundStyle(AngularGradient(
@@ -222,15 +236,14 @@ private struct SettingsContent: View {
         .font(.caption)
         .foregroundStyle(Theme.Palette.count)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(.top, 2)
     }
   }
 
-  /// A live count of what's ready, in the mono "instrument" voice.
+  /// A live count of what's ready, in the mono "instrument" voice. One status dot, neutral capsule.
   private func readout(ready: Int, total: Int) -> some View {
     HStack(spacing: 6) {
       Circle()
-        .fill(ready > 0 ? Color.green : Theme.Palette.count)
+        .fill(ready > 0 ? Color.green.opacity(0.9) : Theme.Palette.count)
         .frame(width: 6, height: 6)
       Text("\(ready) of \(total) ready")
         .font(.caption.monospaced().weight(.semibold))
@@ -249,26 +262,23 @@ private struct SettingsContent: View {
     @ViewBuilder icon: () -> Icon
   ) -> some View {
     let available = availability.isAvailable
-    let lit = available && (toggle?.wrappedValue ?? true)
 
     return HStack(spacing: 12) {
-      // Tile lights with the accent when the engine is enabled and answering.
+      // A neutral tile holds the brand mark — the logo is the color; the tile never lights up.
       icon()
         .frame(width: 42, height: 42)
         .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Theme.Palette.tagFill))
         .overlay(
           RoundedRectangle(cornerRadius: 11, style: .continuous)
-            .strokeBorder(lit ? Color.accentColor.opacity(0.55) : Color.white.opacity(0.06),
-                          lineWidth: lit ? 1.4 : 1)
+            .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
         )
-        .shadow(color: lit ? Color.accentColor.opacity(0.30) : .clear, radius: lit ? 8 : 0)
         .opacity(available ? 1 : 0.4)
-        .saturation(available ? 1 : 0.15)
+        .saturation(available ? 1 : 0.2)
 
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 7) {
           Text(name).font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-          statusBadge(availability)
+          statusDot(availability)
         }
         HStack(spacing: 6) {
           Text(command)
@@ -290,7 +300,7 @@ private struct SettingsContent: View {
     .padding(.vertical, 12)
     .frame(minHeight: 72)
     .settingsCard()
-    .opacity(available ? 1 : 0.72)
+    .opacity(available ? 1 : 0.78)
   }
 
   @ViewBuilder
@@ -303,15 +313,22 @@ private struct SettingsContent: View {
         .disabled(!availability.isAvailable)
         .opacity(availability.isAvailable ? 1 : 0.4)
     } else if availability.isAvailable {
-      Image(systemName: "checkmark.seal.fill")
-        .font(.body)
-        .foregroundStyle(.green)
-        .help("On-device — always local")
+      Image(systemName: "lock.fill")
+        .font(.callout)
+        .foregroundStyle(Theme.Palette.count)
+        .help("On-device — never leaves your Mac")
     } else {
       Image(systemName: "bolt.slash")
-        .font(.body)
+        .font(.callout)
         .foregroundStyle(Theme.Palette.count)
     }
+  }
+
+  /// The lone status signal on a row: a single dot, green only when the engine is answering.
+  private func statusDot(_ availability: RuntimeAvailability) -> some View {
+    Circle()
+      .fill(availability.isAvailable ? Color.green.opacity(0.9) : Theme.Palette.count)
+      .frame(width: 6, height: 6)
   }
 
   @ViewBuilder
@@ -335,43 +352,14 @@ private struct SettingsContent: View {
     }
   }
 
-  private func statusBadge(_ availability: RuntimeAvailability) -> some View {
-    let color: Color
-    let word: String
-    switch availability {
-    case .available: color = .green; word = "Ready"
-    case .checking: color = .orange; word = "Checking"
-    case .unavailable: color = Theme.Palette.count; word = "Off"
-    }
-    return HStack(spacing: 4) {
-      Circle().fill(color).frame(width: 5, height: 5)
-      Text(word)
-    }
-    .font(.system(size: 10, weight: .semibold))
-    .foregroundStyle(color)
-    .padding(.horizontal, 6)
-    .padding(.vertical, 2)
-    .background(Capsule().fill(color.opacity(0.12)))
-  }
-
   // MARK: Appearance
 
   private var appearancePage: some View {
     VStack(alignment: .leading, spacing: 16) {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("APPEARANCE").pageEyebrow()
-        Text("Set the panel’s presence")
-          .font(.title3.weight(.semibold))
-          .foregroundStyle(Theme.Palette.body)
-        Text("Let more of the desktop through the glass without losing the contrast that keeps long drafts readable.")
-          .font(.callout)
-          .foregroundStyle(Theme.Palette.menuDesc)
-          .fixedSize(horizontal: false, vertical: true)
-      }
+      pageHeader("Panel glass",
+                 "Let more of the desktop through without losing the contrast that keeps long drafts readable.")
 
       VStack(alignment: .leading, spacing: 12) {
-        Text("PANEL GLASS").sectionLabel()
-
         // A live preview of the panel at the chosen transparency.
         glassPreview
           .frame(height: 64)
@@ -383,7 +371,7 @@ private struct SettingsContent: View {
             Spacer(minLength: 12)
             Text("\(transparencyPercent)%")
               .font(.callout.monospacedDigit().weight(.semibold))
-              .foregroundStyle(Color.accentColor)
+              .foregroundStyle(Theme.Palette.body)
           }
           Slider(value: $panelTransparency, in: 0...ComposerPreferences.maxPanelTransparency)
             .tint(Color.accentColor)
@@ -429,16 +417,8 @@ private struct SettingsContent: View {
 
   private var connectorsPage: some View {
     VStack(alignment: .leading, spacing: 16) {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("CONNECTORS").pageEyebrow()
-        Text("Context that travels with your draft")
-          .font(.title3.weight(.semibold))
-          .foregroundStyle(Theme.Palette.body)
-        Text("Type @ in a card to attach live context. Copied drafts become self-contained text — the source is resolved at copy time.")
-          .font(.callout)
-          .foregroundStyle(Theme.Palette.menuDesc)
-          .fixedSize(horizontal: false, vertical: true)
-      }
+      pageHeader("Connectors",
+                 "Type @ in a card to attach live context. Copied drafts become self-contained text — the source is resolved at copy time.")
 
       ForEach(MentionCatalog.appsByCategory, id: \.category) { group in
         VStack(alignment: .leading, spacing: 8) {
@@ -501,16 +481,8 @@ private struct SettingsContent: View {
 
   private var shortcutsPage: some View {
     VStack(alignment: .leading, spacing: 16) {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("SHORTCUTS").pageEyebrow()
-        Text("Keep the canvas under your fingers")
-          .font(.title3.weight(.semibold))
-          .foregroundStyle(Theme.Palette.body)
-        Text("The essentials for writing, arranging, and exporting without breaking flow.")
-          .font(.callout)
-          .foregroundStyle(Theme.Palette.menuDesc)
-          .fixedSize(horizontal: false, vertical: true)
-      }
+      pageHeader("Keyboard",
+                 "The essentials for writing, arranging, and exporting without breaking flow.")
 
       VStack(spacing: 7) {
         // The summon hotkey is user-configurable (records into ShortcutStore, which HotKeyManager
@@ -627,12 +599,15 @@ private struct ConnectorTokenField: View {
 
 // MARK: - Styling helpers
 
+/// A quiet neutral pill — the rail/dock idiom (white-on-glass wash, hairline rim), not an accent
+/// chip. Used for secondary actions inside the panel.
 private struct SettingsPillButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .background(
-        Capsule().fill(configuration.isPressed ? Color.accentColor.opacity(0.22) : Color.accentColor.opacity(0.12))
+        Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.14 : 0.08))
       )
+      .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
       .scaleEffect(configuration.isPressed ? 0.97 : 1)
       .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
   }
@@ -649,16 +624,11 @@ private extension View {
     }
   }
 
+  /// Quiet categorical label above a group of rows. Dim, never accent.
   func sectionLabel() -> some View {
     self.font(.caption2.weight(.bold))
       .tracking(0.6)
       .foregroundStyle(Theme.Palette.count)
-  }
-
-  func pageEyebrow() -> some View {
-    self.font(.caption2.weight(.bold))
-      .tracking(1.2)
-      .foregroundStyle(Color.accentColor)
   }
 }
 

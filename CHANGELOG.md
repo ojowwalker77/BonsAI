@@ -36,6 +36,13 @@ under the new version heading.
 - Renamed the app to **BonsAI** (`dev.jow.BonsAI`) with a baked Dock icon, and made
   optimized Release the default build.
 - Builds now target macOS 26 (swift-tools 6.2).
+- **Settings refined to the app's quiet visual language** — neutral header and
+  segmented tabs, with the accent glows, colored status badges, and marketing-voice
+  headings removed so the panel matches the rails and the agent dock. Brand marks
+  and the live model availability readout stay.
+- **The agent and its grounding folder moved to the left rail**, grouped with the
+  board-session actions (New · History — Agent · Folder — Settings); the top toolbar
+  is now the canvas tools, zoom, and Tidy.
 
 ### Removed
 - The menu-bar item (`MenuBarExtra` / `LSUIElement`).
