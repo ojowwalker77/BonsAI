@@ -19,9 +19,9 @@ struct FinderReference: Codable, Equatable, Hashable {
   let isDirectory: Bool?
 }
 
-/// A browser tab captured by the `@browser` connector. The first implementation is
-/// Safari-only, but the shape deliberately names the browser and bundle so Chrome/Arc/etc.
-/// can be added without changing the token format.
+/// A browser tab captured by the `@browser` connector. Populated from Safari and Chrome;
+/// the shape names the browser and bundle so more browsers can be added without changing
+/// the token format.
 struct BrowserTabReference: Codable, Equatable, Hashable {
   let browser: String
   let bundleID: String
@@ -37,6 +37,42 @@ struct BrowserTabReference: Codable, Equatable, Hashable {
   }
 }
 
+/// A Linear issue captured by the `@linear` connector. `id` is the UUID used to fetch detail;
+/// `identifier` (e.g. `ENG-123`) is the human key shown on the chip.
+struct LinearReference: Codable, Equatable, Hashable {
+  let id: String
+  let identifier: String
+}
+
+/// A Notion page captured by the `@notion` connector. `id` is the page UUID; `title` is the chip
+/// label, with the page content re-fetched at copy time.
+struct NotionReference: Codable, Equatable, Hashable {
+  let id: String
+  let title: String
+}
+
+/// A Sentry issue captured by the `@sentry` connector. Issues are org-scoped, so `org` (the slug)
+/// travels with the issue `id`; `shortID` (e.g. `FRONTEND-1AB`) is the chip label.
+struct SentryReference: Codable, Equatable, Hashable {
+  let org: String
+  let id: String
+  let shortID: String
+}
+
+/// A Figma frame/file captured by the `@figma` connector, parsed from a pasted Figma URL. `fileKey`
+/// + optional `nodeId` (colon form, e.g. `1:2`) address the node; `name` is the chip label.
+struct FigmaReference: Codable, Equatable, Hashable {
+  let fileKey: String
+  let nodeId: String
+  let name: String
+}
+
+/// An Xcode `.xcresult` bundle captured by the `@xcode` connector. `resultPath` is parsed at copy
+/// time for build errors and test failures.
+struct XcodeReference: Codable, Equatable, Hashable {
+  let resultPath: String
+}
+
 /// The concrete thing a resolved app chip points at. `nil` (absent) means the app is
 /// tagged but not yet narrowed — the chip shows a disclosure so the user can search it.
 enum AppSelection: Equatable, Hashable {
@@ -47,8 +83,18 @@ enum AppSelection: Equatable, Hashable {
   case github(kind: GitHubItemKind, url: String)
   /// A local file or folder found through Finder/Spotlight.
   case finder(FinderReference)
-  /// An open browser tab. Currently populated from Safari.
+  /// An open browser tab, populated from Safari and Chromium browsers.
   case browser(BrowserTabReference)
+  /// A Linear issue (description, status, comments, links rendered at copy time).
+  case linear(LinearReference)
+  /// A Notion page (title + flattened block text rendered at copy time).
+  case notion(NotionReference)
+  /// A Sentry issue (summary + latest-event stack trace rendered at copy time).
+  case sentry(SentryReference)
+  /// A Figma frame/file (dimensions, text layers, screenshot URL rendered at copy time).
+  case figma(FigmaReference)
+  /// An Xcode result bundle (build errors + test failures rendered at copy time).
+  case xcode(XcodeReference)
 }
 
 // MARK: - Token codec
@@ -64,7 +110,12 @@ enum AppSelection: Equatable, Hashable {
 /// - `@github:https://github.com/owner/repo/issues/1`
 /// - `@github:https://github.com/owner/repo/pull/2`
 /// - `@finder:/Users/me/Project/README.md`
-/// - `@browser:<base64url-json>`                    (Safari tab metadata)
+/// - `@browser:<base64url-json>`                    (Safari/Chrome tab metadata)
+/// - `@linear:<uuid>?k=ENG-123`                      (issue uuid + identifier)
+/// - `@notion:<uuid>?t=Page%20Title`                 (page uuid + title)
+/// - `@sentry:my-org/12345?s=FRONTEND-1AB`           (org slug / issue id + short id)
+/// - `@figma:<base64url-json>`                        (file key + node id + name)
+/// - `@xcode:/path/to/Result.xcresult`               (result bundle path)
 enum AppToken {
   static var appIDs: Set<String> { Set(MentionCatalog.apps.map(\.id)) }
 
@@ -83,6 +134,26 @@ enum AppToken {
       return "\(appID):\(percentEncodePath(reference.path))"
     case let .browser(reference):
       return "\(appID):\(encodeJSONPayload(reference) ?? percentEncodeTokenComponent(reference.url) ?? reference.url)"
+    case let .linear(reference):
+      if let identifier = percentEncodeTokenComponent(reference.identifier), !reference.identifier.isEmpty {
+        return "\(appID):\(reference.id)?k=\(identifier)"
+      }
+      return "\(appID):\(reference.id)"
+    case let .notion(reference):
+      if let title = percentEncodeTokenComponent(reference.title), !reference.title.isEmpty {
+        return "\(appID):\(reference.id)?t=\(title)"
+      }
+      return "\(appID):\(reference.id)"
+    case let .sentry(reference):
+      let base = "\(appID):\(reference.org)/\(reference.id)"
+      if let short = percentEncodeTokenComponent(reference.shortID), !reference.shortID.isEmpty {
+        return "\(base)?s=\(short)"
+      }
+      return base
+    case let .figma(reference):
+      return "\(appID):\(encodeJSONPayload(reference) ?? "")"
+    case let .xcode(reference):
+      return "\(appID):\(percentEncodePath(reference.resultPath))"
     }
   }
 
@@ -118,6 +189,40 @@ enum AppToken {
       return (appID, .browser(BrowserTabReference(
         browser: "Browser", bundleID: "", title: shortBrowserTitle(url: url), url: url,
         windowIndex: 0, tabIndex: 0, isActive: false, capturedAt: "")))
+    case "@linear":
+      if let separator = payload.range(of: "?k=") {
+        let id = String(payload[payload.startIndex..<separator.lowerBound])
+        let identifier = percentDecode(String(payload[separator.upperBound...]))
+        return (appID, .linear(LinearReference(id: id, identifier: identifier)))
+      }
+      return (appID, .linear(LinearReference(id: payload, identifier: payload)))
+    case "@notion":
+      if let separator = payload.range(of: "?t=") {
+        let id = String(payload[payload.startIndex..<separator.lowerBound])
+        let title = percentDecode(String(payload[separator.upperBound...]))
+        return (appID, .notion(NotionReference(id: id, title: title)))
+      }
+      return (appID, .notion(NotionReference(id: payload, title: payload)))
+    case "@sentry":
+      var rest = payload
+      var shortID = ""
+      if let separator = rest.range(of: "?s=") {
+        shortID = percentDecode(String(rest[separator.upperBound...]))
+        rest = String(rest[rest.startIndex..<separator.lowerBound])
+      }
+      guard let slash = rest.firstIndex(of: "/") else {
+        return (appID, .sentry(SentryReference(org: rest, id: "", shortID: shortID.isEmpty ? rest : shortID)))
+      }
+      let org = String(rest[rest.startIndex..<slash])
+      let id = String(rest[rest.index(after: slash)...])
+      return (appID, .sentry(SentryReference(org: org, id: id, shortID: shortID.isEmpty ? id : shortID)))
+    case "@figma":
+      if let reference = decodeJSONPayload(payload, as: FigmaReference.self) {
+        return (appID, .figma(reference))
+      }
+      return (appID, nil)
+    case "@xcode":
+      return (appID, .xcode(XcodeReference(resultPath: percentDecode(payload))))
     default:
       return (appID, nil)
     }
@@ -137,6 +242,16 @@ enum AppToken {
       return shortPath(reference.path)
     case let .browser(reference):
       return shortBrowser(reference)
+    case let .linear(reference):
+      return reference.identifier.isEmpty ? "Linear" : reference.identifier
+    case let .notion(reference):
+      return reference.title.isEmpty ? "Notion" : String(reference.title.prefix(28))
+    case let .sentry(reference):
+      return reference.shortID.isEmpty ? "Sentry" : reference.shortID
+    case let .figma(reference):
+      return reference.name.isEmpty ? "Figma" : String(reference.name.prefix(28))
+    case let .xcode(reference):
+      return shortXcode(reference.resultPath)
     }
   }
 
@@ -185,7 +300,8 @@ enum AppToken {
 
   private static func shortPath(_ path: String) -> String {
     let name = URL(fileURLWithPath: path).lastPathComponent
-    return name.isEmpty ? path : name
+    let label = name.isEmpty ? path : name
+    return label.count > 28 ? String(label.prefix(27)) + "…" : label
   }
 
   private static func shortBrowser(_ reference: BrowserTabReference) -> String {
@@ -197,6 +313,23 @@ enum AppToken {
 
   private static func shortBrowserTitle(url: String) -> String {
     URL(string: url)?.host(percentEncoded: false) ?? "Browser tab"
+  }
+
+  /// `…/DerivedData/MyApp-<hash>/Logs/Test/X.xcresult` → `MyApp`; a pasted path → the file stem.
+  private static func shortXcode(_ path: String) -> String {
+    if let range = path.range(of: "DerivedData/") {
+      let after = path[range.upperBound...]
+      if let slash = after.firstIndex(of: "/") {
+        let folder = String(after[after.startIndex..<slash])
+        if let hash = folder.range(of: "-[a-z0-9]{20,}$", options: .regularExpression) {
+          return String(folder[folder.startIndex..<hash.lowerBound])
+        }
+        return folder
+      }
+    }
+    let name = (path as NSString).lastPathComponent
+    if name.hasSuffix(".xcresult") { return String(name.dropLast(9)) }
+    return name.isEmpty ? "Xcode" : name
   }
 
   // MARK: Encoding

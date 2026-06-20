@@ -8,10 +8,19 @@ struct AppSearchContext: Equatable {
 
 /// A connector is the scalable unit behind an app chip. The editor/panel only know how to
 /// ask a connector for results and rendered context; each app owns its own API/CLI details.
+/// Declares whether a connector needs a user-supplied secret, so Settings can render a token
+/// field and the service can read it from ConnectorSecretStore.
+enum ConnectorAuth: Equatable {
+  case none
+  /// A personal API token pasted in Settings. `createURL` deep-links to where the user mints one.
+  case apiToken(label: String, hint: String, createURL: String?)
+}
+
 protocol ComposerAppConnector {
   var id: String { get }
   var minimumQueryLength: Int { get }
   var supportsGitHubKindToggle: Bool { get }
+  var auth: ConnectorAuth { get }
 
   func placeholder(context: AppSearchContext) -> String
   func idleMessage(context: AppSearchContext) -> String
@@ -23,6 +32,7 @@ protocol ComposerAppConnector {
 extension ComposerAppConnector {
   var minimumQueryLength: Int { 1 }
   var supportsGitHubKindToggle: Bool { false }
+  var auth: ConnectorAuth { .none }
 
   func placeholder(context: AppSearchContext) -> String { "Search…" }
   func idleMessage(context: AppSearchContext) -> String { "Type to search." }
@@ -35,6 +45,11 @@ enum AppConnectorRegistry {
     GitHubAppConnector(),
     FinderAppConnector(),
     BrowserAppConnector(),
+    LinearAppConnector(),
+    NotionAppConnector(),
+    SentryAppConnector(),
+    FigmaAppConnector(),
+    XcodeAppConnector(),
   ]
 
   static func connector(for id: String) -> (any ComposerAppConnector)? {
@@ -46,10 +61,12 @@ enum AppConnectorRegistry {
 
 private struct Context7AppConnector: ComposerAppConnector {
   let id = "@context7"
+  let minimumQueryLength = 2
   private let service = Context7Service()
 
   func placeholder(context: AppSearchContext) -> String { "Search libraries…" }
-  func idleMessage(context: AppSearchContext) -> String { "Type to search Context7 libraries." }
+  func idleMessage(context: AppSearchContext) -> String { "Type to search libraries." }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No libraries found." }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
     try await service.search(query)
@@ -76,6 +93,7 @@ private struct Context7AppConnector: ComposerAppConnector {
 
 private struct GitHubAppConnector: ComposerAppConnector {
   let id = "@github"
+  let minimumQueryLength = 2
   let supportsGitHubKindToggle = true
   private let service = GitHubService()
 
@@ -84,7 +102,11 @@ private struct GitHubAppConnector: ComposerAppConnector {
   }
 
   func idleMessage(context: AppSearchContext) -> String {
-    "Type to search GitHub \(context.githubKind.shortLabel.lowercased())."
+    "Type to search your \(context.githubKind.shortLabel.lowercased())."
+  }
+
+  func noResultsMessage(query: String, context: AppSearchContext) -> String {
+    "No \(context.githubKind.shortLabel.lowercased()) found."
   }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
@@ -115,8 +137,8 @@ private struct FinderAppConnector: ComposerAppConnector {
   let minimumQueryLength = 2
   private let service = FinderService()
 
-  func placeholder(context: AppSearchContext) -> String { "Fuzzy-find files and folders…" }
-  func idleMessage(context: AppSearchContext) -> String { "Type at least 2 characters to find files and folders." }
+  func placeholder(context: AppSearchContext) -> String { "Search files & folders…" }
+  func idleMessage(context: AppSearchContext) -> String { "Type to find files and folders." }
   func noResultsMessage(query: String, context: AppSearchContext) -> String { "No matching files or folders." }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
@@ -142,14 +164,14 @@ private struct BrowserAppConnector: ComposerAppConnector {
   let minimumQueryLength = 0
   private let service = BrowserService()
 
-  func placeholder(context: AppSearchContext) -> String { "Filter Safari tabs…" }
-  func idleMessage(context: AppSearchContext) -> String { "Pick an open Safari tab, or type to filter." }
+  func placeholder(context: AppSearchContext) -> String { "Filter open tabs…" }
+  func idleMessage(context: AppSearchContext) -> String { "Pick an open browser tab, or type to filter." }
   func noResultsMessage(query: String, context: AppSearchContext) -> String {
-    query.trimmed.isEmpty ? "No open Safari tabs found." : "No matching Safari tabs."
+    query.trimmed.isEmpty ? "No open browser tabs found." : "No matching tabs."
   }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
-    try await service.searchSafariTabs(query: query)
+    try await service.searchTabs(query: query)
   }
 
   func render(selection: AppSelection?) async -> String {
@@ -158,6 +180,165 @@ private struct BrowserAppConnector: ComposerAppConnector {
       return "## Browser\nReference the relevant open browser tab. Include its URL, title, and browser metadata so the next tool can fetch or reason about it."
     case let .browser(reference):
       return service.render(reference)
+    default:
+      return ""
+    }
+  }
+}
+
+// MARK: - Linear
+
+private struct LinearAppConnector: ComposerAppConnector {
+  let id = "@linear"
+  let minimumQueryLength = 2
+  var auth: ConnectorAuth {
+    .apiToken(label: "API Key",
+              hint: "Personal API key from Linear → Settings → API",
+              createURL: "https://linear.app/settings/api")
+  }
+  private let service = LinearService()
+
+  func placeholder(context: AppSearchContext) -> String { "Search issues, or paste an ID like ENG-123…" }
+  func idleMessage(context: AppSearchContext) -> String { "Type to search your issues." }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No matching issues." }
+
+  func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
+    try await service.search(query)
+  }
+
+  func render(selection: AppSelection?) async -> String {
+    switch selection {
+    case .none:
+      return "## Linear\nReference the Linear issue — description, status, acceptance criteria, comments, and linked PRs."
+    case let .linear(reference):
+      return await service.render(reference)
+    default:
+      return ""
+    }
+  }
+}
+
+// MARK: - Notion
+
+private struct NotionAppConnector: ComposerAppConnector {
+  let id = "@notion"
+  let minimumQueryLength = 2
+  var auth: ConnectorAuth {
+    .apiToken(label: "Integration Token",
+              hint: "Internal integration token from notion.so/my-integrations (share pages with it)",
+              createURL: "https://www.notion.so/my-integrations")
+  }
+  private let service = NotionService()
+
+  func placeholder(context: AppSearchContext) -> String { "Search pages…" }
+  func idleMessage(context: AppSearchContext) -> String { "Type to search your pages." }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String {
+    "No matching pages — is it shared with your integration?"
+  }
+
+  func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
+    try await service.search(query)
+  }
+
+  func render(selection: AppSelection?) async -> String {
+    switch selection {
+    case .none:
+      return "## Notion\nReference the relevant Notion page — spec, RFC, or decision doc — and pull its content."
+    case let .notion(reference):
+      return await service.render(reference)
+    default:
+      return ""
+    }
+  }
+}
+
+// MARK: - Sentry
+
+private struct SentryAppConnector: ComposerAppConnector {
+  let id = "@sentry"
+  let minimumQueryLength = 2
+  var auth: ConnectorAuth {
+    .apiToken(label: "Auth Token",
+              hint: "Token from sentry.io/settings/account/api/auth-tokens (needs event:read)",
+              createURL: "https://sentry.io/settings/account/api/auth-tokens/")
+  }
+  private let service = SentryService()
+
+  func placeholder(context: AppSearchContext) -> String { "Search issues…" }
+  func idleMessage(context: AppSearchContext) -> String { "Type to search your issues." }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No matching issues." }
+
+  func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
+    try await service.search(query)
+  }
+
+  func render(selection: AppSelection?) async -> String {
+    switch selection {
+    case .none:
+      return "## Sentry\nReference the Sentry issue — error, level, affected release, and recent stack trace."
+    case let .sentry(reference):
+      return await service.render(reference)
+    default:
+      return ""
+    }
+  }
+}
+
+// MARK: - Figma
+
+private struct FigmaAppConnector: ComposerAppConnector {
+  let id = "@figma"
+  let minimumQueryLength = 8
+  var auth: ConnectorAuth {
+    .apiToken(label: "Access Token",
+              hint: "Personal access token from figma.com → Settings → Security",
+              createURL: "https://www.figma.com/settings")
+  }
+  private let service = FigmaService()
+
+  func placeholder(context: AppSearchContext) -> String { "Paste a Figma frame URL…" }
+  func idleMessage(context: AppSearchContext) -> String { "Paste a Figma file or frame URL to attach it." }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String { "Not a Figma URL — copy a frame link from Figma." }
+
+  func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
+    try await service.search(query)
+  }
+
+  func render(selection: AppSelection?) async -> String {
+    switch selection {
+    case .none:
+      return "## Figma\nReference the Figma frame — its dimensions, text content, and a screenshot URL for the next tool."
+    case let .figma(reference):
+      return await service.render(reference)
+    default:
+      return ""
+    }
+  }
+}
+
+// MARK: - Xcode
+
+private struct XcodeAppConnector: ComposerAppConnector {
+  let id = "@xcode"
+  let minimumQueryLength = 0
+  private let service = XcodeService()
+
+  func placeholder(context: AppSearchContext) -> String { "Filter results, or paste a .xcresult path…" }
+  func idleMessage(context: AppSearchContext) -> String { "Pick a recent build or test result." }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String {
+    "No .xcresult bundles found."
+  }
+
+  func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
+    try await service.search(query)
+  }
+
+  func render(selection: AppSelection?) async -> String {
+    switch selection {
+    case .none:
+      return "## Xcode\nReference the latest Xcode build errors or test failures."
+    case let .xcode(reference):
+      return await service.render(reference)
     default:
       return ""
     }
