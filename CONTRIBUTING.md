@@ -84,6 +84,30 @@ for the full context — the on-device/privacy constraints, the precision bias (
 wrong squiggle is worse than a missed one), the kinds of ambiguity it flags, and
 where the prompt that drives it lives. This is a great area to experiment in.
 
+## Agent & engine layer
+
+The AI surfaces never ship a model — they shell out to a coding-agent CLI you
+already use (`claude -p`) for Refine and Compile, and spawn `claude` in streaming
+mode with a loopback MCP server for the in-canvas chat agent. Two write-ups cover
+the whole layer:
+
+- [docs/agent-engines.md](docs/agent-engines.md) — the engines (Claude +
+  on-device Apple Intelligence), the one-shot vs streaming execution paths, how an
+  engine is selected, and the `PATH` gotcha for a GUI-launched app. Read this
+  before touching engine selection or adding a CLI integration.
+- [docs/canvas-agent.md](docs/canvas-agent.md) — the board as an agent-readable
+  graph (`CanvasGraph` nodes/edges, reading order, authorship), the loopback
+  server → MCP → bridge plumbing, and the tool catalog. Read this before changing
+  how the agent reads or writes the board.
+
+**A PR adding another engine is welcome.** Today there's one CLI engine (Claude),
+but `HeadlessEngine` and the selection machinery around it are built to take more
+— support for **Codex**, **OpenCode**, **Pi**, or another agent CLI is a
+well-scoped contribution. The
+[Adding an engine](docs/agent-engines.md#adding-an-engine) section lists every
+touch point. One-shot Refine/Compile is the easy win; wiring a non-Claude engine
+into the streaming chat agent is a larger lift.
+
 ## Beyond these areas
 
 These are, in our view, the main areas of improvement — but please feel free to

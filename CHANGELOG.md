@@ -24,6 +24,10 @@ under the new version heading.
   publish a zipped `BonsAI.app`, and a changelog-entry check on every PR to `main`.
 - Project docs: `README`, `CONTRIBUTING` (contribution focus areas + the
   connector philosophy), a `SPLUS.md` review contract, and `docs/semanticlinter.md`.
+- Agent & engine docs: `docs/agent-engines.md` (how `claude -p` and Apple
+  Intelligence are invoked and selected, plus how to add an engine) and
+  `docs/canvas-agent.md` (the board as an agent-readable graph + the loopback
+  server/MCP plumbing).
 
 ### Changed
 - **BonsAI is now a regular Dock app** (real Dock icon + Cmd-Tab presence) instead
@@ -35,6 +39,9 @@ under the new version heading.
 
 ### Removed
 - The menu-bar item (`MenuBarExtra` / `LSUIElement`).
+- The Codex (`codex exec`) engine integration — it couldn't be tested, so it was
+  dropped. `HeadlessEngine` stays the extension point; a PR re-adding Codex (or
+  OpenCode, Pi, …) is welcome — see `docs/agent-engines.md`.
 
 <!--
 Add a bullet under the matching heading for every user-facing change. Create a

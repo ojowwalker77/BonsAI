@@ -1,7 +1,7 @@
 import Foundation
 
 /// Runs a CLI off the main thread with the PATH a GUI app needs (a Finder-launched app
-/// inherits a minimal PATH, so `gh`, `claude`, `codex`, etc. wouldn't otherwise resolve).
+/// inherits a minimal PATH, so `gh`, `claude`, etc. wouldn't otherwise resolve).
 enum Shell {
   struct Result { let stdout: String; let stderr: String; let status: Int32 }
 

@@ -752,7 +752,6 @@ struct ComposerCanvas: View {
 
   private func preferredEngine() -> HeadlessEngine? {
     if EnginePreferences.isEnabled(.claude), engineCapabilities.isAvailable(.claude) { return .claude }
-    if EnginePreferences.isEnabled(.codex), engineCapabilities.isAvailable(.codex) { return .codex }
     return nil
   }
 

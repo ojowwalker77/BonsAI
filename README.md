@@ -63,6 +63,21 @@ prose. It runs fully on-device (Apple's Foundation Models), so it's free and
 private enough to run on every typing pause, and it's tuned hard for precision.
 Full write-up: [docs/semanticlinter.md](docs/semanticlinter.md).
 
+## Agent & engines
+
+BonsAI ships no model of its own. **Refine** and **Compile** shell out to a
+coding-agent CLI you already have (`claude -p`), and the in-canvas **chat agent**
+spawns `claude` in streaming mode with a loopback MCP server attached, so it can
+read and reshape the board live as you talk. Apple Intelligence is on-device and
+powers the linter only. The engine layer is built to be multi-engine — adding
+another agent CLI is a small, well-scoped change.
+
+- [docs/agent-engines.md](docs/agent-engines.md) — the engines, how each is
+  invoked, how one gets picked, and how to add another.
+- [docs/canvas-agent.md](docs/canvas-agent.md) — the board as an agent-readable
+  graph: nodes/edges, the loopback server + MCP tools, and how the agent reads
+  and writes board state.
+
 ## Architecture notes
 
 BonsAI is a normal Dock app built on AppKit + SwiftUI. The board, the
