@@ -1,0 +1,79 @@
+name: Release
+
+# Publish a built BonsAI.app whenever a v* tag is pushed. Can also be run
+# manually against an existing or new tag via the Actions tab.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build & release (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Swift toolchain
+        run: swift --version
+
+      # Reuses the same staging path developers run locally, minus the launch.
+      - name: Build & stage BonsAI.app
+        run: ./script/build_and_run.sh bundle
+
+      - name: Package the app bundle
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/BonsAI.app dist/BonsAI.app.zip
+          shasum -a 256 dist/BonsAI.app.zip | tee dist/BonsAI.app.zip.sha256
+
+      - name: Assemble release notes
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          # Lift the matching section out of the changelog (everything between this
+          # version's heading and the next "## " heading), trimming leading blanks.
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { grab = 1; next }
+            grab && index($0, "## ") == 1 { exit }
+            grab { print }
+          ' CHANGELOG.md | sed -e '/./,$!d' > dist/RELEASE_NOTES.md
+          if ! grep -q '[^[:space:]]' dist/RELEASE_NOTES.md; then
+            cat > dist/RELEASE_NOTES.md <<EOF
+          Unsigned macOS build of **BonsAI** ($TAG).
+
+          This build is not notarized. On first launch, right-click the app and choose **Open**, or clear the quarantine flag:
+
+          \`\`\`
+          xattr -dr com.apple.quarantine /Applications/BonsAI.app
+          \`\`\`
+
+          See the [README](https://github.com/$REPO/blob/main/README.md) for details.
+          EOF
+          fi
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          assets=(dist/BonsAI.app.zip dist/BonsAI.app.zip.sha256)
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$REPO" --clobber "${assets[@]}"
+          else
+            gh release create "$TAG" --repo "$REPO" \
+              --title "BonsAI $TAG" \
+              --notes-file dist/RELEASE_NOTES.md \
+              "${assets[@]}"
+          fi
