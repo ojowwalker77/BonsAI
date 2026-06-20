@@ -22,6 +22,9 @@ under the new version heading.
   publish a zipped `BonsAI.app`, and a changelog-entry check on every PR to `main`.
 - Project docs: `README`, `CONTRIBUTING` (contribution focus areas + the
   connector philosophy), a `SPLUS.md` review contract, and `docs/semanticlinter.md`.
+- Agent & engine docs: `docs/agent-engines.md` (how `claude -p` / `codex exec` /
+  Apple Intelligence are invoked and selected) and `docs/canvas-agent.md` (the
+  board as an agent-readable graph + the loopback server/MCP plumbing).
 
 ### Changed
 - **BonsAI is now a regular Dock app** (real Dock icon + Cmd-Tab presence) instead

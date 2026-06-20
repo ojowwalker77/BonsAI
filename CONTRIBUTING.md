@@ -84,6 +84,22 @@ for the full context — the on-device/privacy constraints, the precision bias (
 wrong squiggle is worse than a missed one), the kinds of ambiguity it flags, and
 where the prompt that drives it lives. This is a great area to experiment in.
 
+## Agent & engine layer
+
+The AI surfaces never ship a model — they shell out to the coding-agent CLI you
+already use (`claude -p` / `codex exec`) for Refine and Compile, and spawn
+`claude` in streaming mode with a loopback MCP server for the in-canvas chat
+agent. Two write-ups cover the whole layer:
+
+- [docs/agent-engines.md](docs/agent-engines.md) — the three engines (Claude,
+  Codex, Apple Intelligence), the one-shot vs streaming execution paths, how an
+  engine is selected, and the `PATH` gotcha for a GUI-launched app. Read this
+  before touching engine selection or adding a CLI integration.
+- [docs/canvas-agent.md](docs/canvas-agent.md) — the board as an agent-readable
+  graph (`CanvasGraph` nodes/edges, reading order, authorship), the loopback
+  server → MCP → bridge plumbing, and the tool catalog. Read this before changing
+  how the agent reads or writes the board.
+
 ## Beyond these areas
 
 These are, in our view, the main areas of improvement — but please feel free to
