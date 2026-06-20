@@ -9,6 +9,8 @@ import SwiftData
 struct ComposerCanvas: View {
   @StateObject private var store = DumpStore.shared
   @StateObject private var board = BoardViewModel()
+  @ObservedObject private var engineCapabilities = EngineCapabilityStore.shared
+  @ObservedObject private var workspaceLayout = WorkspaceLayout.shared
 
   @State private var tool: CanvasTool = .select
   @State private var isWorking = false
@@ -19,8 +21,8 @@ struct ComposerCanvas: View {
   @State private var elementDraft: DragSegment?
   @State private var isSpacePressed = false
   @State private var viewportThrottle = ViewportEventThrottle()
-  /// Held as plain @State (not @StateObject) so the agent's streaming updates re-render only the
-  /// dock, not the whole canvas. Visibility is the separate `showAgent`.
+  /// Held as plain @State (not @StateObject) so the agent's streaming updates stay scoped to its
+  /// own auxiliary panel rather than re-rendering the canvas.
   @State private var agent = CanvasAgent()
   @State private var showAgent = false
   /// Mirrors the agent's grounding folder so the toolbar reflects it reactively.
@@ -39,50 +41,32 @@ struct ComposerCanvas: View {
 
   var body: some View {
     GeometryReader { proxy in canvasRoot(proxy: proxy) }
-    .ignoresSafeArea()   // use the true window bounds so the card and dock share the same extent
+    .ignoresSafeArea()
     .animation(Theme.Motion.accessory, value: isWorking)
     .animation(Theme.Motion.accessory, value: store.isHistoryOpen)
-    .animation(Theme.Motion.accessory, value: store.isSettingsOpen)
     .animation(Theme.Motion.accessory, value: store.compiledDraft)
-    .animation(Theme.Motion.accessory, value: showAgent)
     .onChange(of: isWorking) { _, working in
       NotificationCenter.default.post(name: .composerBusyChanged, object: nil, userInfo: ["busy": working])
-    }
-    .onChange(of: showAgent) { _, _ in invalidatePanelShadow() }
-  }
-
-  /// The borderless panel's drop shadow is cast by AppKit from the window's opaque alpha. When the
-  /// card resizes to make room for the dock, AppKit doesn't recompute it on its own, leaving ghost
-  /// "line fragments" of the old edge. Re-invalidate across the resize animation so the shadow
-  /// tracks the new card + dock shapes cleanly.
-  private func invalidatePanelShadow() {
-    let window = NSApp.windows.first { $0 is FloatingPanel }
-    for delay in [0.0, 0.12, 0.24, 0.36, 0.5] {
-      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { window?.invalidateShadow() }
     }
   }
 
   @ViewBuilder
   private func canvasRoot(proxy: GeometryProxy) -> some View {
-    // When the agent dock is open the card yields a right gutter so the dock floats beside it
-    // (like the rail/toolbar), rather than covering the board.
-    let agentInset = showAgent ? Theme.Size.agentGutter : 0
-    let inner = CGSize(width: max(proxy.size.width - Theme.Size.railGutter - agentInset, 1),
-                       height: max(proxy.size.height - Theme.Size.toolbarGutter, 1))
+    let layout = CanvasSurfaceLayout(windowSize: proxy.size)
+    let inner = layout.cardSize
+    let toolbarCenterX = workspaceLayout.toolbarCenterX > 0
+      ? workspaceLayout.toolbarCenterX
+      : proxy.size.width / 2
     ZStack(alignment: .topLeading) {
-      // The glass card — the "main window". Inset from the left (rail gutter) and top
-      // (toolbar gutter) so the rails float outside it, and from the right when the dock is open.
       ZStack(alignment: .topLeading) {
         ComposerPanelBackground()
         boardContent(viewportSize: inner)
-        settingsOverlay
         compiledOverlay
         toastView
       }
       .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
-      .padding(.leading, Theme.Size.railGutter)
-      .padding(.top, Theme.Size.toolbarGutter)
-      .padding(.trailing, agentInset)
+      .frame(width: layout.cardSize.width, height: layout.cardSize.height, alignment: .topLeading)
+      .offset(x: layout.cardOrigin.x, y: layout.cardOrigin.y)
 
       // Active-card overlays resolve through screen → window space, so they live in
       // full-window coordinates and keep working while the board itself is transformed.
@@ -101,11 +85,16 @@ struct ComposerCanvas: View {
 
       // Rails float in the gutters; the history list opens over the card.
       historyListOverlay(in: proxy.size)
-      sidebar
-      toolbar(fit: inner)
-      agentDock
+      sidebar(in: proxy.size)
+      toolbar(
+        fit: inner,
+        windowSize: proxy.size,
+        cardSize: layout.cardSize,
+        workspaceCenterX: toolbarCenterX
+      )
       commandBridge
     }
+    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
     .onAppear { lastViewportSize = inner; enterEditingForEntry(); CanvasBridge.shared.register(board) }
     .onChange(of: inner) { _, value in lastViewportSize = value }
   }
@@ -134,6 +123,14 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerPrevDump)) { _ in handlePrevDump() }
       .onReceive(NotificationCenter.default.publisher(for: .composerNextDump)) { _ in handleNextDump() }
       .onReceive(NotificationCenter.default.publisher(for: .composerNewDump)) { _ in handleNewDump() }
+      .onReceive(NotificationCenter.default.publisher(for: .composerDockDismissed)) { note in
+        guard let rawKind = note.userInfo?["kind"] as? String,
+              let kind = ComposerDockKind(rawValue: rawKind) else { return }
+        switch kind {
+        case .agent: showAgent = false
+        case .settings: store.isSettingsOpen = false
+        }
+      }
   }
 
   private var boardEditCommandBridge: some View {
@@ -181,8 +178,24 @@ struct ComposerCanvas: View {
         if let index = note.userInfo?["index"] as? Int { selectTool(index: index) }
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerToggleAgent)) { _ in
-        showAgent.toggle()
+        toggleAgent()
       }
+  }
+
+  /// The agent and Settings share the single auxiliary-panel slot.
+  private func toggleAgent() {
+    if showAgent {
+      showAgent = false
+      NotificationCenter.default.post(name: .composerDismissDock, object: nil)
+    } else {
+      showAgent = true
+      store.isSettingsOpen = false
+      NotificationCenter.default.post(
+        name: .composerPresentDock,
+        object: agent,
+        userInfo: ["kind": ComposerDockKind.agent.rawValue]
+      )
+    }
   }
 
   private func selectTool(index: Int) {
@@ -368,46 +381,46 @@ struct ComposerCanvas: View {
 
   // MARK: Rails + overlays
 
-  private var sidebar: some View {
+  private func sidebar(in windowSize: CGSize) -> some View {
     Sidebar(
       store: store,
       onNew: { newBoard() },
-      onHistory: { store.isHistoryOpen.toggle(); if store.isHistoryOpen { store.isSettingsOpen = false } },
+      onHistory: {
+        store.isHistoryOpen.toggle()
+        if store.isHistoryOpen { closeAuxiliaryPanel() }
+      },
       onSettings: { openSettings() }
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-    .padding(.leading, 16)
+    .padding(.leading, Theme.Size.railInset(in: windowSize.width))
   }
 
-  private func toolbar(fit innerSize: CGSize) -> some View {
+  private func toolbar(
+    fit innerSize: CGSize,
+    windowSize: CGSize,
+    cardSize: CGSize,
+    workspaceCenterX: CGFloat
+  ) -> some View {
     CanvasToolbar(
       tool: $tool,
       zoomPercent: Int((effectiveScale * 100).rounded()),
       groundedFolder: groundingPath.isEmpty ? nil : URL(fileURLWithPath: groundingPath).lastPathComponent,
       onFolder: { agent.chooseDirectory() },
       agentOpen: showAgent,
-      onAgent: { showAgent.toggle() },
+      onAgent: { toggleAgent() },
       onTidy: { tidyBoard(in: innerSize) },
       onZoomOut: { zoom(0.8, anchoredAt: zoomAnchor) },
       onZoomIn: { zoom(1.25, anchoredAt: zoomAnchor) },
       onZoomReset: { withAnimation(Theme.Motion.accessory) { scale = 1 } },
       onFit: { withAnimation(Theme.Motion.accessory) { fitBoard(in: innerSize) } }
     )
-    // Centered in the window and fixed there — opening the dock must not shift it.
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .padding(.top, 12)
-  }
-
-  @ViewBuilder
-  private var agentDock: some View {
-    if showAgent {
-      AgentDock(agent: agent, onClose: { showAgent = false })
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        // Match the card's frame: same top inset, flush to the window bottom — equal height.
-        .padding(.top, Theme.Size.toolbarGutter)
-        .padding(.trailing, 16)
-        .transition(.move(edge: .trailing).combined(with: .opacity))
-    }
+    // The board's host window narrows for Agent/Settings, but the toolbar belongs to the complete
+    // composed workspace. `workspaceCenterX` is supplied by the AppKit controller in board-window
+    // coordinates, so the controls remain centered across both panels.
+    .frame(width: cardSize.width, alignment: .top)
+    .frame(maxHeight: .infinity, alignment: .top)
+    .offset(x: workspaceCenterX - cardSize.width / 2)
+    .padding(.top, Theme.Size.toolbarInset(in: windowSize.height))
   }
 
   @ViewBuilder
@@ -422,17 +435,9 @@ struct ComposerCanvas: View {
           onNew: { newBoard() }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .padding(.leading, Theme.Size.railGutter + 8)
+        .padding(.leading, Theme.Size.railGutter(in: size.width) + size.width * 0.004)
       }
       .transition(.opacity)
-    }
-  }
-
-  @ViewBuilder
-  private var settingsOverlay: some View {
-    if store.isSettingsOpen {
-      SettingsOverlay(onClose: { store.isSettingsOpen = false })
-        .transition(.opacity)
     }
   }
 
@@ -638,7 +643,20 @@ struct ComposerCanvas: View {
   private func openSettings() {
     store.isHistoryOpen = false
     store.compiledDraft = nil
+    showAgent = false
     store.isSettingsOpen = true
+    NotificationCenter.default.post(
+      name: .composerPresentDock,
+      object: nil,
+      userInfo: ["kind": ComposerDockKind.settings.rawValue]
+    )
+  }
+
+  private func closeAuxiliaryPanel() {
+    guard showAgent || store.isSettingsOpen else { return }
+    showAgent = false
+    store.isSettingsOpen = false
+    NotificationCenter.default.post(name: .composerDismissDock, object: nil)
   }
 
   // MARK: Compile + copy + refine
@@ -733,8 +751,8 @@ struct ComposerCanvas: View {
   }
 
   private func preferredEngine() -> HeadlessEngine? {
-    if EnginePreferences.isEnabled(.claude) { return .claude }
-    if EnginePreferences.isEnabled(.codex) { return .codex }
+    if EnginePreferences.isEnabled(.claude), engineCapabilities.isAvailable(.claude) { return .claude }
+    if EnginePreferences.isEnabled(.codex), engineCapabilities.isAvailable(.codex) { return .codex }
     return nil
   }
 
@@ -1242,6 +1260,25 @@ private struct ActiveCardOverlays: View {
 private struct DragSegment: Equatable {
   var start: CGPoint
   var end: CGPoint
+}
+
+/// The board card is derived from its own AppKit window's current viewport. The auxiliary dock is
+/// deliberately absent here: it is a sibling window managed by `PanelController`.
+private struct CanvasSurfaceLayout {
+  let cardSize: CGSize
+  let cardOrigin: CGPoint
+
+  init(windowSize: CGSize) {
+    let windowWidth = max(windowSize.width, 0)
+    let windowHeight = max(windowSize.height, 0)
+    let rail = Theme.Size.railGutter(in: windowWidth)
+    let toolbar = Theme.Size.toolbarGutter(in: windowHeight)
+    let cardWidth = max(windowWidth - rail, 1)
+    let cardHeight = max(windowHeight - toolbar, 1)
+
+    cardSize = CGSize(width: cardWidth, height: cardHeight)
+    cardOrigin = CGPoint(x: rail, y: toolbar)
+  }
 }
 
 /// Live rubber-band preview shown while dragging out a shape/line with a placement tool.

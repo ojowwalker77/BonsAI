@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 
 /// One text card on the board, with Excalidraw-style interaction:
@@ -63,9 +64,9 @@ struct BoardCardView: View {
       .offset(x: liveFrame.minX, y: liveFrame.minY)
       .onHover { hovering = $0 }
       .onChange(of: interaction.text) { oldValue, newValue in
-        if !isTextElement {
-          interaction.cachePlainText(newValue)
-        }
+        // FreeWriteEditor writes serialized text here. Keeping the plain-text cache current lets
+        // static cards and persistence read it without materializing an NSTextView controller.
+        interaction.cachePlainText(newValue)
         board.noteEdited(cardID: card.id, previousText: oldValue)
       }
   }
@@ -594,9 +595,12 @@ private struct FreehandShape: View {
 
 private struct ImageObjectPlaceholder: View {
   let path: String?
+  @State private var image: NSImage?
+  @State private var requestedPath: String?
 
   var body: some View {
-    if let path, let image = CanvasImageCache.shared.image(path: path) {
+    Group {
+      if let image {
       Image(nsImage: image)
         .resizable()
         .scaledToFill()
@@ -604,41 +608,93 @@ private struct ImageObjectPlaceholder: View {
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
           .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
         .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-    } else {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(Color.black.opacity(0.16))
-        .overlay {
-          VStack(spacing: 8) {
-            Image(systemName: "photo")
-              .font(.system(size: 24, weight: .medium))
-            Text(path.map { ($0 as NSString).lastPathComponent } ?? "Image")
-              .font(.caption.weight(.medium))
-              .lineLimit(1)
+      } else {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .fill(Color.black.opacity(0.16))
+          .overlay {
+            VStack(spacing: 8) {
+              Image(systemName: "photo")
+                .font(.system(size: 24, weight: .medium))
+              Text(path.map { ($0 as NSString).lastPathComponent } ?? "Image")
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+            }
+            .foregroundStyle(Color.white.opacity(0.72))
+            .padding(10)
           }
-          .foregroundStyle(Color.white.opacity(0.72))
-          .padding(10)
-        }
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .strokeBorder(Color.white.opacity(0.26), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+          .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .strokeBorder(Color.white.opacity(0.26), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
+          .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+      }
+    }
+    .onAppear { loadImage(for: path) }
+    .onChange(of: path) { _, nextPath in loadImage(for: nextPath) }
+  }
+
+  private func loadImage(for path: String?) {
+    requestedPath = path
+    image = nil
+    guard let path else { return }
+    CanvasImageCache.shared.load(path: path) { loaded in
+      // Culling/reuse can change this view's card before an asynchronous decode returns.
+      guard requestedPath == path else { return }
+      image = loaded
     }
   }
 }
 
+/// A bounded, asynchronous thumbnail cache. The previous cache kept the full source image for
+/// every visited card and decoded it synchronously from `body`, which made panning into a board
+/// of large screenshots both a main-thread hitch and an unbounded memory grower.
 private final class CanvasImageCache {
   static let shared = CanvasImageCache()
   private let cache = NSCache<NSString, NSImage>()
+  private let decodeQueue = DispatchQueue(label: "dev.jow.Composer.canvas-image-decode", qos: .userInitiated)
+  private var pending: [String: [(NSImage?) -> Void]] = [:]
+
+  private static let maximumPixelDimension = 1_536
 
   private init() {
-    cache.countLimit = 120
+    cache.countLimit = 48
+    cache.totalCostLimit = 48 * 1_024 * 1_024
   }
 
-  func image(path: String) -> NSImage? {
+  func load(path: String, completion: @escaping (NSImage?) -> Void) {
     let key = path as NSString
-    if let cached = cache.object(forKey: key) { return cached }
-    guard let image = NSImage(contentsOfFile: path) else { return nil }
-    cache.setObject(image, forKey: key)
-    return image
+    if let cached = cache.object(forKey: key) {
+      completion(cached)
+      return
+    }
+    if pending[path] != nil {
+      pending[path, default: []].append(completion)
+      return
+    }
+    pending[path] = [completion]
+    decodeQueue.async { [weak self] in
+      let decoded = Self.decodeThumbnail(at: path)
+      DispatchQueue.main.async {
+        guard let self else { return }
+        if let image = decoded?.image {
+          self.cache.setObject(image, forKey: key, cost: decoded?.cost ?? 0)
+        }
+        let callbacks = self.pending.removeValue(forKey: path) ?? []
+        callbacks.forEach { $0(decoded?.image) }
+      }
+    }
+  }
+
+  private static func decodeThumbnail(at path: String) -> (image: NSImage, cost: Int)? {
+    let url = URL(fileURLWithPath: path)
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    let options: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceThumbnailMaxPixelSize: maximumPixelDimension,
+      kCGImageSourceShouldCacheImmediately: true,
+    ]
+    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+    let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    return (image, cgImage.bytesPerRow * cgImage.height)
   }
 }
 

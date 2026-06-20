@@ -8,14 +8,16 @@ struct SelectionActionBar: View {
 
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
   @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
+  @ObservedObject private var capabilities = EngineCapabilityStore.shared
   @State private var shown = false
 
   private var enabledEngines: [HeadlessEngine] {
     HeadlessEngine.allCases.filter { engine in
-      switch engine {
+      let enabled = switch engine {
       case .claude: claudeEnabled
       case .codex: codexEnabled
       }
+      return enabled && capabilities.isAvailable(engine)
     }
   }
 

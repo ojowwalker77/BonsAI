@@ -106,9 +106,13 @@ struct AppSearchPanel: View {
       searchRow
       Rectangle().fill(Theme.Palette.separator).frame(height: 1)
       content
+        // A stable floor so idle / loading / no-results never collapse to a thin sliver, and the
+        // panel resize between states animates instead of snapping. Every connector feels the same.
+        .frame(minHeight: 60, alignment: .top)
       footer
     }
     .frame(width: 360)
+    .animation(Theme.Motion.accessory, value: state.results.isEmpty)
     .composerPopupSurface()
   }
 

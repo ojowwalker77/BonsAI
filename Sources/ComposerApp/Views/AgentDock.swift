@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// The in-canvas chat with the agent that lives on the board. You talk; it edits the canvas as it
-/// goes (via the canvas MCP). Right-docked, dark glass, matches the panel aesthetic.
+/// The companion chat window for the canvas. You talk; it edits the board via the canvas MCP while
+/// remaining a distinct, right-docked glass panel.
 struct AgentDock: View {
   @ObservedObject var agent: CanvasAgent
+  /// Sized by the canvas relative to the window so the dock adapts to the display.
+  var width: CGFloat
   var onClose: () -> Void
   @State private var draft = ""
   @FocusState private var inputFocused: Bool
@@ -20,7 +22,7 @@ struct AgentDock: View {
       transcript
       inputBar
     }
-    .frame(width: Theme.Size.agentDockWidth)
+    .frame(width: width)
     .frame(maxHeight: .infinity)
     // Identical glass to the main window — same frosted treatment, tint, and corner radius — so the
     // dock reads as a second panel floating beside the card. The panel's own drop shadow grounds it.

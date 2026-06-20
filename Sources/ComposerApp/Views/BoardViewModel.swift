@@ -11,11 +11,14 @@ import AppKit
 @MainActor
 final class CardInteraction: ObservableObject, Identifiable {
   let id: UUID
-  let mentions = MentionState()
-  let appSearch = AppSearchState()
-  let controller = EditorController()
-  let lint = LintState()
-  let refine = RefineState()
+  // A visible non-editing card only needs its serialized text and drag preview. Keep the
+  // AppKit/editor support graph lazy so panning across a large board does not allocate an
+  // NSTextView controller, linter, popover state, and connector search state for every card.
+  lazy var mentions = MentionState()
+  lazy var appSearch = AppSearchState()
+  lazy var controller = EditorController()
+  lazy var lint = LintState()
+  lazy var refine = RefineState()
   private var plainTextCache: String
   private var attributedCache: NSAttributedString?
 
@@ -34,9 +37,11 @@ final class CardInteraction: ObservableObject, Identifiable {
   }
 
   /// Self-contained plain text (mention tokens serialized back to `@name`). Falls back to
-  /// the last captured editor value while the heavy AppKit editor is unmounted.
+  /// the last captured editor value while the heavy AppKit editor is unmounted. `text` is kept
+  /// in serialized form while editing, and `captureEditorState()` refreshes this cache before an
+  /// editor leaves the view tree, so reading a static card never needs to instantiate its editor.
   var plainText: String {
-    controller.plainTextIfLoaded ?? plainTextCache
+    plainTextCache
   }
 
   var attributedSnapshot: NSAttributedString? { attributedCache }
@@ -45,7 +50,6 @@ final class CardInteraction: ObservableObject, Identifiable {
     if let snapshot = controller.attributedSnapshot {
       attributedCache = snapshot
       plainTextCache = snapshot.composerPlainText
-      text = snapshot.string
       count = snapshot.string.count
     } else if let plain = controller.plainTextIfLoaded {
       plainTextCache = plain
@@ -54,7 +58,6 @@ final class CardInteraction: ObservableObject, Identifiable {
 
   func cachePlainText(_ value: String) {
     plainTextCache = value
-    count = value.count
   }
 }
 
@@ -122,6 +125,11 @@ final class BoardViewModel: ObservableObject {
     let made = CardInteraction(seed)
     interactions[id] = made
     return made
+  }
+
+  /// Reads the most recent text without creating a runtime/editor bundle for an off-screen card.
+  func plainText(for card: CardState) -> String {
+    interactions[card.id]?.plainText ?? card.text
   }
 
   var selectedInteraction: CardInteraction? { selectedCardID.flatMap { interactions[$0] } }
@@ -212,7 +220,9 @@ final class BoardViewModel: ObservableObject {
     for i in cards.indices where cards[i].elementKind == .text {
       cards[i].h = Double(Self.fittedTextHeight(cards[i].text, width: cards[i].w))
     }
-    interactions = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, CardInteraction($0)) })
+    // Runtime bundles are created lazily as cards become visible or enter edit mode. A board can
+    // contain hundreds of cards, but only a small cullable subset should carry editor state.
+    interactions = [:]
     nextZ = (cards.map(\.z).max() ?? 0) + 1
     let restored = currentBoardID.flatMap { undoCache[$0] }
     undoStack = restored?.undo ?? []
@@ -232,12 +242,14 @@ final class BoardViewModel: ObservableObject {
   private func snapshot() -> [CardState] {
     cards.map { card in
       var copy = card
-      copy.text = interactions[card.id]?.plainText ?? card.text
+      copy.text = plainText(for: card)
       return copy
     }
   }
 
-  func scheduleSave() { store.scheduleUpdate(cards: snapshot()) }
+  /// Build the persistence snapshot only when the debounce actually fires. This avoids cloning
+  /// the entire board on every keystroke and keeps cancelled saves from retaining stale snapshots.
+  func scheduleSave() { store.scheduleUpdate { [weak self] in self?.snapshot() ?? [] } }
   func flushSave() { store.flush(cards: snapshot()) }
 
   private func historySnapshot(cards overrideCards: [CardState]? = nil) -> HistorySnapshot {
@@ -260,7 +272,7 @@ final class BoardViewModel: ObservableObject {
   private func restore(_ value: HistorySnapshot) {
     isRestoringHistory = true
     cards = value.cards
-    interactions = Dictionary(uniqueKeysWithValues: value.cards.map { ($0.id, CardInteraction($0)) })
+    interactions = [:]
     selectedCardIDs = value.selectedCardIDs.intersection(Set(value.cards.map(\.id)))
     primarySelectedCardID = selectedCardIDs.contains(value.primarySelectedCardID ?? UUID())
       ? value.primarySelectedCardID
@@ -815,7 +827,7 @@ final class BoardViewModel: ObservableObject {
     let selected = cards.filter { selectedCardIDs.contains($0.id) }
     return selected.map { card in
       var copy = card
-      copy.text = interactions[card.id]?.plainText ?? card.text
+      copy.text = plainText(for: card)
       return copy
     }
   }
@@ -1088,7 +1100,7 @@ final class BoardViewModel: ObservableObject {
   func lintContext(excluding id: UUID) -> String? {
     let others = readingOrder().filter { $0.id != id }
       .compactMap { card -> String? in
-        let text = (interactions[card.id]?.plainText ?? card.text).trimmed
+        let text = plainText(for: card).trimmed
         return text.isEmpty ? nil : text
       }
     guard !others.isEmpty else { return nil }
@@ -1108,14 +1120,14 @@ final class BoardViewModel: ObservableObject {
   func joinedPlainText() -> String {
     readingOrder()
       .compactMap { card -> String? in
-        let text = (interactions[card.id]?.plainText ?? card.text).trimmed
+        let text = plainText(for: card).trimmed
         return text.isEmpty ? nil : text
       }
       .joined(separator: "\n\n")
   }
 
   var hasContent: Bool {
-    cards.contains { !(interactions[$0.id]?.plainText ?? $0.text).trimmed.isEmpty }
+    cards.contains { !plainText(for: $0).trimmed.isEmpty }
   }
 
   // MARK: Reading order
