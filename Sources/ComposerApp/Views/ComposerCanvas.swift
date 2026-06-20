@@ -14,6 +14,9 @@ struct ComposerCanvas: View {
 
   @State private var tool: CanvasTool = .select
   @State private var isWorking = false
+  /// Scoped to the toolbar Copy button so only it shows a spinner while its `claude -p` describe
+  /// runs (`isWorking` also covers compile/refine, which shouldn't spin the Copy glyph).
+  @State private var isDescribing = false
   @State private var toast: Toast?
   @State private var lastViewportSize: CGSize = .zero
   @State private var selectionRect: CGRect?
@@ -408,7 +411,8 @@ struct ComposerCanvas: View {
     CanvasToolbar(
       tool: $tool,
       zoomPercent: Int((effectiveScale * 100).rounded()),
-      onTidy: { tidyBoard(in: innerSize) },
+      onCopy: { describeBoard() },
+      isCopying: isDescribing,
       onZoomOut: { zoom(0.8, anchoredAt: zoomAnchor) },
       onZoomIn: { zoom(1.25, anchoredAt: zoomAnchor) },
       onZoomReset: { withAnimation(Theme.Motion.accessory) { scale = 1 } },
@@ -558,12 +562,6 @@ struct ComposerCanvas: View {
     pan = CGSize(width: margin - CGFloat(minX) * s, height: margin - CGFloat(minY) * s)
   }
 
-  /// Auto-arrange the whole board into a clean layered layout, then frame the result.
-  private func tidyBoard(in size: CGSize) {
-    board.deselectAll()
-    board.relayout()
-    withAnimation(Theme.Motion.accessory) { fitBoard(in: size) }
-  }
 
   private func resetView() { scale = 1; pan = .zero }
 
@@ -704,6 +702,47 @@ struct ComposerCanvas: View {
       let message = connectors > 0 ? "Copied \u{00b7} \(connectors) connector\(connectors == 1 ? "" : "s") resolved" : "Copied self-contained text"
       show(Toast(text: message, symbol: "doc.on.doc.fill", tint: .accentColor))
     }
+  }
+
+  /// The toolbar Copy: snapshot the whole board state (text cards, shapes, diagrams, connections —
+  /// the same graph the canvas MCP `get_canvas` exposes), hand it to `claude -p`, and copy back a
+  /// self-contained description of everything the board holds.
+  private func describeBoard() {
+    guard !isWorking, !isDescribing else { return }
+    let graph = CanvasBridge.shared.snapshot()
+    guard !graph.nodes.isEmpty else {
+      show(Toast(text: "Add some cards to copy", symbol: "rectangle.dashed", tint: .orange))
+      return
+    }
+    guard let engine = preferredEngine() else {
+      show(Toast(text: "No engines enabled in Settings", symbol: "exclamationmark.triangle.fill", tint: .orange))
+      return
+    }
+    guard let state = Self.encodeBoardState(graph) else {
+      show(Toast(text: "Couldn\u{2019}t read the board", symbol: "exclamationmark.triangle.fill", tint: .orange))
+      return
+    }
+    isDescribing = true
+    isWorking = true
+    show(Toast(text: "Describing board\u{2026}", symbol: "doc.on.doc", tint: .accentColor))
+    Task {
+      do {
+        let description = try await service.describeBoard(state: state, engine: engine)
+        copyToClipboard(description)
+        show(Toast(text: "Copied board description", symbol: "doc.on.doc.fill", tint: .accentColor))
+      } catch {
+        show(Toast(text: error.localizedDescription, symbol: "exclamationmark.triangle.fill", tint: .orange))
+      }
+      isWorking = false
+      isDescribing = false
+    }
+  }
+
+  /// Encode the board graph as the pretty-printed JSON the describe prompt reads.
+  private static func encodeBoardState(_ graph: CanvasGraph) -> String? {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    return (try? encoder.encode(graph)).flatMap { String(data: $0, encoding: .utf8) }
   }
 
   /// Refine the active card's current selection in place.
