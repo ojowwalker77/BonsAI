@@ -2,14 +2,14 @@
 
 Releases are automated by the tag workflow
 ([`.github/workflows/release.yml`](../.github/workflows/release.yml)). Pushing a
-`v*` tag (or running the workflow manually) builds `BonsAI.app.zip` and publishes it
-with an EdDSA-signed `appcast.xml` that installed copies read to **auto-update and
-relaunch** via Sparkle.
+`v*` tag (or running the workflow manually) builds `BonsAI.app.zip`, **Developer
+ID-signs and notarizes** it, and publishes it with an EdDSA-signed `appcast.xml` that
+installed copies read to **auto-update and relaunch** via Sparkle.
 
-The app is **not** Apple code-signed or notarized — it's ad-hoc signed by the
-toolchain, so on first launch users right-click → **Open** (or clear the quarantine
-flag). Every update after that installs seamlessly, because Sparkle's own EdDSA
-signature — not Apple's — is what verifies each download.
+When the Apple signing secrets are present (see below) the app is signed + notarized, so
+it opens with a plain double-click. If they're absent the workflow still produces an
+unsigned build (and logs a warning), so the pipeline never hard-breaks. Sparkle's own
+EdDSA signature — separate from Apple's — is what verifies each auto-update download.
 
 > Contributors never deal with any of this. Local `./script/build_and_run.sh` builds
 > are unsigned and run fine; CI (`ci.yml`) only does `swift build` / `swift test`.
@@ -42,4 +42,33 @@ rm -f sparkle_private_key                     # -x silently fails if the file al
   secret named `SPARKLE_PRIVATE_KEY` (*Settings → Secrets and variables → Actions*),
   and keep that file out of git.
 
-That's the only secret the release workflow needs.
+## One-time owner setup — Apple signing & notarization
+
+Notarized releases need a paid **Apple Developer Program** membership and the repository
+secrets below (*Settings → Secrets and variables → Actions*). None of the values are
+committed; the signing/notarization logic lives in
+[`script/notarize.sh`](../script/notarize.sh).
+
+| Secret | What it is |
+| --- | --- |
+| `MACOS_CERT_P12_BASE64` | base64 of your *Developer ID Application* certificate exported as a `.p12` (certificate **and** private key) |
+| `MACOS_CERT_PASSWORD` | the password you set when exporting that `.p12` |
+| `APPLE_ID` | the Apple ID used for notarization |
+| `APPLE_TEAM_ID` | your 10-character Apple Team ID |
+| `APPLE_APP_PASSWORD` | an app-specific password for that Apple ID ([appleid.apple.com](https://appleid.apple.com) → App-Specific Passwords) |
+
+In **Keychain Access → login → My Certificates**, export the `Developer ID
+Application: …` identity as a `.p12` (this bundles the certificate **and** its private
+key — not the bare cert), then:
+
+```bash
+base64 -i DeveloperID.p12 | gh secret set MACOS_CERT_P12_BASE64 --repo <owner>/<repo>
+```
+
+To sign + notarize locally, store notarytool credentials once
+(`xcrun notarytool store-credentials "BonsAI-notary" --apple-id … --team-id … --password …`)
+and run [`./script/notarize.sh`](../script/notarize.sh).
+
+Without these, releases fall back to unsigned (Sparkle still updates fine). With them —
+plus the Sparkle key above — every tagged release ships signed, notarized, and
+auto-updating.

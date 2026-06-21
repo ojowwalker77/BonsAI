@@ -37,17 +37,58 @@ jobs:
       - name: Swift toolchain
         run: swift --version
 
-      # Reuses the same staging path developers run locally, minus the launch. BONSAI_VERSION pins the
-      # bundle's CFBundleShortVersionString/CFBundleVersion to the tag (what Sparkle compares).
-      - name: Build & stage BonsAI.app
-        run: BONSAI_VERSION="${TAG#v}" ./script/build_and_run.sh bundle
-
-      - name: Package the app bundle
+      - name: Detect Apple signing
+        id: signing
+        env:
+          CERT: ${{ secrets.MACOS_CERT_P12_BASE64 }}
         run: |
-          ditto -c -k --sequesterRsrc --keepParent dist/BonsAI.app dist/BonsAI.app.zip
-          shasum -a 256 dist/BonsAI.app.zip | tee dist/BonsAI.app.zip.sha256
+          if [ -n "$CERT" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Apple signing secrets absent — this release will be UNSIGNED (notarization skipped)."
+          fi
+
+      - name: Import Developer ID certificate
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PW="kc-${{ github.run_id }}"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN_PATH" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      # Reuses the same staging path developers run locally, minus the launch. BONSAI_VERSION pins the
+      # bundle's CFBundleShortVersionString/CFBundleVersion to the tag (what Sparkle compares). When
+      # signing is enabled, notarize.sh also Developer ID-signs (incl. Sparkle's helpers), notarizes,
+      # staples, and packages the final BonsAI.app.zip + .sha256.
+      - name: Build, sign & notarize BonsAI.app
+        env:
+          SIGNING_ENABLED: ${{ steps.signing.outputs.enabled }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          export BONSAI_VERSION="${TAG#v}"
+          if [ "$SIGNING_ENABLED" = "true" ]; then
+            NOTARY_PROFILE= ./script/notarize.sh
+          else
+            ./script/build_and_run.sh bundle
+            ditto -c -k --sequesterRsrc --keepParent dist/BonsAI.app dist/BonsAI.app.zip
+            shasum -a 256 dist/BonsAI.app.zip | tee dist/BonsAI.app.zip.sha256
+          fi
 
       - name: Assemble release notes
+        env:
+          SIGNING_ENABLED: ${{ steps.signing.outputs.enabled }}
         run: |
           version="${TAG#v}"
           # Lift the matching section out of the changelog (everything between this version's heading
@@ -58,7 +99,14 @@ jobs:
             grab { print }
           ' CHANGELOG.md | sed -e '/./,$!d' > dist/RELEASE_NOTES.md
           if ! grep -q '[^[:space:]]' dist/RELEASE_NOTES.md; then
-            cat > dist/RELEASE_NOTES.md <<EOF
+            if [ "$SIGNING_ENABLED" = "true" ]; then
+              cat > dist/RELEASE_NOTES.md <<EOF
+          Signed & notarized macOS build of **BonsAI** ($TAG). Download, unzip, and open — no right-click or quarantine workaround needed.
+
+          BonsAI updates itself automatically (also **BonsAI ▸ Check for Updates…**).
+          EOF
+            else
+              cat > dist/RELEASE_NOTES.md <<EOF
           Unsigned macOS build of **BonsAI** ($TAG).
 
           This build is not notarized. On first launch, right-click the app and choose **Open**, or clear the quarantine flag:
@@ -69,6 +117,7 @@ jobs:
 
           After that, BonsAI updates itself automatically (also **BonsAI ▸ Check for Updates…**).
           EOF
+            fi
           fi
 
       # Build the EdDSA-signed appcast Sparkle reads. sign_update emits the ready-to-embed
