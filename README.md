@@ -27,16 +27,22 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Installing a release
 
-Each `v*` tag publishes a signed, **notarized** `BonsAI.app` to **Releases** — download
-it, drag it into **Applications**, and open it. No quarantine workaround needed.
+Each `v*` tag publishes a zipped `BonsAI.app` to **Releases**. The app isn't notarized,
+so macOS warns you on first launch — either right-click the app and choose **Open**, or
+clear the quarantine flag:
 
-BonsAI keeps itself current: it checks GitHub for new releases on launch and once a
-day, then downloads and installs them in place. You can check any time from **BonsAI ▸
-Check for Updates…** (also under **Settings ▸ About**), or turn off automatic checks
+```bash
+xattr -dr com.apple.quarantine /Applications/BonsAI.app
+```
+
+That's a **one-time** step. After it's installed, BonsAI keeps itself current: it checks
+GitHub for new releases on launch and once a day, then downloads, installs, and
+relaunches in place — no quarantine prompt on updates. You can also check any time from
+**BonsAI ▸ Check for Updates…** (or **Settings ▸ About**), and turn off automatic checks
 there.
 
-Releases are signed and published automatically by the tag workflow; the maintainer
-setup lives in [docs/releasing.md](docs/releasing.md).
+Maintaining the release feed (the one Sparkle key it needs) is documented in
+[docs/releasing.md](docs/releasing.md).
 
 ## Connectors
 

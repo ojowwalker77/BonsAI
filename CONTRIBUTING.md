@@ -130,9 +130,9 @@ dependency — [Sparkle](https://sparkle-project.org) (auto-update) — is fetch
 SwiftPM and bundled into the `.app` by `build_and_run.sh`. See the
 [README](README.md) for the full set of requirements.
 
-Releases are fully automated — pushing a `v*` tag signs, notarizes, and publishes
-the build. Contributors never touch signing; that's the maintainer-only flow in
-[docs/releasing.md](docs/releasing.md).
+Releases are fully automated — pushing a `v*` tag builds and publishes the app with a
+Sparkle auto-update feed. Contributors never touch the release flow; it's documented
+for maintainers in [docs/releasing.md](docs/releasing.md).
 
 ## Opening a pull request
 
