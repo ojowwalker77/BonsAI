@@ -27,15 +27,8 @@ fi
 
 echo "==> build & stage $APP"
 ./script/build_and_run.sh bundle
-
-# build_and_run.sh stages SwiftPM's resource bundle at the .app root; move it to
-# the canonical Contents/Resources so codesign seals it as a normal resource
-# (Bundle.module checks Bundle.main.resourceURL first, so the app still finds it).
-if [ -d "$APP/Composer_ComposerApp.bundle" ]; then
-  mkdir -p "$APP/Contents/Resources"
-  rm -rf "$APP/Contents/Resources/Composer_ComposerApp.bundle"
-  mv "$APP/Composer_ComposerApp.bundle" "$APP/Contents/Resources/"
-fi
+# build_and_run.sh already stages the SwiftPM resource bundle in Contents/Resources (the codesign-clean
+# location Bundle.appResources resolves), so there is nothing to relocate here before signing.
 
 echo "==> codesign with hardened runtime ($SIGN_IDENTITY)"
 # Sparkle ships its helpers with its own signature (no secure timestamp, not our
@@ -74,3 +67,9 @@ echo "==> verify Gatekeeper acceptance"
 xcrun stapler validate "$APP"
 spctl -a -vvv --type exec "$APP" || true
 echo "✓ notarized + stapled: $ZIP"
+
+# Package the notarized, stapled app into a drag-to-install dmg too (the human download), then
+# notarize + staple the dmg itself so it opens without a Gatekeeper prompt. The zip above stays the
+# Sparkle appcast enclosure (the proven auto-update path); the dmg is purely for first-time installs.
+echo "==> build drag-to-install dmg"
+NOTARY_PROFILE="${NOTARY_PROFILE:-}" ./script/make_dmg.sh

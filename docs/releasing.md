@@ -2,9 +2,11 @@
 
 Releases are automated by the tag workflow
 ([`.github/workflows/release.yml`](../.github/workflows/release.yml)). Pushing a
-`v*` tag (or running the workflow manually) builds `BonsAI.app.zip`, **Developer
-ID-signs and notarizes** it, and publishes it with an EdDSA-signed `appcast.xml` that
-installed copies read to **auto-update and relaunch** via Sparkle.
+`v*` tag (or running the workflow manually) builds the app, **Developer ID-signs and
+notarizes** it, and publishes two assets: a drag-to-install `BonsAI.dmg` (the
+recommended first install — open it and drag **BonsAI** onto **Applications**) and a
+zipped `BonsAI.app`, alongside an EdDSA-signed `appcast.xml`. Installed copies read the
+appcast (whose enclosure is the `.zip`) to **auto-update and relaunch** via Sparkle.
 
 When the Apple signing secrets are present (see below) the app is signed + notarized, so
 it opens with a plain double-click. If they're absent the workflow still produces an

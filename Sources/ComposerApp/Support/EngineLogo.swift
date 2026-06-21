@@ -49,8 +49,8 @@ struct AgentEngineIcon: View {
 
 private extension NSImage {
   static func brandLogo(named name: String) -> NSImage? {
-    guard let url = Bundle.module.url(forResource: name, withExtension: "svg")
-      ?? Bundle.module.url(forResource: name, withExtension: "svg", subdirectory: "Logos") else {
+    guard let url = Bundle.appResources.url(forResource: name, withExtension: "svg")
+      ?? Bundle.appResources.url(forResource: name, withExtension: "svg", subdirectory: "Logos") else {
       return nil
     }
     return NSImage(contentsOf: url)

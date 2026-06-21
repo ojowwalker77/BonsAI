@@ -13,7 +13,7 @@ enum WelcomeBoard {
   /// on-disk copy. Returns nil if the bundled resource is missing/unreadable — the caller then
   /// just falls back to a blank first board.
   static func seedCards() -> [CardState]? {
-    guard let url = Bundle.module.url(forResource: "WelcomeBoard", withExtension: "json"),
+    guard let url = Bundle.appResources.url(forResource: "WelcomeBoard", withExtension: "json"),
           let data = try? Data(contentsOf: url),
           let cards = try? JSONDecoder().decode([CardState].self, from: data),
           !cards.isEmpty
@@ -30,7 +30,7 @@ enum WelcomeBoard {
 
   /// Copy the bundled mascot into Attachments (idempotent) and return its on-disk path.
   private static func installMascot() -> String? {
-    guard let source = Bundle.module.url(forResource: "welcome-companion", withExtension: "png") else { return nil }
+    guard let source = Bundle.appResources.url(forResource: "welcome-companion", withExtension: "png") else { return nil }
     let directory = attachmentsDirectory
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let destination = directory.appendingPathComponent(mascotFileName)

@@ -21,6 +21,24 @@ heading only when you have an entry for it; delete this comment when you do.
 ### Removed    — things taken out
 -->
 
+## [1.0.2] - 2026-06-21
+
+### Fixed
+- **Downloaded builds crashed instantly on launch.** The signed release staged the
+  SwiftPM resource bundle into `Contents/Resources`, but the generated `Bundle.module`
+  accessor only looks at the app root, so the first brand-logo render hit a `fatalError`
+  ("could not load resource bundle") and the app quit unexpectedly. Resources are now
+  resolved through a crash-proof `Bundle.appResources` lookup that searches every sane
+  location and degrades to a placeholder instead of trapping. Local builds now stage the
+  bundle in the same `Contents/Resources` layout the release ships, so this can't drift
+  again.
+
+### Added
+- **Drag-to-install `BonsAI.dmg`.** Releases now ship a notarized disk image with a
+  **BonsAI → Applications** layout, so installing is the familiar drag onto the
+  Applications folder (which also moves the app out of Downloads and avoids macOS App
+  Translocation). The Sparkle auto-update path still uses the zipped app.
+
 ## [1.0.1] - 2026-06-21
 
 ### Added

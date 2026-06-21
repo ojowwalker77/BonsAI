@@ -79,11 +79,15 @@ jobs:
         run: |
           export BONSAI_VERSION="${TAG#v}"
           if [ "$SIGNING_ENABLED" = "true" ]; then
+            # notarize.sh signs + notarizes the app (→ BonsAI.app.zip for Sparkle) and the
+            # drag-to-install BonsAI.dmg.
             NOTARY_PROFILE= ./script/notarize.sh
           else
             ./script/build_and_run.sh bundle
             ditto -c -k --sequesterRsrc --keepParent dist/BonsAI.app dist/BonsAI.app.zip
             shasum -a 256 dist/BonsAI.app.zip | tee dist/BonsAI.app.zip.sha256
+            # Still ship a drag-to-install dmg; it just isn't notarized in this fallback path.
+            DMG_NOTARIZE=false ./script/make_dmg.sh
           fi
 
       - name: Assemble release notes
@@ -101,7 +105,7 @@ jobs:
           if ! grep -q '[^[:space:]]' dist/RELEASE_NOTES.md; then
             if [ "$SIGNING_ENABLED" = "true" ]; then
               cat > dist/RELEASE_NOTES.md <<EOF
-          Signed & notarized macOS build of **BonsAI** ($TAG). Download, unzip, and open — no right-click or quarantine workaround needed.
+          Signed & notarized macOS build of **BonsAI** ($TAG). Download **BonsAI.dmg**, then drag **BonsAI** onto **Applications** — no right-click or quarantine workaround needed.
 
           BonsAI updates itself automatically (also **BonsAI ▸ Check for Updates…**).
           EOF
@@ -164,7 +168,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets=(dist/BonsAI.app.zip dist/BonsAI.app.zip.sha256 dist/appcast.xml)
+          assets=(dist/BonsAI.dmg dist/BonsAI.dmg.sha256 dist/BonsAI.app.zip dist/BonsAI.app.zip.sha256 dist/appcast.xml)
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$REPO" --clobber "${assets[@]}"
           else

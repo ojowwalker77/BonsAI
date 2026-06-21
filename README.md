@@ -23,15 +23,17 @@ longer, it probably doesn't belong here.
 - **Apple Intelligence** enabled, for the semantic linter — without it, the
   linter quietly turns itself off and everything else works.
 
-There's nothing to install or configure: download `BonsAI.app` from
-[Releases](../../releases) and open it. Building from source or contributing?
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+There's nothing to install or configure: download `BonsAI.dmg` from
+[Releases](../../releases) and drag **BonsAI** onto **Applications**. Building from source
+or contributing? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Installing a release
 
-Each `v*` tag publishes a zipped, **Developer ID-signed and notarized** `BonsAI.app` to
-**Releases**. Download it, unzip, and open — it launches with a double-click; no
-right-click or quarantine workaround.
+Each `v*` tag publishes a **Developer ID-signed and notarized** `BonsAI.dmg` to
+**Releases**. Download it, open it, and drag **BonsAI** onto the **Applications** folder —
+it launches with a double-click; no right-click or quarantine workaround. (A zipped
+`BonsAI.app` is also attached for Sparkle's auto-update; the `.dmg` is the recommended
+first install.)
 
 BonsAI keeps itself current: it checks GitHub for new releases on launch and once a day,
 then downloads, installs, and relaunches in place. You can also check any time from
