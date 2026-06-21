@@ -125,8 +125,14 @@ be rejected.** Smaller and sharper beats bigger and busier, every time.
 swift test                       # run the test suite
 ```
 
-No external dependencies — a **Swift 6.2+ toolchain (Xcode 26)** on macOS 26 is
-all you need. See the [README](README.md) for the full set of requirements.
+A **Swift 6.2+ toolchain (Xcode 26)** on macOS 26 is all you need; the one external
+dependency — [Sparkle](https://sparkle-project.org) (auto-update) — is fetched by
+SwiftPM and bundled into the `.app` by `build_and_run.sh`. See the
+[README](README.md) for the full set of requirements.
+
+Releases are fully automated — pushing a `v*` tag builds and publishes the app with a
+Sparkle auto-update feed. Contributors never touch the release flow; it's documented
+for maintainers in [docs/releasing.md](docs/releasing.md).
 
 ## Opening a pull request
 

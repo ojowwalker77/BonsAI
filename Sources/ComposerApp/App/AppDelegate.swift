@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NSApp.activate(ignoringOtherApps: true)
     hotKeyManager.register()
     _ = EngineCapabilityStore.shared   // first-ever launch detects + persists; later launches restore known state (Settings → Recheck re-runs)
+    _ = UpdaterController.shared   // starts Sparkle's periodic background update check
     MentionStyleCache.shared.preload()
     CanvasServer.shared.start()   // local API so a CLI / MCP server can read & drive the canvas
     NotificationCenter.default.addObserver(

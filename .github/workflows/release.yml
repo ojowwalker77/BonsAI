@@ -1,7 +1,15 @@
 name: Release
 
-# Publish a built BonsAI.app whenever a v* tag is pushed. Can also be run
-# manually against an existing or new tag via the Actions tab.
+# Publish BonsAI.app whenever a v* tag is pushed (or via manual dispatch). The app is unsigned
+# (ad-hoc, by the toolchain) and not notarized, so users clear quarantine on first launch — but every
+# release ships an EdDSA-signed appcast.xml so installed copies auto-update and relaunch seamlessly
+# via Sparkle.
+#
+# Required repository secret (one-time owner setup — see docs/releasing.md):
+#   SPARKLE_PRIVATE_KEY   the Sparkle EdDSA private key (from `generate_keys -x`)
+# The matching Sparkle EdDSA *public* key is committed in script/build_and_run.sh (SPARKLE_PUBLIC_KEY).
+# This is Sparkle's own update-integrity key — NOT Apple code signing.
+
 on:
   push:
     tags: ['v*']
@@ -18,6 +26,9 @@ jobs:
   release:
     name: Build & publish
     runs-on: macos-26
+    env:
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,9 +37,10 @@ jobs:
       - name: Swift toolchain
         run: swift --version
 
-      # Reuses the same staging path developers run locally, minus the launch.
+      # Reuses the same staging path developers run locally, minus the launch. BONSAI_VERSION pins the
+      # bundle's CFBundleShortVersionString/CFBundleVersion to the tag (what Sparkle compares).
       - name: Build & stage BonsAI.app
-        run: ./script/build_and_run.sh bundle
+        run: BONSAI_VERSION="${TAG#v}" ./script/build_and_run.sh bundle
 
       - name: Package the app bundle
         run: |
@@ -36,13 +48,10 @@ jobs:
           shasum -a 256 dist/BonsAI.app.zip | tee dist/BonsAI.app.zip.sha256
 
       - name: Assemble release notes
-        env:
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           version="${TAG#v}"
-          # Lift the matching section out of the changelog (everything between this
-          # version's heading and the next "## " heading), trimming leading blanks.
+          # Lift the matching section out of the changelog (everything between this version's heading
+          # and the next "## " heading), trimming leading blanks.
           awk -v v="$version" '
             index($0, "## [" v "]") == 1 { grab = 1; next }
             grab && index($0, "## ") == 1 { exit }
@@ -58,17 +67,55 @@ jobs:
           xattr -dr com.apple.quarantine /Applications/BonsAI.app
           \`\`\`
 
-          See the [README](https://github.com/$REPO/blob/main/README.md) for details.
+          After that, BonsAI updates itself automatically (also **BonsAI ▸ Check for Updates…**).
           EOF
           fi
+
+      # Build the EdDSA-signed appcast Sparkle reads. sign_update emits the ready-to-embed
+      # `sparkle:edSignature="…" length="…"` attributes for the enclosure. (Sparkle's own integrity
+      # key — not Apple code signing.)
+      - name: Generate appcast.xml
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          version="${TAG#v}"
+          SIGN_UPDATE=$(find .build/artifacts -name sign_update -path '*/bin/*' | head -1)
+          if [ -z "$SIGN_UPDATE" ]; then echo "::error::sign_update not found in .build/artifacts" >&2; exit 1; fi
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then echo "::error::SPARKLE_PRIVATE_KEY secret is not set — see docs/releasing.md." >&2; exit 1; fi
+          # Write the secret (the `generate_keys -x` export) to a file and sign via --ed-key-file.
+          # (sign_update's -s string flag is deprecated and rejects this key format.)
+          KEYFILE="$RUNNER_TEMP/sparkle_ed_key"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEYFILE"
+          SIGN_ATTRS=$("$SIGN_UPDATE" --ed-key-file "$KEYFILE" dist/BonsAI.app.zip)
+          rm -f "$KEYFILE"
+          PUBDATE=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
+          NOTES=$(cat dist/RELEASE_NOTES.md)
+          cat > dist/appcast.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+          <channel>
+          <title>BonsAI</title>
+          <link>https://github.com/$REPO/releases/latest/download/appcast.xml</link>
+          <item>
+          <title>BonsAI $version</title>
+          <pubDate>$PUBDATE</pubDate>
+          <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+          <description><![CDATA[
+          $NOTES
+          ]]></description>
+          <enclosure url="https://github.com/$REPO/releases/download/$TAG/BonsAI.app.zip" sparkle:version="$version" sparkle:shortVersionString="$version" $SIGN_ATTRS type="application/octet-stream" />
+          </item>
+          </channel>
+          </rss>
+          XML
+          echo "--- appcast.xml ---"
+          cat dist/appcast.xml
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          assets=(dist/BonsAI.app.zip dist/BonsAI.app.zip.sha256)
+          assets=(dist/BonsAI.app.zip dist/BonsAI.app.zip.sha256 dist/appcast.xml)
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$REPO" --clobber "${assets[@]}"
           else
