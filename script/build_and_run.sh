@@ -9,7 +9,7 @@ MIN_SYSTEM_VERSION="26.0"
 # Sparkle EdDSA public key — the public half of the pair from Sparkle's `generate_keys`. Safe to commit
 # (only the private key is secret; it lives in the SPARKLE_PRIVATE_KEY CI secret). Fill this in after
 # running setup; until then the updater stays idle (no SUPublicEDKey is emitted, so no insecure feed).
-SPARKLE_PUBLIC_KEY=""
+SPARKLE_PUBLIC_KEY="RwEq55AfbXnJMuIxXySJMyzspkDrUla/TRFKZrGQ6PI="
 BUILD_CONFIGURATION="release"
 
 # Normal launches should exercise the same optimized, compact binary users get. Keep an explicit

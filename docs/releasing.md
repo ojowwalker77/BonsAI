@@ -30,8 +30,9 @@ account, no certificate, no notarization). Generate it once; the tools live in
 
 ```bash
 BIN=.build/artifacts/sparkle/Sparkle/bin
-"$BIN/generate_keys"                         # prints the PUBLIC key
-"$BIN/generate_keys" -x sparkle_private_key  # exports the PRIVATE key to a file
+"$BIN/generate_keys"                          # prints the PUBLIC key (idempotent — reuses an existing key)
+rm -f sparkle_private_key                     # -x silently fails if the file already exists
+"$BIN/generate_keys" -x sparkle_private_key   # exports the PRIVATE key to a file
 ```
 
 - Paste the **public** key into `SPARKLE_PUBLIC_KEY` in
