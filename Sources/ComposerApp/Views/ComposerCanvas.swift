@@ -242,6 +242,9 @@ struct ComposerCanvas: View {
             isEditing: board.editingCardID == card.id,
             scale: effectiveScale,
             board: board,
+            // Only the select tool may grab a card. In a drawing tool the card is click-through, so
+            // a drag that starts over it draws a new element instead of selecting/moving the card.
+            selectable: tool == .select,
             onEscape: { dismiss() }
           )
           .zIndex(Double(card.z) + (board.primarySelectedCardID == card.id ? 10_000 : 0))
@@ -396,7 +399,8 @@ struct ComposerCanvas: View {
       },
       onAgent: { toggleAgent() },
       onFolder: { agent.chooseDirectory() },
-      onSettings: { openSettings() }
+      onClearFolder: { agent.setGroundingDirectory(nil) },
+      onSettings: { toggleSettings() }
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     .padding(.leading, Theme.Size.railInset(in: windowSize.width))
@@ -436,6 +440,7 @@ struct ComposerCanvas: View {
           store: store,
           onPick: { pickBoard($0) },
           onDelete: { deleteBoard($0) },
+          onRename: { renameBoard($0, to: $1) },
           onNew: { newBoard() }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -614,6 +619,8 @@ struct ComposerCanvas: View {
   private func newBoard() { board.flushSave(); store.newDump(); board.loadFromStore(); resetView(); focusFirstCard() }
   private func pickBoard(_ id: PersistentIdentifier) { board.flushSave(); store.select(id); board.loadFromStore(); resetView() }
   private func deleteBoard(_ id: PersistentIdentifier) { board.flushSave(); store.delete(id); board.loadFromStore(); resetView() }
+  // Rename only touches the board's name, never its cards — no flush/reload needed.
+  private func renameBoard(_ id: PersistentIdentifier, to name: String) { store.rename(id, to: name) }
 
   private func focusFirstCard() {
     guard let id = board.cards.first?.id else { return }
@@ -637,6 +644,17 @@ struct ComposerCanvas: View {
     if editing.mentions.isOpen { editing.mentions.isOpen = false; editing.mentions.items = [] }
     if editing.appSearch.isOpen { editing.appSearch.isOpen = false }
     if editing.lint.activeFlagID != nil { editing.lint.activeFlagID = nil }
+  }
+
+  /// The sidebar gear toggles Settings the way ⌘J / the rail toggle Agent: a second click on the
+  /// gear while Settings is up closes it again. (⌘, and the menu-bar item still always open.)
+  private func toggleSettings() {
+    if store.isSettingsOpen {
+      store.isSettingsOpen = false
+      NotificationCenter.default.post(name: .composerDismissDock, object: nil)
+    } else {
+      openSettings()
+    }
   }
 
   private func openSettings() {

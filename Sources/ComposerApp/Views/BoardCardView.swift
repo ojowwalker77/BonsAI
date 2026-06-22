@@ -15,6 +15,10 @@ struct BoardCardView: View {
   /// Board zoom — gesture translations are divided by it so moves/resizes track the cursor.
   let scale: CGFloat
   let board: BoardViewModel
+  /// True only in the select tool. When false (any drawing tool) the card is pointer-transparent,
+  /// so a drag starting over it falls through to the canvas and draws a new element instead of
+  /// grabbing this card — selection/move/resize belong to the select tool alone.
+  let selectable: Bool
   var onEscape: () -> Void
 
   @State private var moveDelta: CGSize = .zero
@@ -139,7 +143,7 @@ struct BoardCardView: View {
           onDragChanged: updateMovePreview,
           onDragEnded: commitMove
         )
-        .allowsHitTesting(!isEditing)
+        .allowsHitTesting(!isEditing && selectable)
       }
     }
   }
@@ -223,7 +227,8 @@ struct BoardCardView: View {
     // select to move or resize. Shapes keep their ring while editing.
     if (isSelected || isEditing) && !isEmptyText {
       let showRing = !isTextElement || (isSelected && !isEditing)
-      let showHandles = isSelected && !isEditing && !card.locked
+      // Handles only grab in the select tool — in a drawing tool a corner drag should draw, not resize.
+      let showHandles = isSelected && !isEditing && !card.locked && selectable
       GeometryReader { geo in
         ZStack {
           if showRing {
@@ -295,7 +300,7 @@ struct BoardCardView: View {
 
   @ViewBuilder
   private var deleteButton: some View {
-    if isSelected && !isEditing && !card.locked && !isEmptyText {
+    if isSelected && !isEditing && !card.locked && !isEmptyText && selectable {
       Button(action: { board.delete(card.id) }) {
         Image(systemName: "xmark")
           .font(.system(size: 9, weight: .bold))

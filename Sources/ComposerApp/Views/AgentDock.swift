@@ -50,19 +50,32 @@ struct AgentDock: View {
   @ViewBuilder
   private var groundingControl: some View {
     if let dir = agent.groundingDirectory {
-      Button { agent.chooseDirectory() } label: {
-        HStack(spacing: 5) {
-          Image(systemName: "folder.fill").font(.system(size: 10.5))
-          Text(Self.trimmed(dir.lastPathComponent)).font(.caption.weight(.medium)).lineLimit(1).fixedSize()
+      // One capsule, two targets: the name changes the folder; the trailing ✕ un-grounds the
+      // board back to canvas-only. (Before, there was no way to remove a grounding once set.)
+      HStack(spacing: 6) {
+        Button { agent.chooseDirectory() } label: {
+          HStack(spacing: 5) {
+            Image(systemName: "folder.fill").font(.system(size: 10.5))
+            Text(Self.trimmed(dir.lastPathComponent)).font(.caption.weight(.medium)).lineLimit(1).fixedSize()
+          }
+          .foregroundStyle(Theme.Palette.body)
+          .contentShape(Rectangle())
         }
-        .foregroundStyle(Theme.Palette.body)
-        .padding(.horizontal, 9).frame(height: 24)
-        .background(Capsule().fill(Color.white.opacity(0.08)))
-        .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
-        .contentShape(Capsule())
+        .buttonStyle(.plain)
+        .help("Grounded in \(dir.path) — click to change")
+
+        Button { agent.setGroundingDirectory(nil) } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(Theme.Palette.title)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Remove grounding — back to canvas-only")
       }
-      .buttonStyle(.plain)
-      .help("Grounded in \(dir.path) — click to change")
+      .padding(.horizontal, 9).frame(height: 24)
+      .background(Capsule().fill(Color.white.opacity(0.08)))
+      .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
     } else {
       iconButton("folder.badge.plus", help: "Ground the agent in a folder it can read") { agent.chooseDirectory() }
     }

@@ -17,25 +17,38 @@ final class Dump {
   var updatedAt: Date
   /// JSON of `[CardState]`. `nil` on a legacy/fresh board → one card synthesized from `text`.
   var cardsData: Data?
+  /// A user-given board name. When set it overrides the auto-derived `title` and survives card
+  /// edits, so a rename sticks. `nil`/empty falls back to the first line of the content.
+  var customTitle: String?
 
-  init(text: String = "", createdAt: Date = Date(), updatedAt: Date = Date(), cardsData: Data? = nil) {
+  init(text: String = "", createdAt: Date = Date(), updatedAt: Date = Date(), cardsData: Data? = nil, customTitle: String? = nil) {
     self.text = text
     self.createdAt = createdAt
     self.updatedAt = updatedAt
     self.cardsData = cardsData
+    self.customTitle = customTitle
   }
 }
 
 extension Dump {
-  /// First non-empty line, for the history list.
+  /// The board's display name: the user-set `customTitle` if present, else the first non-empty
+  /// line of the content.
   var title: String {
+    if let custom = customTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
+      return String(custom.prefix(80))
+    }
     for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
       if !trimmed.isEmpty { return String(trimmed.prefix(80)) }
     }
     return ""
   }
-  var isBlank: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  /// Blank = no content AND no user-given name — a named board is worth keeping even while empty,
+  /// so it isn't auto-pruned out from under the user.
+  var isBlank: Bool {
+    text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && (customTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+  }
 }
 
 // MARK: - Store
@@ -195,6 +208,17 @@ final class DumpStore: ObservableObject {
     reload()
     if wasCurrent { currentID = dumps.first?.persistentModelID }
     ensureCurrent()
+  }
+
+  /// Give a board a custom name. An empty/whitespace name clears it back to the auto-derived title.
+  /// Doesn't touch the cards, so it's safe to rename the board you're currently editing.
+  func rename(_ id: PersistentIdentifier, to name: String) {
+    guard let dump = dumps.first(where: { $0.persistentModelID == id }) else { return }
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    dump.customTitle = trimmed.isEmpty ? nil : String(trimmed.prefix(80))
+    dump.updatedAt = Date()
+    try? context.save()
+    objectWillChange.send()
   }
 
   // MARK: Housekeeping

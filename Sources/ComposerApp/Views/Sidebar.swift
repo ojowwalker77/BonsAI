@@ -13,6 +13,7 @@ struct Sidebar: View {
   var onHistory: () -> Void
   var onAgent: () -> Void
   var onFolder: () -> Void
+  var onClearFolder: () -> Void
   var onSettings: () -> Void
 
   var body: some View {
@@ -29,6 +30,14 @@ struct Sidebar: View {
       SidebarAgentButton(active: agentOpen, action: onAgent)
       SidebarButton(symbol: groundedFolder == nil ? "folder.badge.plus" : "folder.fill",
                     help: folderHelp, active: groundedFolder != nil, action: onFolder)
+        .contextMenu {
+          if groundedFolder == nil {
+            Button("Ground in Folder\u{2026}", action: onFolder)
+          } else {
+            Button("Change Folder\u{2026}", action: onFolder)
+            Button("Remove Grounding", role: .destructive, action: onClearFolder)
+          }
+        }
 
       divider
 
