@@ -49,6 +49,8 @@ extension Notification.Name {
   static let composerSelectTool = Notification.Name("composerSelectTool")
   /// ⌘J toggles the separate agent panel.
   static let composerToggleAgent = Notification.Name("composerToggleAgent")
+  /// ⌘K toggles the command palette (board switcher + buried board-level actions).
+  static let composerTogglePalette = Notification.Name("composerTogglePalette")
   /// Opens the separate Settings panel (sidebar gear, ⌘, or the menu-bar item).
   static let composerShowSettings = Notification.Name("composerShowSettings")
   /// Requests an auxiliary panel. `object` is the active `CanvasAgent` for `.agent` and

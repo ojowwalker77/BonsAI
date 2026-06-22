@@ -30,6 +30,8 @@ struct ComposerCanvas: View {
   /// observe, so per-token updates re-render only the dock — never the board.
   @StateObject private var agent = CanvasAgent()
   @State private var showAgent = false
+  /// The ⌘K command palette (board switcher + buried board-level actions) is showing.
+  @State private var showPalette = false
   /// Mirrors the agent's grounding folder so the toolbar reflects it reactively.
   @AppStorage("agent.groundingDirectory") private var groundingPath = ""
 
@@ -50,6 +52,7 @@ struct ComposerCanvas: View {
     .animation(Theme.Motion.accessory, value: isWorking)
     .animation(Theme.Motion.accessory, value: store.isHistoryOpen)
     .animation(Theme.Motion.accessory, value: store.compiledDraft)
+    .animation(Theme.Motion.accessory, value: showPalette)
     .onChange(of: userFacingErrors.latest) { _, notice in
       if notice != nil { showLatestReportedError() }
     }
@@ -100,6 +103,7 @@ struct ComposerCanvas: View {
         cardSize: layout.cardSize,
         workspaceCenterX: toolbarCenterX
       )
+      commandPaletteOverlay(in: proxy.size)
       commandBridge
     }
     .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
@@ -192,6 +196,9 @@ struct ComposerCanvas: View {
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerToggleAgent)) { _ in
         toggleAgent()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .composerTogglePalette)) { _ in
+        togglePalette()
       }
   }
 
@@ -695,6 +702,85 @@ struct ComposerCanvas: View {
     showAgent = false
     store.isSettingsOpen = false
     NotificationCenter.default.post(name: .composerDismissDock, object: nil)
+  }
+
+  // MARK: Command palette (⌘K)
+
+  /// A spotlight over the board: a faint scrim catches a click-away dismiss; the palette itself
+  /// floats near the top-center, like Spotlight. Lives only in the board window's SwiftUI tree, so
+  /// it never disturbs the board/dock window geometry.
+  @ViewBuilder
+  private func commandPaletteOverlay(in size: CGSize) -> some View {
+    if showPalette {
+      ZStack(alignment: .top) {
+        Color.black.opacity(0.12)
+          .contentShape(Rectangle())
+          .onTapGesture { dismissPalette() }
+        CommandPalette(
+          store: store,
+          commands: paletteCommands,
+          onPickBoard: { id in closePalette(); pickBoard(id) },
+          onRunCommand: { command in closePalette(); command.run() },
+          onDismiss: { dismissPalette() }
+        )
+        .padding(.top, max(48, size.height * 0.12))
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      .transition(.opacity)
+      .zIndex(50)
+    }
+  }
+
+  private func togglePalette() {
+    if showPalette { showPalette = false; return }
+    // The compiled-draft overlay is a focused modal — dismiss it before opening the palette.
+    guard store.compiledDraft == nil else { return }
+    store.isHistoryOpen = false
+    dismissEditorOverlays()
+    showPalette = true
+  }
+
+  private func closePalette() { showPalette = false }
+
+  /// Cancel (Esc / click-away) closes the palette and returns the caret to the card you were
+  /// writing in when you summoned it — the palette stole first responder, so without this you'd
+  /// land back on the board instead of mid-sentence. Picking a board / running an action skip this
+  /// (they relocate focus themselves).
+  private func dismissPalette() {
+    showPalette = false
+    guard let id = board.editingCardID else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
+      board.interaction(for: id).controller.focus()
+    }
+  }
+
+  /// The buried, shortcut-less (or hard-to-reach) board-level actions, surfaced for fuzzy search.
+  /// Each closure calls the same handler its button/shortcut does — the palette adds no new
+  /// behavior. Order here is the idle (empty-query) order. Conditionally-shown rows depend on
+  /// reactive state the canvas already observes (`groundingPath` mirrors the agent's folder).
+  private var paletteCommands: [PaletteCommand] {
+    let grounded = !groundingPath.isEmpty
+    let folderName = grounded ? URL(fileURLWithPath: groundingPath).lastPathComponent : nil
+    var commands: [PaletteCommand] = [
+      PaletteCommand(id: "new-board", title: "New board", symbol: "square.and.pencil", shortcut: "⌘N") { newBoard() },
+      PaletteCommand(id: "compile", title: "Compile board into one draft", symbol: "wand.and.stars", shortcut: "⌘R") { runCompile() },
+      PaletteCommand(id: "copy", title: "Copy whole board", subtitle: "Self-contained · connectors resolved", symbol: "doc.on.doc", shortcut: "⌘⇧C") { copyBoard() },
+      PaletteCommand(id: "describe", title: "Copy board description with Claude", symbol: "doc.text.magnifyingglass") { describeBoard() },
+      PaletteCommand(id: "fit", title: "Fit board to view", symbol: "arrow.up.left.and.arrow.down.right") {
+        withAnimation(Theme.Motion.accessory) { fitBoard(in: lastViewportSize) }
+      },
+      PaletteCommand(id: "toggle-agent", title: showAgent ? "Hide agent" : "Open agent", symbol: "text.bubble", shortcut: "⌘J") { toggleAgent() },
+      PaletteCommand(id: "ground", title: grounded ? "Change grounding folder…" : "Ground agent in a folder…", subtitle: folderName, symbol: "folder.badge.plus") { agent.chooseDirectory() },
+    ]
+    if grounded {
+      commands.append(PaletteCommand(id: "clear-ground", title: "Clear grounding folder", subtitle: folderName, symbol: "folder.badge.minus") { agent.setGroundingDirectory(nil) })
+    }
+    commands.append(PaletteCommand(id: "reset-agent", title: "Reset agent conversation", symbol: "arrow.counterclockwise") { agent.reset() })
+    if agent.isRunning {
+      commands.append(PaletteCommand(id: "stop-agent", title: "Stop agent", symbol: "stop.circle") { agent.stop() })
+    }
+    commands.append(PaletteCommand(id: "settings", title: "Open settings", symbol: "gearshape", shortcut: "⌘,") { openSettings() })
+    return commands
   }
 
   // MARK: Compile + copy + refine

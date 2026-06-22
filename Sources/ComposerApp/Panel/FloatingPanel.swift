@@ -135,6 +135,12 @@ final class FloatingPanel: NSPanel {
       NotificationCenter.default.post(name: .composerToggleAgent, object: nil)
       return true
     }
+    // ⌘K summons the command palette. Only the board panel owns it — the auxiliary agent/settings
+    // panels would open it in a window that isn't key, leaving the search field unfocusable.
+    if flags == [.command], raw == "k", !isAuxiliaryPanel {
+      NotificationCenter.default.post(name: .composerTogglePalette, object: nil)
+      return true
+    }
 
     if ComposerPreferences.handleEditorFontKeyEquivalent(event) { return true }
 
