@@ -11,15 +11,11 @@ under the new version heading.
 
 ## [Unreleased]
 
-<!--
-Add a bullet under the matching heading for every user-facing change. Create a
-heading only when you have an entry for it; delete this comment when you do.
-
-### Added     — new capabilities
-### Changed   — behavior or UX that changed
-### Fixed     — bug fixes
-### Removed    — things taken out
--->
+### Fixed
+- **Actionable failure messages.** Composer now preserves CLI, connector, storage,
+  clipboard, attachment, and canvas-service diagnostics instead of reducing failures
+  to generic errors or silently omitting failed context. Claude authentication failures
+  now identify the API rejection and point to `claude auth login`.
 
 ## [1.0.2] - 2026-06-21
 
