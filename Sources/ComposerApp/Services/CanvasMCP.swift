@@ -54,8 +54,15 @@ enum CanvasMCP {
   private static func callTool(_ name: String, arguments: [String: Any]) -> [String: Any] {
     if name == "get_canvas" {
       let graph = CanvasBridge.shared.snapshot()
-      let text = (try? JSONEncoder().encode(graph)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-      return content(text)
+      do {
+        let data = try JSONEncoder().encode(graph)
+        guard let text = String(data: data, encoding: .utf8) else {
+          return content("Composer encoded the canvas graph into non-UTF-8 data.", isError: true)
+        }
+        return content(text)
+      } catch {
+        return content(UserFacingError.message(for: error, while: "Encoding the canvas graph"), isError: true)
+      }
     }
     guard let op = opForTool[name] else {
       return content("unknown tool: \(name)", isError: true)
@@ -63,8 +70,15 @@ enum CanvasMCP {
     var payload = arguments
     payload["op"] = op
     let result = CanvasBridge.shared.apply(payload)
-    let text = (try? JSONSerialization.data(withJSONObject: result)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-    return content(text, isError: (result["ok"] as? Bool) == false)
+    do {
+      let data = try JSONSerialization.data(withJSONObject: result)
+      guard let text = String(data: data, encoding: .utf8) else {
+        return content("Composer encoded the canvas-tool result into non-UTF-8 data.", isError: true)
+      }
+      return content(text, isError: (result["ok"] as? Bool) == false)
+    } catch {
+      return content(UserFacingError.message(for: error, while: "Encoding the canvas-tool result"), isError: true)
+    }
   }
 
   private static func content(_ text: String, isError: Bool = false) -> [String: Any] {

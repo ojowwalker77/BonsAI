@@ -18,10 +18,11 @@ struct FinderService {
       async let exact = fdMatches(fd, pattern: trimmed, fixed: true, limit: maxExactRows, includeHidden: includeHidden)
       if let fuzzy = fuzzyRegexPattern(for: trimmed) {
         async let fuzzyMatches = fdMatches(fd, pattern: fuzzy, fixed: false, limit: maxFuzzyRows, includeHidden: includeHidden)
-        paths.append(contentsOf: (try? await exact) ?? [])
-        paths.append(contentsOf: (try? await fuzzyMatches) ?? [])
+        let (exactPaths, fuzzyPaths) = try await (exact, fuzzyMatches)
+        paths.append(contentsOf: exactPaths)
+        paths.append(contentsOf: fuzzyPaths)
       } else {
-        paths.append(contentsOf: (try? await exact) ?? [])
+        paths.append(contentsOf: try await exact)
       }
     } else {
       paths.append(contentsOf: try await findFallback(trimmed, limit: maxExactRows))
@@ -115,8 +116,7 @@ struct FinderService {
 
     let result = try await Shell.run(args)
     guard result.status == 0 else {
-      let message = result.stderr.trimmed.isEmpty ? "Finder search failed." : result.stderr.trimmed
-      throw AppSearchError.message(String(message.prefix(160)))
+      throw AppSearchError.message(UserFacingError.commandFailure(command: "Finder search", result: result))
     }
     return result.stdout
       .split(separator: "\n", omittingEmptySubsequences: true)
@@ -128,7 +128,9 @@ struct FinderService {
     let roots = searchRoots().map(shellQuote).joined(separator: " ")
     let command = "/usr/bin/find \(roots) -maxdepth 8 \\( -name .git -o -name node_modules -o -name Library -o -name .build -o -name .cache \\) -prune -o -iname \(escaped) -print 2>/dev/null | /usr/bin/head -n \(limit)"
     let result = try await Shell.run(["sh", "-lc", command])
-    guard result.status == 0 else { return [] }
+    guard result.status == 0 else {
+      throw AppSearchError.message(UserFacingError.commandFailure(command: "Finder fallback search", result: result))
+    }
     return result.stdout
       .split(separator: "\n", omittingEmptySubsequences: true)
       .map(String.init)
@@ -292,7 +294,7 @@ struct FinderService {
       includingPropertiesForKeys: [.isDirectoryKey],
       options: [.skipsHiddenFiles, .skipsPackageDescendants]
     ) else {
-      return ["", "### Folder Listing", "Unable to read this folder."]
+      return ["", "### Folder Listing", "macOS did not provide a directory enumerator, so Composer could not list this folder’s contents."]
     }
 
     let baseComponents = url.standardizedFileURL.pathComponents.count
@@ -322,31 +324,53 @@ struct FinderService {
   }
 
   private static func fileContents(for url: URL) -> [String] {
-    guard let read = readTextPrefix(url) else {
-      return ["", "Content: not included (binary, too restricted, or unreadable as text)."]
+    switch readTextPrefix(url) {
+    case let .text(read):
+      let language = languageHint(forExtension: url.pathExtension)
+      let fence = read.text.contains("```") ? "~~~~" : "```"
+      let suffix = read.truncated ? "\n\n…(truncated)" : ""
+      return ["", "### File Contents", "\(fence)\(language)", read.text + suffix, fence]
+    case let .unavailable(reason):
+      return ["", "Content not included: \(reason)"]
     }
-    let language = languageHint(forExtension: url.pathExtension)
-    let fence = read.text.contains("```") ? "~~~~" : "```"
-    let suffix = read.truncated ? "\n\n…(truncated)" : ""
-    return ["", "### File Contents", "\(fence)\(language)", read.text + suffix, fence]
   }
 
-  private static func readTextPrefix(_ url: URL) -> (text: String, truncated: Bool)? {
-    guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+  private enum FileTextRead {
+    case text((text: String, truncated: Bool))
+    case unavailable(String)
+  }
+
+  private static func readTextPrefix(_ url: URL) -> FileTextRead {
+    let handle: FileHandle
+    do {
+      handle = try FileHandle(forReadingFrom: url)
+    } catch {
+      return .unavailable(UserFacingError.message(for: error, while: "Opening \(url.path)"))
+    }
     defer { try? handle.close() }
-    guard let data = try? handle.read(upToCount: maxFileBytes + 1), !data.isEmpty else { return ("", false) }
+    let data: Data
+    do {
+      data = try handle.read(upToCount: maxFileBytes + 1) ?? Data()
+    } catch {
+      return .unavailable(UserFacingError.message(for: error, while: "Reading \(url.path)"))
+    }
+    guard !data.isEmpty else { return .text(("", false)) }
     let truncatedByBytes = data.count > maxFileBytes
     let prefix = Data(data.prefix(maxFileBytes))
-    if prefix.prefix(4096).contains(0) { return nil }
+    if prefix.prefix(4096).contains(0) {
+      return .unavailable("The file contains binary data, which Composer does not copy as text.")
+    }
 
     let decoded = String(data: prefix, encoding: .utf8)
       ?? String(data: prefix, encoding: .utf16)
       ?? String(data: prefix, encoding: .isoLatin1)
-    guard var text = decoded else { return nil }
+    guard var text = decoded else {
+      return .unavailable("The file is not valid UTF-8, UTF-16, or ISO-8859-1 text.")
+    }
 
     let truncatedByChars = text.count > maxFileChars
     if truncatedByChars { text = String(text.prefix(maxFileChars)) }
-    return (text, truncatedByBytes || truncatedByChars)
+    return .text((text, truncatedByBytes || truncatedByChars))
   }
 
   private static func languageHint(forExtension ext: String) -> String {

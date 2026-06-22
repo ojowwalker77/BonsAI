@@ -35,23 +35,17 @@ struct NotionService {
     }
   }
 
-  func render(_ reference: NotionReference) async -> String {
+  func render(_ reference: NotionReference) async throws -> String {
     let header = "## Notion — \(reference.title.isEmpty ? "page" : reference.title)"
     guard let token = ConnectorSecretStore.token(for: "@notion") else {
-      return "\(header)\nAdd a Notion integration token in Settings → Connectors → Notion."
+      throw AppSearchError.message("Add a Notion integration token in Settings → Connectors → Notion.")
     }
-    do {
-      let json = try await request("GET", "/blocks/\(reference.id)/children?page_size=100", token: token, body: nil)
-      let blocks = json["results"] as? [[String: Any]] ?? []
-      let text = Self.flatten(blocks)
-      var lines = [header, "URL: https://www.notion.so/\(reference.id.replacingOccurrences(of: "-", with: ""))", ""]
-      lines.append(text.isEmpty ? "_(no readable content — is the page shared with the integration?)_" : truncate(text))
-      return lines.joined(separator: "\n")
-    } catch let error as AppSearchError {
-      return "\(header)\n\(error.errorDescription ?? "Could not load the Notion page.")"
-    } catch {
-      return "\(header)\nCould not load the Notion page: \(error.localizedDescription)"
-    }
+    let json = try await request("GET", "/blocks/\(reference.id)/children?page_size=100", token: token, body: nil)
+    let blocks = json["results"] as? [[String: Any]] ?? []
+    let text = Self.flatten(blocks)
+    var lines = [header, "URL: https://www.notion.so/\(reference.id.replacingOccurrences(of: "-", with: ""))", ""]
+    lines.append(text.isEmpty ? "_(no readable content — is the page shared with the integration?)_" : truncate(text))
+    return lines.joined(separator: "\n")
   }
 
   // MARK: - JSON shaping
@@ -113,8 +107,17 @@ struct NotionService {
         throw AppSearchError.message("Notion rejected the token (401). Check Settings → Connectors → Notion.")
       }
       let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
-      throw AppSearchError.message(message.map { "Notion: \($0)" } ?? "Notion API error (\(http.statusCode)).")
+      throw AppSearchError.message(message.map { "Notion: \($0)" } ?? "Notion returned HTTP \(http.statusCode) and did not provide an error message.")
     }
-    return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    do {
+      guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw AppSearchError.message("Notion returned JSON in an unexpected shape.")
+      }
+      return json
+    } catch let error as AppSearchError {
+      throw error
+    } catch {
+      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Notion’s response"))
+    }
   }
 }

@@ -19,7 +19,7 @@ struct GitHubService {
       "--owner", "@me",
       "--limit", "8", "--json", "number,title,state,url,repository",
     ])
-    guard result.status == 0 else { throw AppSearchError.fromGH(result.stderr) }
+    guard result.status == 0 else { throw AppSearchError.fromGH(result) }
 
     let items = try JSONDecoder().decode([Item].self, from: Data(result.stdout.utf8))
     return items.map { item in
@@ -40,7 +40,7 @@ struct GitHubService {
       ? "number,title,state,body,author,url,baseRefName,headRefName,reviewDecision"
       : "number,title,state,body,author,url,labels"
     let result = try await Shell.run(["gh", kind.ghViewNoun, "view", url, "--json", fields])
-    guard result.status == 0 else { throw AppSearchError.fromGH(result.stderr) }
+    guard result.status == 0 else { throw AppSearchError.fromGH(result) }
 
     let detail = try JSONDecoder().decode(Detail.self, from: Data(result.stdout.utf8))
     var lines = ["**\(detail.title)** (#\(detail.number)) — \(detail.state?.capitalized ?? "")"]
@@ -93,11 +93,11 @@ enum AppSearchError: LocalizedError {
   var errorDescription: String? { switch self { case .message(let m): m } }
 
   /// Map common `gh` failures to a short, friendly line.
-  static func fromGH(_ stderr: String) -> AppSearchError {
-    let text = stderr.trimmed
+  static func fromGH(_ result: Shell.Result) -> AppSearchError {
+    let text = result.diagnostic
     if text.localizedCaseInsensitiveContains("auth") || text.localizedCaseInsensitiveContains("logged in") {
       return .message("Run `gh auth login` to search GitHub.")
     }
-    return .message(text.isEmpty ? "GitHub search failed." : String(text.prefix(140)))
+    return .message(UserFacingError.commandFailure(command: "GitHub CLI", result: result))
   }
 }

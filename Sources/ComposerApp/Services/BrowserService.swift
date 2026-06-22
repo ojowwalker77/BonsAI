@@ -92,7 +92,7 @@ struct BrowserService {
     guard running?.status == 0 else { return [] }
 
     let result = try await Shell.run(["osascript", "-l", "JavaScript", "-e", Self.safariTabsScript])
-    guard result.status == 0 else { throw browserError(result.stderr, app: "Safari") }
+    guard result.status == 0 else { throw browserError(result, app: "Safari") }
 
     let text = result.stdout.trimmed
     guard !text.isEmpty else { return [] }
@@ -156,7 +156,7 @@ struct BrowserService {
     guard running?.status == 0 else { return [] }
 
     let result = try await Shell.run(["osascript", "-l", "JavaScript", "-e", Self.chromiumScript(app: browser.name)])
-    guard result.status == 0 else { throw browserError(result.stderr, app: browser.name) }
+    guard result.status == 0 else { throw browserError(result, app: browser.name) }
 
     let text = result.stdout.trimmed
     guard !text.isEmpty else { return [] }
@@ -213,15 +213,15 @@ struct BrowserService {
     """
   }
 
-  private func browserError(_ stderr: String, app: String) -> AppSearchError {
-    let text = stderr.trimmed
+  private func browserError(_ result: Shell.Result, app: String) -> AppSearchError {
+    let text = result.diagnostic
     if text.contains("-1743") || text.localizedCaseInsensitiveContains("not authorized") {
       return .message("Allow Composer to control \(app) in System Settings → Privacy & Security → Automation.")
     }
     if text.localizedCaseInsensitiveContains("execution error") {
       return .message(String(text.prefix(160)))
     }
-    return .message(text.isEmpty ? "Could not read \(app) tabs." : String(text.prefix(160)))
+    return .message(UserFacingError.commandFailure(command: "Reading \(app) tabs", result: result))
   }
 
   // MARK: - Result shaping

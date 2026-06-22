@@ -18,20 +18,14 @@ struct FigmaService {
       selection: .figma(reference))]
   }
 
-  func render(_ reference: FigmaReference) async -> String {
-    let header = "## Figma — \(reference.name.isEmpty ? "frame" : reference.name)"
+  func render(_ reference: FigmaReference) async throws -> String {
     guard let token = ConnectorSecretStore.token(for: "@figma") else {
-      return "\(header)\nAdd a Figma access token in Settings → Connectors → Figma."
+      throw AppSearchError.message("Add a Figma access token in Settings → Connectors → Figma.")
     }
-    do {
-      return reference.nodeId.isEmpty
-        ? try await renderFile(reference, token: token)
-        : try await renderNode(reference, token: token)
-    } catch let error as AppSearchError {
-      return "\(header)\n\(error.errorDescription ?? "Could not load the Figma reference.")"
-    } catch {
-      return "\(header)\nCould not load the Figma reference: \(error.localizedDescription)"
+    if reference.nodeId.isEmpty {
+      return try await renderFile(reference, token: token)
     }
+    return try await renderNode(reference, token: token)
   }
 
   // MARK: - Render: whole file (no node in the URL)
@@ -55,10 +49,16 @@ struct FigmaService {
   // MARK: - Render: a specific node
 
   private func renderNode(_ reference: FigmaReference, token: String) async throws -> String {
-    async let nodeJSON = get(url("/files/\(reference.fileKey)/nodes", ["ids": reference.nodeId]), token: token)
-    async let imageURL = renderedImage(reference, token: token)
-    let json = try await nodeJSON
-    let image = await imageURL
+    let json = try await get(url("/files/\(reference.fileKey)/nodes", ["ids": reference.nodeId]), token: token)
+    let image: String?
+    var imageDiagnostic: String?
+    do {
+      image = try await renderedImage(reference, token: token)
+      imageDiagnostic = nil
+    } catch {
+      image = nil
+      imageDiagnostic = UserFacingError.message(for: error, while: "Fetching the Figma screenshot")
+    }
 
     guard let nodes = json["nodes"] as? [String: Any],
           let entry = nodes[reference.nodeId] as? [String: Any],
@@ -76,6 +76,7 @@ struct FigmaService {
     lines.append(meta.joined(separator: " · "))
     lines.append(openLine(reference))
     if let image, !image.isEmpty { lines.append("Screenshot: \(image)") }
+    if let imageDiagnostic { lines.append("Screenshot unavailable: \(imageDiagnostic)") }
 
     let texts = Self.textLayers(document)
     if !texts.isEmpty {
@@ -86,10 +87,10 @@ struct FigmaService {
     return lines.joined(separator: "\n")
   }
 
-  private func renderedImage(_ reference: FigmaReference, token: String) async -> String? {
+  private func renderedImage(_ reference: FigmaReference, token: String) async throws -> String? {
     let target = url("/images/\(reference.fileKey)", ["ids": reference.nodeId, "format": "png", "scale": "2"])
-    guard let json = try? await get(target, token: token),
-          let images = json["images"] as? [String: Any] else { return nil }
+    let json = try await get(target, token: token)
+    guard let images = json["images"] as? [String: Any] else { return nil }
     return images[reference.nodeId] as? String
   }
 
@@ -154,8 +155,17 @@ struct FigmaService {
     guard (200..<300).contains(http.statusCode) else {
       if http.statusCode == 403 { throw AppSearchError.message("Figma rejected the token (403). Check Settings → Connectors → Figma.") }
       if http.statusCode == 404 { throw AppSearchError.message("Figma file not found (404) — does the token have access to it?") }
-      throw AppSearchError.message("Figma API error (\(http.statusCode)).")
+      throw AppSearchError.message("Figma returned HTTP \(http.statusCode) and did not provide an error message.")
     }
-    return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    do {
+      guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw AppSearchError.message("Figma returned JSON in an unexpected shape.")
+      }
+      return json
+    } catch let error as AppSearchError {
+      throw error
+    } catch {
+      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Figma’s response"))
+    }
   }
 }

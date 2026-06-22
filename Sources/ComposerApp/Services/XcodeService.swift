@@ -14,7 +14,7 @@ struct XcodeService {
       guard FileManager.default.fileExists(atPath: path) else { return [] }
       return [result(forPath: path)]
     }
-    let scored: [(ResultBundle, Int)] = discoverResultBundles().compactMap { bundle in
+    let scored: [(ResultBundle, Int)] = try discoverResultBundles().compactMap { bundle in
       score(bundle.project, query: trimmed).map { (bundle, $0) }
     }
     return scored
@@ -23,16 +23,16 @@ struct XcodeService {
       .map { result(forPath: $0.0.path) }
   }
 
-  func render(_ reference: XcodeReference) async -> String {
+  func render(_ reference: XcodeReference) async throws -> String {
     let path = reference.resultPath
     let header = "## Xcode — \(projectName(forResult: path))"
     guard FileManager.default.fileExists(atPath: path) else {
-      return "\(header)\nResult bundle no longer exists: \(path)"
+      throw AppSearchError.message("Xcode result bundle no longer exists: \(path)")
     }
     async let build = buildResults(path)
     async let tests = testSummary(path)
-    let buildText = await build
-    let testText = await tests
+    let buildText = try await build
+    let testText = try await tests
 
     var lines = [header, "Bundle: \(abbreviate(path))"]
     if buildText.isEmpty && testText.isEmpty {
@@ -47,8 +47,8 @@ struct XcodeService {
 
   // MARK: - build-results
 
-  private func buildResults(_ path: String) async -> String {
-    guard let json = try? await xcresultJSON(["get", "build-results", "--path", path, "--compact"]) else { return "" }
+  private func buildResults(_ path: String) async throws -> String {
+    let json = try await xcresultJSON(["get", "build-results", "--path", path, "--compact"])
     let errors = (json["errors"] as? [[String: Any]]) ?? []
     let warnings = (json["warnings"] as? [[String: Any]]) ?? []
     guard !errors.isEmpty || !warnings.isEmpty else { return "" }
@@ -74,8 +74,8 @@ struct XcodeService {
 
   // MARK: - test-results summary
 
-  private func testSummary(_ path: String) async -> String {
-    guard let json = try? await xcresultJSON(["get", "test-results", "summary", "--path", path, "--compact"]) else { return "" }
+  private func testSummary(_ path: String) async throws -> String {
+    let json = try await xcresultJSON(["get", "test-results", "summary", "--path", path, "--compact"])
     let failures = (json["testFailures"] as? [[String: Any]]) ?? []
     let result = json["result"] as? String ?? ""
     let total = json["totalTestCount"] as? Int
@@ -101,15 +101,27 @@ struct XcodeService {
   private struct ResultBundle { let path: String; let project: String; let modified: Date }
 
   /// Shallow scan of `DerivedData/<project>/Logs/{Test,Build}` for `.xcresult` bundles.
-  private func discoverResultBundles() -> [ResultBundle] {
+  private func discoverResultBundles() throws -> [ResultBundle] {
     let derived = "\(NSHomeDirectory())/Library/Developer/Xcode/DerivedData"
     let fm = FileManager.default
-    guard let projects = try? fm.contentsOfDirectory(atPath: derived) else { return [] }
+    guard fm.fileExists(atPath: derived) else { return [] }
+    let projects: [String]
+    do {
+      projects = try fm.contentsOfDirectory(atPath: derived)
+    } catch {
+      throw AppSearchError.message(UserFacingError.message(for: error, while: "Reading Xcode’s DerivedData folder"))
+    }
     var out: [ResultBundle] = []
     for project in projects where !project.hasPrefix(".") {
       for kind in ["Test", "Build"] {
         let dir = "\(derived)/\(project)/Logs/\(kind)"
-        guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+        guard fm.fileExists(atPath: dir) else { continue }
+        let entries: [String]
+        do {
+          entries = try fm.contentsOfDirectory(atPath: dir)
+        } catch {
+          throw AppSearchError.message(UserFacingError.message(for: error, while: "Reading Xcode’s \(kind.lowercased())-result folder"))
+        }
         for entry in entries where entry.hasSuffix(".xcresult") {
           let path = "\(dir)/\(entry)"
           let modified = ((try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date) ?? .distantPast
@@ -133,8 +145,19 @@ struct XcodeService {
 
   private func xcresultJSON(_ args: [String]) async throws -> [String: Any] {
     let result = try await Shell.run(["xcrun", "xcresulttool"] + args)
-    guard result.status == 0 else { throw AppSearchError.message(String(result.stderr.prefix(160))) }
-    return (try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]) ?? [:]
+    guard result.status == 0 else {
+      throw AppSearchError.message(UserFacingError.commandFailure(command: "Xcode result reader", result: result))
+    }
+    do {
+      guard let json = try JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any] else {
+        throw AppSearchError.message("Xcode result reader returned JSON in an unexpected shape.")
+      }
+      return json
+    } catch let error as AppSearchError {
+      throw error
+    } catch {
+      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Xcode result output"))
+    }
   }
 
   /// `MyApp-abcdef0123456789…` (DerivedData) → `MyApp`.

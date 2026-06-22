@@ -26,7 +26,9 @@ protocol ComposerAppConnector {
   func idleMessage(context: AppSearchContext) -> String
   func noResultsMessage(query: String, context: AppSearchContext) -> String
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult]
-  func render(selection: AppSelection?) async -> String
+  /// Resolve the selected reference into paste-ready context. Errors deliberately propagate to
+  /// `SelfContainedRenderer`, which reports the affected connector instead of silently dropping it.
+  func render(selection: AppSelection?) async throws -> String
 }
 
 extension ComposerAppConnector {
@@ -72,12 +74,12 @@ private struct Context7AppConnector: ComposerAppConnector {
     try await service.search(query)
   }
 
-  func render(selection: AppSelection?) async -> String {
+  func render(selection: AppSelection?) async throws -> String {
     switch selection {
     case .none:
       return "## Context7\nUse Context7 to fetch current, version-accurate documentation for the libraries referenced above."
     case let .context7(libraryID, query):
-      let docs = (try? await service.fetchDocs(libraryID: libraryID, query: query)) ?? ""
+      let docs = try await service.fetchDocs(libraryID: libraryID, query: query)
       let header = "## Context7 — \(libraryID)" + (query.map { " (topic: \($0))" } ?? "")
       guard !docs.isEmpty else {
         return "\(header)\nUse Context7 library `\(libraryID)` to pull current documentation" + (query.map { " on \($0)" } ?? "") + "."
@@ -113,12 +115,12 @@ private struct GitHubAppConnector: ComposerAppConnector {
     try await service.search(query, kind: context.githubKind)
   }
 
-  func render(selection: AppSelection?) async -> String {
+  func render(selection: AppSelection?) async throws -> String {
     switch selection {
     case .none:
       return "## GitHub\nFetch and summarize the referenced GitHub issue or PR: state, body, key comments, constraints, and acceptance criteria."
     case let .github(kind, url):
-      let detail = (try? await service.fetchDetail(url: url, kind: kind)) ?? ""
+      let detail = try await service.fetchDetail(url: url, kind: kind)
       let header = "## GitHub — \(AppToken.shortGitHub(url))"
       guard !detail.isEmpty else {
         return "\(header)\nReferenced \(kind == .pr ? "pull request" : "issue"): \(url)"
@@ -145,7 +147,7 @@ private struct FinderAppConnector: ComposerAppConnector {
     try await service.search(query)
   }
 
-  func render(selection: AppSelection?) async -> String {
+  func render(selection: AppSelection?) async throws -> String {
     switch selection {
     case .none:
       return "## Finder\nReference the local file or folder needed for this prompt. Include the path and any relevant contents when available."
@@ -174,7 +176,7 @@ private struct BrowserAppConnector: ComposerAppConnector {
     try await service.searchTabs(query: query)
   }
 
-  func render(selection: AppSelection?) async -> String {
+  func render(selection: AppSelection?) async throws -> String {
     switch selection {
     case .none:
       return "## Browser\nReference the relevant open browser tab. Include its URL, title, and browser metadata so the next tool can fetch or reason about it."
@@ -206,12 +208,12 @@ private struct LinearAppConnector: ComposerAppConnector {
     try await service.search(query)
   }
 
-  func render(selection: AppSelection?) async -> String {
+  func render(selection: AppSelection?) async throws -> String {
     switch selection {
     case .none:
       return "## Linear\nReference the Linear issue — description, status, acceptance criteria, comments, and linked PRs."
     case let .linear(reference):
-      return await service.render(reference)
+      return try await service.render(reference)
     default:
       return ""
     }
@@ -240,12 +242,12 @@ private struct NotionAppConnector: ComposerAppConnector {
     try await service.search(query)
   }
 
-  func render(selection: AppSelection?) async -> String {
+  func render(selection: AppSelection?) async throws -> String {
     switch selection {
     case .none:
       return "## Notion\nReference the relevant Notion page — spec, RFC, or decision doc — and pull its content."
     case let .notion(reference):
-      return await service.render(reference)
+      return try await service.render(reference)
     default:
       return ""
     }
@@ -272,12 +274,12 @@ private struct SentryAppConnector: ComposerAppConnector {
     try await service.search(query)
   }
 
-  func render(selection: AppSelection?) async -> String {
+  func render(selection: AppSelection?) async throws -> String {
     switch selection {
     case .none:
       return "## Sentry\nReference the Sentry issue — error, level, affected release, and recent stack trace."
     case let .sentry(reference):
-      return await service.render(reference)
+      return try await service.render(reference)
     default:
       return ""
     }
@@ -304,12 +306,12 @@ private struct FigmaAppConnector: ComposerAppConnector {
     try await service.search(query)
   }
 
-  func render(selection: AppSelection?) async -> String {
+  func render(selection: AppSelection?) async throws -> String {
     switch selection {
     case .none:
       return "## Figma\nReference the Figma frame — its dimensions, text content, and a screenshot URL for the next tool."
     case let .figma(reference):
-      return await service.render(reference)
+      return try await service.render(reference)
     default:
       return ""
     }
@@ -333,12 +335,12 @@ private struct XcodeAppConnector: ComposerAppConnector {
     try await service.search(query)
   }
 
-  func render(selection: AppSelection?) async -> String {
+  func render(selection: AppSelection?) async throws -> String {
     switch selection {
     case .none:
       return "## Xcode\nReference the latest Xcode build errors or test failures."
     case let .xcode(reference):
-      return await service.render(reference)
+      return try await service.render(reference)
     default:
       return ""
     }

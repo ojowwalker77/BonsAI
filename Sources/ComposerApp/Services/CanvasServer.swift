@@ -24,8 +24,13 @@ final class CanvasServer {
     let params = NWParameters.tcp
     params.allowLocalEndpointReuse = true
     params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: Self.port)!)
-    guard let listener = try? NWListener(using: params) else {
-      NSLog("[canvas] could not bind 127.0.0.1:\(Self.port)")
+    let listener: NWListener
+    do {
+      listener = try NWListener(using: params)
+    } catch {
+      let message = UserFacingError.message(for: error, while: "Starting Composer’s local canvas service on 127.0.0.1:\(Self.port)")
+      UserFacingError.report(message)
+      NSLog("[canvas] \(message)")
       return
     }
     self.listener = listener
@@ -69,13 +74,30 @@ final class CanvasServer {
     case ("GET", "/canvas"):
       Task { @MainActor in
         let graph = CanvasBridge.shared.snapshot()
-        self.send(connection, status: "200 OK", data: (try? JSONEncoder().encode(graph)) ?? Data("{}".utf8))
+        do {
+          self.send(connection, status: "200 OK", data: try JSONEncoder().encode(graph))
+        } catch {
+          self.send(connection, status: "500 Internal Server Error", json: [
+            "ok": false,
+            "error": UserFacingError.message(for: error, while: "Encoding the canvas graph"),
+          ])
+        }
       }
 
     case ("POST", "/canvas"):
       let body = self.body(of: buffer, request: request)
       Task { @MainActor in
-        let op = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        let op: [String: Any]
+        do {
+          guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": "Canvas request must be a JSON object."])
+            return
+          }
+          op = decoded
+        } catch {
+          self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": UserFacingError.message(for: error, while: "Decoding the canvas request")])
+          return
+        }
         let result = CanvasBridge.shared.apply(op)
         let ok = (result["ok"] as? Bool) ?? false
         self.send(connection, status: ok ? "200 OK" : "422 Unprocessable Entity", json: result)
@@ -85,7 +107,17 @@ final class CanvasServer {
     case ("POST", "/mcp"):
       let body = self.body(of: buffer, request: request)
       Task { @MainActor in
-        let message = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        let message: [String: Any]
+        do {
+          guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            self.send(connection, status: "400 Bad Request", json: ["error": "MCP request must be a JSON object."])
+            return
+          }
+          message = decoded
+        } catch {
+          self.send(connection, status: "400 Bad Request", json: ["error": UserFacingError.message(for: error, while: "Decoding the MCP request")])
+          return
+        }
         if let response = CanvasMCP.handle(message) {
           self.send(connection, status: "200 OK", json: response)
         } else {

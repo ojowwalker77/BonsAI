@@ -15,7 +15,11 @@ enum ConnectorSecretStore {
   private static let fileURL: URL = {
     let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
     let dir = base.appendingPathComponent("Composer", isDirectory: true)
-    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    do {
+      try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    } catch {
+      UserFacingError.report(error, while: "Creating secure connector-token storage")
+    }
     return dir.appendingPathComponent("connector-secrets.json")
   }()
 
@@ -29,27 +33,46 @@ enum ConnectorSecretStore {
   static func hasToken(for connectorID: String) -> Bool { token(for: connectorID) != nil }
 
   /// Set (or, with nil/blank, clear) the token for a connector id.
-  static func setToken(_ value: String?, for connectorID: String) {
+  @discardableResult
+  static func setToken(_ value: String?, for connectorID: String) -> Bool {
     lock.lock(); defer { lock.unlock() }
     var dict = load()
     let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
     if let trimmed, !trimmed.isEmpty { dict[connectorID] = trimmed } else { dict.removeValue(forKey: connectorID) }
+    guard persist(dict) else { return false }
     cache = dict
-    persist(dict)
+    return true
   }
 
   // MARK: - Backing file (callers hold `lock`)
 
   private static func load() -> [String: String] {
     if let cache { return cache }
-    let dict = (try? Data(contentsOf: fileURL)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+    guard FileManager.default.fileExists(atPath: fileURL.path) else {
+      cache = [:]
+      return [:]
+    }
+    let dict: [String: String]
+    do {
+      let data = try Data(contentsOf: fileURL)
+      dict = try JSONDecoder().decode([String: String].self, from: data)
+    } catch {
+      UserFacingError.report(error, while: "Reading saved connector tokens")
+      dict = [:]
+    }
     cache = dict
     return dict
   }
 
-  private static func persist(_ dict: [String: String]) {
-    guard let data = try? JSONEncoder().encode(dict) else { return }
-    try? data.write(to: fileURL, options: [.atomic])
-    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+  private static func persist(_ dict: [String: String]) -> Bool {
+    do {
+      let data = try JSONEncoder().encode(dict)
+      try data.write(to: fileURL, options: [.atomic])
+      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+      return true
+    } catch {
+      UserFacingError.report(error, while: "Saving the connector token")
+      return false
+    }
   }
 }

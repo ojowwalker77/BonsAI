@@ -5,7 +5,13 @@ import AppKit
 /// sections. Resolved app chips are fetched live and inlined; unresolved ones fall back
 /// to connector-specific instructions.
 enum SelfContainedRenderer {
-  static func render(_ plain: String) async -> String {
+  struct Result {
+    let text: String
+    /// Connector-specific failures, already phrased for display to the person who clicked Copy.
+    let failures: [String]
+  }
+
+  static func render(_ plain: String) async -> Result {
     let body = plain.trimmed
     let clipboard = await MainActor.run { NSPasteboard.general.string(forType: .string)?.trimmed }
 
@@ -19,31 +25,41 @@ enum SelfContainedRenderer {
       sections.append("## Skills To Use\n" + skills.map { "- \($0.dropFirst())" }.joined(separator: "\n"))
     }
 
-    sections.append(contentsOf: await appSections(for: AppToken.scan(plain)))
+    let appSections = await appSections(for: AppToken.scan(plain))
+    sections.append(contentsOf: appSections.sections)
 
     if plain.contains("@clipboard"), let clip = clipboard, !clip.isEmpty {
       sections.append("## Clipboard\n\(clip)")
     }
 
-    return sections.joined(separator: "\n\n") + "\n"
+    return Result(text: sections.joined(separator: "\n\n") + "\n", failures: appSections.failures)
   }
 
   // MARK: App sections (fetched concurrently, emitted in note order)
 
-  private static func appSections(for tokens: [(token: String, appID: String, selection: AppSelection?)]) async -> [String] {
-    guard !tokens.isEmpty else { return [] }
-    return await withTaskGroup(of: (Int, String).self) { group in
+  private static func appSections(for tokens: [(token: String, appID: String, selection: AppSelection?)]) async -> (sections: [String], failures: [String]) {
+    guard !tokens.isEmpty else { return ([], []) }
+    return await withTaskGroup(of: (Int, String?, String?).self) { group in
       for (index, entry) in tokens.enumerated() {
-        group.addTask { (index, await section(for: entry)) }
+        group.addTask {
+          guard let connector = AppConnectorRegistry.connector(for: entry.appID) else {
+            return (index, nil, "\(entry.appID): Composer does not have a connector for this token.")
+          }
+          do {
+            return (index, try await connector.render(selection: entry.selection), nil)
+          } catch {
+            let action = "Resolving \(entry.appID)"
+            return (index, nil, "\(entry.appID): \(UserFacingError.message(for: error, while: action))")
+          }
+        }
       }
-      var collected: [(Int, String)] = []
+      var collected: [(Int, String?, String?)] = []
       for await result in group { collected.append(result) }
-      return collected.sorted { $0.0 < $1.0 }.map(\.1).filter { !$0.isEmpty }
+      let ordered = collected.sorted { $0.0 < $1.0 }
+      return (
+        ordered.compactMap(\.1).filter { !$0.isEmpty },
+        ordered.compactMap(\.2)
+      )
     }
-  }
-
-  private static func section(for entry: (token: String, appID: String, selection: AppSelection?)) async -> String {
-    guard let connector = AppConnectorRegistry.connector(for: entry.appID) else { return "" }
-    return await connector.render(selection: entry.selection)
   }
 }
