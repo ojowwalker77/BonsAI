@@ -198,12 +198,21 @@ final class ComposerTextView: NSTextView {
   static func savePNG(_ image: NSImage) -> URL? {
     guard let tiff = image.tiffRepresentation,
           let rep = NSBitmapImageRep(data: tiff),
-          let png = rep.representation(using: .png, properties: [:]) else { return nil }
+          let png = rep.representation(using: .png, properties: [:]) else {
+      UserFacingError.report("Composer could not convert the pasted image into PNG data. The image was not added.")
+      return nil
+    }
     let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     let dir = base.appendingPathComponent("Composer/Attachments", isDirectory: true)
-    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let url = dir.appendingPathComponent("\(UUID().uuidString).png")
-    do { try png.write(to: url); return url } catch { return nil }
+    do {
+      try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+      try png.write(to: url)
+      return url
+    } catch {
+      UserFacingError.report(error, while: "Saving the pasted image")
+      return nil
+    }
   }
 
   // MARK: Hover reporting for the semantic linter

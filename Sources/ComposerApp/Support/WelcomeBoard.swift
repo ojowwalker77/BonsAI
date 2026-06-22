@@ -13,11 +13,22 @@ enum WelcomeBoard {
   /// on-disk copy. Returns nil if the bundled resource is missing/unreadable — the caller then
   /// just falls back to a blank first board.
   static func seedCards() -> [CardState]? {
-    guard let url = Bundle.appResources.url(forResource: "WelcomeBoard", withExtension: "json"),
-          let data = try? Data(contentsOf: url),
-          let cards = try? JSONDecoder().decode([CardState].self, from: data),
-          !cards.isEmpty
-    else { return nil }
+    guard let url = Bundle.appResources.url(forResource: "WelcomeBoard", withExtension: "json") else {
+      UserFacingError.report("Composer’s bundled welcome board is missing. A blank board was created instead.")
+      return nil
+    }
+    let cards: [CardState]
+    do {
+      let data = try Data(contentsOf: url)
+      cards = try JSONDecoder().decode([CardState].self, from: data)
+    } catch {
+      UserFacingError.report(error, while: "Loading Composer’s bundled welcome board")
+      return nil
+    }
+    guard !cards.isEmpty else {
+      UserFacingError.report("Composer’s bundled welcome board contains no cards. A blank board was created instead.")
+      return nil
+    }
 
     let mascotPath = installMascot()
     return cards.map { card in
@@ -32,10 +43,15 @@ enum WelcomeBoard {
   private static func installMascot() -> String? {
     guard let source = Bundle.appResources.url(forResource: "welcome-companion", withExtension: "png") else { return nil }
     let directory = attachmentsDirectory
-    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let destination = directory.appendingPathComponent(mascotFileName)
-    if !FileManager.default.fileExists(atPath: destination.path) {
-      try? FileManager.default.copyItem(at: source, to: destination)
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      if !FileManager.default.fileExists(atPath: destination.path) {
+        try FileManager.default.copyItem(at: source, to: destination)
+      }
+    } catch {
+      UserFacingError.report(error, while: "Installing Composer’s welcome-board image")
+      return nil
     }
     return FileManager.default.fileExists(atPath: destination.path) ? destination.path : nil
   }

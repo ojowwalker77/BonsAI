@@ -33,37 +33,35 @@ struct SentryService {
     }
   }
 
-  func render(_ reference: SentryReference) async -> String {
-    let header = "## Sentry — \(reference.shortID)"
+  func render(_ reference: SentryReference) async throws -> String {
     guard let token = ConnectorSecretStore.token(for: "@sentry") else {
-      return "\(header)\nAdd a Sentry auth token in Settings → Connectors → Sentry."
+      throw AppSearchError.message("Add a Sentry auth token in Settings → Connectors → Sentry.")
     }
-    do {
-      let issue: Issue = try await decode(URL(string: "\(base)/organizations/\(reference.org)/issues/\(reference.id)/")!, token: token)
-      var lines = ["## Sentry — \(issue.shortId ?? reference.shortID)  \(issue.title)"]
-      var meta: [String] = []
-      if let level = issue.level { meta.append("Level: \(level)") }
-      if let status = issue.status { meta.append("Status: \(status)") }
-      if let count = issue.count { meta.append("Events: \(count)") }
-      if let users = issue.userCount { meta.append("Users affected: \(users)") }
-      if !meta.isEmpty { lines.append(meta.joined(separator: " · ")) }
-      if let culprit = issue.culprit, !culprit.isEmpty { lines.append("Culprit: \(culprit)") }
-      if let first = issue.firstSeen { lines.append("First seen: \(first)") }
-      if let last = issue.lastSeen { lines.append("Last seen: \(last)") }
-      if let permalink = issue.permalink { lines.append("URL: \(permalink)") }
+    let issue: Issue = try await decode(URL(string: "\(base)/organizations/\(reference.org)/issues/\(reference.id)/")!, token: token)
+    var lines = ["## Sentry — \(issue.shortId ?? reference.shortID)  \(issue.title)"]
+    var meta: [String] = []
+    if let level = issue.level { meta.append("Level: \(level)") }
+    if let status = issue.status { meta.append("Status: \(status)") }
+    if let count = issue.count { meta.append("Events: \(count)") }
+    if let users = issue.userCount { meta.append("Users affected: \(users)") }
+    if !meta.isEmpty { lines.append(meta.joined(separator: " · ")) }
+    if let culprit = issue.culprit, !culprit.isEmpty { lines.append("Culprit: \(culprit)") }
+    if let first = issue.firstSeen { lines.append("First seen: \(first)") }
+    if let last = issue.lastSeen { lines.append("Last seen: \(last)") }
+    if let permalink = issue.permalink { lines.append("URL: \(permalink)") }
 
-      // Best-effort: the latest event carries the exception + stack trace. Never fatal.
-      if let trace = try? await latestEventTrace(reference: reference, token: token), !trace.isEmpty {
+    do {
+      let trace = try await latestEventTrace(reference: reference, token: token)
+      if !trace.isEmpty {
         lines.append("")
         lines.append("### Latest event")
         lines.append(trace)
       }
-      return lines.joined(separator: "\n")
-    } catch let error as AppSearchError {
-      return "\(header)\n\(error.errorDescription ?? "Could not load the Sentry issue.")"
     } catch {
-      return "\(header)\nCould not load the Sentry issue: \(error.localizedDescription)"
+      lines.append("")
+      lines.append("Latest event unavailable: \(UserFacingError.message(for: error, while: "Loading the Sentry event"))")
     }
+    return lines.joined(separator: "\n")
   }
 
   // MARK: - Org + event
@@ -78,8 +76,18 @@ struct SentryService {
   private func latestEventTrace(reference: SentryReference, token: String) async throws -> String {
     let url = URL(string: "\(base)/organizations/\(reference.org)/issues/\(reference.id)/events/latest/")!
     let data = try await rawGet(url, token: token)
-    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let entries = json["entries"] as? [[String: Any]],
+    let json: [String: Any]
+    do {
+      guard let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw AppSearchError.message("Sentry’s latest-event response was not a JSON object.")
+      }
+      json = decoded
+    } catch let error as AppSearchError {
+      throw error
+    } catch {
+      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Sentry’s latest event"))
+    }
+    guard let entries = json["entries"] as? [[String: Any]],
           let exception = entries.first(where: { ($0["type"] as? String) == "exception" }),
           let payload = exception["data"] as? [String: Any],
           let values = payload["values"] as? [[String: Any]],
@@ -123,7 +131,7 @@ struct SentryService {
       if http.statusCode == 401 || http.statusCode == 403 {
         throw AppSearchError.message("Sentry rejected the token (\(http.statusCode)). Check Settings → Connectors → Sentry.")
       }
-      throw AppSearchError.message("Sentry API error (\(http.statusCode)).")
+      throw AppSearchError.message("Sentry returned HTTP \(http.statusCode) and did not provide an error message.")
     }
     return data
   }

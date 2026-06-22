@@ -58,8 +58,16 @@ enum CommandLineToolLocator {
     guard let executable = executableURL(for: engine) else {
       return .unavailable("Not installed")
     }
-    let result = try? await Shell.run([executable.path, "--version"])
-    let output = [result?.stdout, result?.stderr]
+    let result: Shell.Result
+    do {
+      result = try await Shell.run([executable.path, "--version"])
+    } catch {
+      return .unavailable(UserFacingError.message(for: error, while: "Starting \(engine.title)"))
+    }
+    guard result.status == 0 else {
+      return .unavailable(UserFacingError.commandFailure(command: engine.title, result: result))
+    }
+    let output = [result.stdout, result.stderr]
       .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
       .first { !$0.isEmpty }
     let version = output.map { String($0.split(separator: "\n", maxSplits: 1).first ?? "") }
@@ -121,8 +129,14 @@ final class EngineCapabilityStore: ObservableObject {
   /// Restore the last detected state. Returns false (→ caller runs a first detection) when nothing
   /// is stored yet — i.e. the first-ever launch.
   private func restorePersisted() -> Bool {
-    guard let data = UserDefaults.standard.data(forKey: Self.snapshotKey),
-          let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return false }
+    guard let data = UserDefaults.standard.data(forKey: Self.snapshotKey) else { return false }
+    let snapshot: Snapshot
+    do {
+      snapshot = try JSONDecoder().decode(Snapshot.self, from: data)
+    } catch {
+      UserFacingError.report(error, while: "Reading Composer’s saved runtime status")
+      return false
+    }
     let restored = snapshot.cli.reduce(into: [HeadlessEngine: RuntimeAvailability]()) { result, pair in
       if let engine = HeadlessEngine(rawValue: pair.key) { result[engine] = pair.value }
     }
@@ -138,8 +152,11 @@ final class EngineCapabilityStore: ObservableObject {
       result[pair.key.rawValue] = pair.value
     }
     let snapshot = Snapshot(cli: resolved, appleIntelligence: appleIntelligence)
-    if let data = try? JSONEncoder().encode(snapshot) {
+    do {
+      let data = try JSONEncoder().encode(snapshot)
       UserDefaults.standard.set(data, forKey: Self.snapshotKey)
+    } catch {
+      UserFacingError.report(error, while: "Saving Composer’s runtime status")
     }
   }
 
@@ -158,7 +175,7 @@ final class EngineCapabilityStore: ObservableObject {
     case .unavailable(.modelNotReady):
       return .unavailable("Model is still preparing")
     @unknown default:
-      return .unavailable("Unavailable right now")
+      return .unavailable("macOS reported an unrecognized Apple Intelligence availability state")
     }
     #else
     return .unavailable("Not included in this build")

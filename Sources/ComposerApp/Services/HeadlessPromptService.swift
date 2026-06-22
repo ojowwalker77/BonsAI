@@ -66,13 +66,19 @@ struct HeadlessPromptService {
     case .claude:
       arguments = [executable.path, "-p", prompt]
     }
-    let result = try await Shell.run(arguments)
-    let out = result.stdout.trimmed
-    let err = result.stderr.trimmed
-    guard result.status == 0 else {
-      throw HeadlessPromptError.failed(err.isEmpty ? "\(engine.title) exited with \(result.status)." : err)
+    let result: Shell.Result
+    do {
+      result = try await Shell.run(arguments)
+    } catch {
+      throw HeadlessPromptError.failed(UserFacingError.message(for: error, while: "Composer could not start \(engine.title)"))
     }
-    guard !out.isEmpty else { throw HeadlessPromptError.failed("\(engine.title) returned no text.") }
+    let out = result.stdout.trimmed
+    guard result.status == 0 else {
+      throw HeadlessPromptError.failed(UserFacingError.commandFailure(command: engine.title, result: result))
+    }
+    guard !out.isEmpty else {
+      throw HeadlessPromptError.failed("\(engine.title) exited successfully but returned no text.")
+    }
     return out
   }
 }

@@ -48,7 +48,7 @@ struct Context7Service {
     }
     let (data, response) = try await URLSession.shared.data(for: request)
     if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-      throw AppSearchError.message("Context7 returned HTTP \(http.statusCode).")
+      throw AppSearchError.message("Context7 returned HTTP \(http.statusCode) and did not provide an error message.")
     }
     return data
   }

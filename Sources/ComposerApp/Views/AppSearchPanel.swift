@@ -88,7 +88,7 @@ final class AppSearchState: ObservableObject {
         self.results = []
         self.isLoading = false
         self.hasSearched = true
-        self.errorText = (error as? LocalizedError)?.errorDescription ?? "Search failed."
+        self.errorText = UserFacingError.message(for: error, while: "\(self.app?.title ?? "Connector") search")
       }
     }
   }

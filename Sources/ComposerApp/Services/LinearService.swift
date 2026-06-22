@@ -31,10 +31,10 @@ struct LinearService {
     }
   }
 
-  func render(_ reference: LinearReference) async -> String {
+  func render(_ reference: LinearReference) async throws -> String {
     let header = "## Linear — \(reference.identifier)"
     guard let key = ConnectorSecretStore.token(for: "@linear") else {
-      return "\(header)\nAdd a Linear API key in Settings → Connectors → Linear."
+      throw AppSearchError.message("Add a Linear API key in Settings → Connectors → Linear.")
     }
     let gql = """
     query Issue($id: String!) {
@@ -50,15 +50,9 @@ struct LinearService {
       }
     }
     """
-    do {
-      let data: IssueData = try await post(gql, variables: ["id": reference.id], key: key)
-      guard let issue = data.issue else { return "\(header)\nIssue not found." }
-      return format(issue)
-    } catch let error as AppSearchError {
-      return "\(header)\n\(error.errorDescription ?? "Could not load the Linear issue.")"
-    } catch {
-      return "\(header)\nCould not load the Linear issue: \(error.localizedDescription)"
-    }
+    let data: IssueData = try await post(gql, variables: ["id": reference.id], key: key)
+    guard let issue = data.issue else { return "\(header)\nIssue not found." }
+    return format(issue)
   }
 
   // MARK: - Rendering
@@ -125,7 +119,7 @@ struct LinearService {
       if http.statusCode == 401 || http.statusCode == 403 {
         throw AppSearchError.message("Linear rejected the API key (\(http.statusCode)). Check Settings → Connectors → Linear.")
       }
-      throw AppSearchError.message("Linear API error (\(http.statusCode)).")
+      throw AppSearchError.message("Linear returned HTTP \(http.statusCode) and did not provide an error message.")
     }
     let envelope = try JSONDecoder().decode(GraphQLResponse<T>.self, from: data)
     if let message = envelope.errors?.first?.message { throw AppSearchError.message("Linear: \(message)") }

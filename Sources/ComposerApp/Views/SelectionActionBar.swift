@@ -34,7 +34,7 @@ struct SelectionActionBar: View {
           action(engine: engine) { onRefine(engine) }
         }
         if enabledEngines.isEmpty {
-          Text("No engines enabled")
+          Text(unavailableEngineMessage)
             .font(Theme.Typography.actionLabel)
             .foregroundStyle(Theme.Palette.menuDesc)
             .padding(.horizontal, 10)
@@ -50,6 +50,18 @@ struct SelectionActionBar: View {
     .scaleEffect(shown ? 1 : 0.94, anchor: .bottom)
     .opacity(shown ? 1 : 0)
     .onAppear { withAnimation(Theme.Motion.accessory) { shown = true } }
+  }
+
+  private var unavailableEngineMessage: String {
+    guard claudeEnabled else { return "Claude disabled in Settings → Runtime" }
+    switch capabilities.status(for: .claude) {
+    case .checking:
+      return "Claude availability is still being checked"
+    case let .unavailable(reason):
+      return "Claude unavailable: \(reason)"
+    case .available:
+      return "Claude is available but no refine action was configured"
+    }
   }
 
   @ViewBuilder

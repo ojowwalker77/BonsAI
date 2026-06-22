@@ -9,7 +9,13 @@ enum NotePersistence {
   private static var saveWork: DispatchWorkItem?
 
   static func load() -> String {
-    (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    guard FileManager.default.fileExists(atPath: url.path) else { return "" }
+    do {
+      return try String(contentsOf: url, encoding: .utf8)
+    } catch {
+      UserFacingError.report(error, while: "Reading the previous Composer note")
+      return ""
+    }
   }
 
   static func scheduleSave(_ text: String) {
@@ -21,7 +27,11 @@ enum NotePersistence {
 
   static func write(_ text: String) {
     let directory = url.deletingLastPathComponent()
-    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    try? text.write(to: url, atomically: true, encoding: .utf8)
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      try text.write(to: url, atomically: true, encoding: .utf8)
+    } catch {
+      UserFacingError.report(error, while: "Saving the Composer note")
+    }
   }
 }

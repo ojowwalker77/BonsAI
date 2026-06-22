@@ -22,6 +22,7 @@ final class CanvasAgent: ObservableObject {
 
   private var sessionID: String?
   private var process: Process?
+  private var didRequestStop = false
   private static let groundingKey = "agent.groundingDirectory"
 
   init() {
@@ -64,12 +65,14 @@ final class CanvasAgent: ObservableObject {
     let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !prompt.isEmpty, !isRunning else { return }
     messages.append(AgentMessage(role: .user, text: prompt))
+    didRequestStop = false
     isRunning = true
     let resume = sessionID
     Task { await run(prompt: prompt, resume: resume) }
   }
 
   func stop() {
+    didRequestStop = true
     process?.terminate()
     isRunning = false
   }
@@ -116,21 +119,56 @@ final class CanvasAgent: ObservableObject {
     do {
       try process.run()
     } catch {
-      messages.append(AgentMessage(role: .error, text: "Couldn't launch claude: \(error.localizedDescription)"))
+      messages.append(AgentMessage(role: .error, text: UserFacingError.message(for: error, while: "Starting Claude")))
       isRunning = false; self.process = nil; return
     }
 
+    // Claude may put diagnostics on either stream. Drain stderr while stream-json is consumed from
+    // stdout so an unusually verbose failure cannot block the process, and retain non-JSON stdout
+    // for tools such as Claude Code that report a preflight failure before stream-json starts.
+    let stderrReader = Task.detached { () -> Result<String, Error> in
+      do {
+        let data = try stderr.fileHandleForReading.readToEnd()
+        return .success(data.flatMap { String(data: $0, encoding: .utf8) } ?? "")
+      } catch {
+        return .failure(error)
+      }
+    }
     var sawOutput = false
+    var nonProtocolOutput: [String] = []
     do {
       for try await line in stdout.fileHandleForReading.bytes.lines {
         if Task.isCancelled { break }
-        if handleLine(line) { sawOutput = true }
+        if handleLine(line) {
+          sawOutput = true
+        } else {
+          nonProtocolOutput.append(line)
+        }
       }
     } catch { /* stream closed */ }
 
-    if !sawOutput, let data = try? stderr.fileHandleForReading.readToEnd(),
-       let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-      messages.append(AgentMessage(role: .error, text: String(text.suffix(400))))
+    process.waitUntilExit()
+    let stderrText: String
+    switch await stderrReader.value {
+    case let .success(text):
+      stderrText = text
+    case let .failure(error):
+      stderrText = UserFacingError.message(for: error, while: "Reading Claude’s error output")
+    }
+    if process.terminationStatus != 0, !didRequestStop {
+      messages.append(AgentMessage(
+        role: .error,
+        text: UserFacingError.commandFailure(
+          command: "Claude",
+          status: process.terminationStatus,
+          stdout: nonProtocolOutput.joined(separator: "\n"),
+          stderr: stderrText)))
+    } else if !sawOutput {
+      let diagnostic = UserFacingError.commandOutput(
+        stdout: nonProtocolOutput.joined(separator: "\n"), stderr: stderrText)
+      if !diagnostic.isEmpty {
+        messages.append(AgentMessage(role: .error, text: "Claude returned output Composer could not read: \(diagnostic)"))
+      }
     }
     isRunning = false
     self.process = nil
@@ -238,7 +276,11 @@ final class CanvasAgent: ObservableObject {
   static let workdir: URL = {
     let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     let dir = base.appendingPathComponent("Composer/agent", isDirectory: true)
-    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    do {
+      try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    } catch {
+      UserFacingError.report(error, while: "Creating Claude’s Composer workspace")
+    }
     return dir
   }()
 

@@ -643,15 +643,17 @@ private struct ConnectorTokenField: View {
   private func save() {
     let value = draft.trimmed
     guard !value.isEmpty else { return }
-    ConnectorSecretStore.setToken(value, for: connectorID)
-    draft = ""
-    revision += 1
+    if ConnectorSecretStore.setToken(value, for: connectorID) {
+      draft = ""
+      revision += 1
+    }
   }
 
   private func clear() {
-    ConnectorSecretStore.setToken(nil, for: connectorID)
-    draft = ""
-    revision += 1
+    if ConnectorSecretStore.setToken(nil, for: connectorID) {
+      draft = ""
+      revision += 1
+    }
   }
 }
 
