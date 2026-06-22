@@ -11,15 +11,21 @@ under the new version heading.
 
 ## [Unreleased]
 
-<!--
-Add a bullet under the matching heading for every user-facing change. Create a
-heading only when you have an entry for it; delete this comment when you do.
+### Added
+- **Rename a board.** Hover a board in the history list for a pencil (or right-click →
+  **Rename**) and edit its name in place — Enter or click-away saves, Esc cancels. A
+  custom name overrides the auto-derived title and survives later card edits.
+- **Remove a board's grounding.** Once a folder was picked there was no way to un-ground;
+  now a ✕ on the Agent dock's grounding chip and a **Remove Grounding** item in the
+  sidebar folder's context menu clear it back to canvas-only.
 
-### Added     — new capabilities
-### Changed   — behavior or UX that changed
-### Fixed     — bug fixes
-### Removed    — things taken out
--->
+### Fixed
+- **The Settings gear now toggles.** Clicking the sidebar gear a second time while
+  Settings was open did nothing; it now closes the panel (matching the Agent toggle).
+- **Drawing tools no longer grab existing elements.** A drag that started over a card
+  used to select/move that card instead of drawing on top. Selecting, moving, and
+  resizing are now exclusive to the Select tool (⌘1); in any drawing tool a drag always
+  draws a new element.
 
 ## [1.0.2] - 2026-06-21
 
