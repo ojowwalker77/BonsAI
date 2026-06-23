@@ -66,7 +66,7 @@ final class DumpStore: ObservableObject {
   /// The next save asks the board for one fresh snapshot when the debounce fires. Keeping a
   /// closure (rather than an array captured by every queued work item) prevents fast typing from
   /// retaining many whole-board copies until their cancelled timers drain.
-  private var pendingSnapshot: (() -> [CardState])?
+  private var pendingSnapshot: (() -> [CardState]?)?
 
   /// Newest first.
   @Published private(set) var dumps: [Dump] = []
@@ -135,12 +135,14 @@ final class DumpStore: ObservableObject {
   // MARK: Editing
 
   /// Debounced autosave of the canvas's cards into the current board.
-  func scheduleUpdate(snapshot: @escaping () -> [CardState]) {
+  func scheduleUpdate(snapshot: @escaping () -> [CardState]?) {
     pendingSnapshot = snapshot
     saveWork?.cancel()
     let work = DispatchWorkItem { [weak self] in
-      guard let self, let cards = self.pendingSnapshot?() else { return }
+      guard let self else { return }
+      let snapshot = self.pendingSnapshot
       self.pendingSnapshot = nil
+      guard let cards = snapshot?() else { return }
       self.commit(cards: cards)
     }
     saveWork = work

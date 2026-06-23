@@ -75,21 +75,42 @@ final class CanvasBridge {
 
     case "create_diagram":
       guard let rawNodes = op["nodes"] as? [[String: Any]] else { return fail("missing \"nodes\"") }
+      var droppedNodeKeys: [String] = []
+      var seenNodeKeys = Set<String>()
       let specs = rawNodes.compactMap { node -> BoardViewModel.DiagramNodeSpec? in
-        guard let key = string(node["key"]) ?? string(node["id"]), let text = string(node["text"]) else { return nil }
+        guard let key = string(node["key"]) ?? string(node["id"]), let text = string(node["text"]), !key.isEmpty else {
+          if let key = string(node["key"]) ?? string(node["id"]), !key.isEmpty { droppedNodeKeys.append(key) }
+          return nil
+        }
+        guard seenNodeKeys.insert(key).inserted else {
+          droppedNodeKeys.append(key)
+          return nil
+        }
         // Only box shapes are valid nodes; anything else falls back to a rectangle.
         let shape = string(node["shape"]).flatMap(CanvasElementKind.init(rawValue:))
           .flatMap { [.rectangle, .ellipse, .diamond].contains($0) ? $0 : nil } ?? .rectangle
         return BoardViewModel.DiagramNodeSpec(key: key, text: text, shape: shape)
       }
       guard !specs.isEmpty else { return fail("no valid nodes (each needs a \"key\" and \"text\")") }
-      let edgeSpecs = (op["edges"] as? [[String: Any]] ?? []).compactMap { edge -> BoardViewModel.DiagramEdgeSpec? in
+      let rawEdges = op["edges"] as? [[String: Any]] ?? []
+      let edgeSpecs = rawEdges.compactMap { edge -> BoardViewModel.DiagramEdgeSpec? in
         guard let from = string(edge["from"]), let to = string(edge["to"]) else { return nil }
         return BoardViewModel.DiagramEdgeSpec(from: from, to: to, reason: string(edge["reason"]) ?? "")
       }
       let map = board.createDiagram(nodes: specs, edges: edgeSpecs, direction: layoutDirection(op["direction"]))
+      let createdEdgeCount = edgeSpecs.filter { map[$0.from] != nil && map[$0.to] != nil && $0.from != $0.to }.count
       frameBoard(all: false)   // the new diagram is selected — frame exactly it
-      return ok(["nodes": map.mapValues { $0.uuidString }, "count": map.count])
+      return ok([
+        "nodes": map.mapValues { $0.uuidString },
+        "count": map.count,
+        "requestedNodeCount": rawNodes.count,
+        "createdNodeCount": map.count,
+        "droppedNodeCount": rawNodes.count - map.count,
+        "droppedNodeKeys": droppedNodeKeys,
+        "requestedEdgeCount": rawEdges.count,
+        "createdEdgeCount": createdEdgeCount,
+        "droppedEdgeCount": rawEdges.count - createdEdgeCount,
+      ])
 
     case "relayout":
       board.relayout(direction: layoutDirection(op["direction"]))

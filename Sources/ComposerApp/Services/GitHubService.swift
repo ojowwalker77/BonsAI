@@ -21,7 +21,9 @@ struct GitHubService {
     ])
     guard result.status == 0 else { throw AppSearchError.fromGH(result) }
 
-    let items = try JSONDecoder().decode([Item].self, from: Data(result.stdout.utf8))
+    let output = result.stdout.trimmed
+    guard !output.isEmpty else { return [] }
+    let items = try JSONDecoder().decode([Item].self, from: Data(output.utf8))
     return items.map { item in
       let repo = item.repository?.nameWithOwner ?? ""
       let state = item.state?.capitalized ?? ""
@@ -42,7 +44,9 @@ struct GitHubService {
     let result = try await Shell.run(["gh", kind.ghViewNoun, "view", url, "--json", fields])
     guard result.status == 0 else { throw AppSearchError.fromGH(result) }
 
-    let detail = try JSONDecoder().decode(Detail.self, from: Data(result.stdout.utf8))
+    let output = result.stdout.trimmed
+    guard !output.isEmpty else { return "No GitHub result found." }
+    let detail = try JSONDecoder().decode(Detail.self, from: Data(output.utf8))
     var lines = ["**\(detail.title)** (#\(detail.number)) — \(detail.state?.capitalized ?? "")"]
     if let login = detail.author?.login { lines.append("Author: @\(login)") }
     if kind == .pr {

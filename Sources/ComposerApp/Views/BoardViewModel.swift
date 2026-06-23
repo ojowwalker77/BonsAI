@@ -188,6 +188,7 @@ final class BoardViewModel: ObservableObject {
   /// The editor lost first responder.
   func endEditing(_ id: UUID) {
     interactions[id]?.captureEditorState()
+    textEditBaselines[id] = nil
     if editingCardID == id { editingCardID = nil }
   }
 
@@ -249,7 +250,7 @@ final class BoardViewModel: ObservableObject {
 
   /// Build the persistence snapshot only when the debounce actually fires. This avoids cloning
   /// the entire board on every keystroke and keeps cancelled saves from retaining stale snapshots.
-  func scheduleSave() { store.scheduleUpdate { [weak self] in self?.snapshot() ?? [] } }
+  func scheduleSave() { store.scheduleUpdate { [weak self] in self?.snapshot() } }
   func flushSave() { store.flush(cards: snapshot()) }
 
   private func historySnapshot(cards overrideCards: [CardState]? = nil) -> HistorySnapshot {
@@ -535,6 +536,9 @@ final class BoardViewModel: ObservableObject {
   @discardableResult
   func supersede(oldID: UUID, newText: String, reason: String) -> UUID? {
     guard let old = cards.first(where: { $0.id == oldID }) else { return nil }
+    registerUndo()
+    suppressUndo = true
+    defer { suppressUndo = false; refreshBoundArrows(); scheduleSave() }
     setArchived(oldID, true)
     let newID = insertText(newText, at: CGPoint(x: old.x, y: old.y + old.h + 64))
     _ = connectCards(from: oldID, to: newID, reason: reason)
@@ -760,9 +764,11 @@ final class BoardViewModel: ObservableObject {
     registerUndo()
     cards[i].z = nextZ
     nextZ += 1
+    scheduleSave()
   }
 
   func delete(_ id: UUID) {
+    clearMovePreview()
     guard let i = index(for: id), !cards[i].locked else { return }
     registerUndo()
     cards.removeAll { $0.id == id }
@@ -803,6 +809,7 @@ final class BoardViewModel: ObservableObject {
   }
 
   func deleteSelection() {
+    clearMovePreview()
     guard !selectedCardIDs.isEmpty else { return }
     let deleting = unlockedIDs(in: selectedCardIDs)
     guard !deleting.isEmpty else { return }
@@ -883,7 +890,10 @@ final class BoardViewModel: ObservableObject {
 
   func updateMovePreview(by delta: CGSize) {
     let moving = unlockedIDs(in: selectedCardIDs)
-    guard moving.count > 1 else { return }
+    // A multi-selection can contain locked cards. Preview the unlocked subset even when it has
+    // only one member, because BoardCardView still commits through finishMovePreview for the
+    // original multi-selection.
+    guard !moving.isEmpty else { return }
     if movePreviewIDs != moving {
       clearMovePreview()
       movePreviewIDs = moving

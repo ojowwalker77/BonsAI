@@ -3,6 +3,17 @@ import Foundation
 import FoundationModels
 #endif
 
+/// One ambiguity finding located in a specific card. The UI re-locates `phrase` in the live text
+/// when distributing results because a card may have changed while the on-device pass was running.
+struct BoardLintFinding: Equatable, Sendable {
+  let cardID: UUID
+  let phrase: String
+  let kind: LintKind
+  let question: String
+  let suggestions: [String]
+  let relatedCardIDs: [UUID]
+}
+
 /// The invisible semantic linter, backed by Apple's on-device Foundation Model.
 ///
 /// Runs **fully on-device**: free per call, private (drafts never leave the Mac),
@@ -78,6 +89,81 @@ final class SemanticLintService {
     #endif
   }
 
+  /// Analyze every card in one pass so the model can detect cross-card contradictions and missing
+  /// context. The card order supplied by the board is the stable 1-based index used in the prompt.
+  /// A deliberately conservative size cap avoids asking the on-device model to reason over a prompt
+  /// it cannot fit; callers can simply retry after narrowing the board.
+  func analyzeBoard(cards: [(id: UUID, visibleText: String, plainText: String)]) async -> [BoardLintFinding] {
+    let combinedVisibleCharacterCount = cards.reduce(into: 0) { $0 += $1.visibleText.count }
+    guard combinedVisibleCharacterCount >= 12, combinedVisibleCharacterCount <= 8_000 else { return [] }
+    guard isAvailable else { return [] }
+
+    let contexts = cards.map { ConnectorLintContext(plainText: $0.plainText) }
+
+    #if canImport(FoundationModels)
+    guard #available(macOS 26, *) else { return [] }
+    do {
+      // Stateless on purpose: board passes must not retain prior prompt text or build an ever-growing
+      // model transcript as the user edits.
+      let session = LanguageModelSession(instructions: Self.boardInstructions)
+      let response = try await session.respond(to: Self.boardPrompt(cards: cards, contexts: contexts),
+                                               generating: BoardLintResult.self)
+      return response.content.issues.compactMap { issue in
+        let sourceIndex = issue.cardIndex - 1
+        guard cards.indices.contains(sourceIndex) else { return nil }
+        let source = cards[sourceIndex]
+        let range = (source.visibleText as NSString).range(of: issue.phrase)
+        guard !issue.phrase.isEmpty, range.location != NSNotFound, range.length > 0,
+              !Self.rangeTouchesImagePlaceholder(range, in: source.visibleText)
+        else { return nil }
+
+        let kind = issue.kind.domain
+        let rawQuestion = issue.question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawQuestion.isEmpty else { return nil }
+        let question = rawQuestion.hasSuffix("?") ? rawQuestion : rawQuestion + "?"
+        guard question.split(whereSeparator: { $0.isWhitespace }).count <= 8 else { return nil }
+
+        let flag = LintFlag(
+          phrase: issue.phrase,
+          kind: kind,
+          question: question,
+          suggestions: [],
+          range: range,
+          rectInView: nil)
+        guard contexts[sourceIndex].shouldKeep(flag) else { return nil }
+
+        let suggestions = issue.suggestions
+          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+          .filter { !$0.isEmpty && $0 != issue.phrase }
+
+        var relatedCardIDs: [UUID] = []
+        if kind == .conflicting || kind == .missingContext {
+          for relatedIndex in issue.relatedCardIndices {
+            let index = relatedIndex - 1
+            guard cards.indices.contains(index) else { continue }
+            let relatedID = cards[index].id
+            guard relatedID != source.id, !relatedCardIDs.contains(relatedID) else { continue }
+            relatedCardIDs.append(relatedID)
+          }
+        }
+
+        return BoardLintFinding(
+          cardID: source.id,
+          phrase: issue.phrase,
+          kind: kind,
+          question: question,
+          suggestions: Array(suggestions.prefix(3)),
+          relatedCardIDs: relatedCardIDs)
+      }
+    } catch {
+      // Refusals and context-window failures are intentionally invisible, matching analyze().
+      return []
+    }
+    #else
+    return []
+    #endif
+  }
+
   // MARK: - Prompt (the product's brain)
 
   /// Bias hard toward precision. An *unprompted* squiggle nobody asked for is far more
@@ -132,6 +218,18 @@ final class SemanticLintService {
   If nothing is genuinely ambiguous, return an empty list of issues.
   """
 
+  /// The board pass inherits the precision rules above, but its output must identify both the card
+  /// containing the phrase and any cards that supply the contradiction or missing context.
+  static let boardInstructions = instructions + """
+
+  You are now linting a WHOLE board, not one read-only card plus sibling context. You may flag a
+  phrase in any numbered card, but only when it is genuinely ambiguous. For every issue, return
+  the 1-based cardIndex of the card containing the verbatim phrase. For `conflicting` and
+  `missingContext`, also return relatedCardIndices for the other numbered cards needed to explain
+  the finding. Do not list the source card itself as related. For every other kind, return an empty
+  relatedCardIndices list. A phrase is not ambiguous merely because another card exists.
+  """
+
   private static func rangeTouchesImagePlaceholder(_ range: NSRange, in text: String) -> Bool {
     guard let regex = try? NSRegularExpression(pattern: #"\[image:\s*[^\]]+\]"#) else { return false }
     let full = NSRange(location: 0, length: (text as NSString).length)
@@ -149,6 +247,23 @@ final class SemanticLintService {
       prompt += "\n\nOther cards on this board (READ-ONLY context — do NOT quote phrases from here):\n\(boardContext)"
     }
     prompt += "\n\nVisible draft to quote phrases from:\n\(visibleText)"
+    return prompt
+  }
+
+  private static func boardPrompt(cards: [(id: UUID, visibleText: String, plainText: String)],
+                                  contexts: [ConnectorLintContext]) -> String {
+    var prompt = "Analyze every numbered card below in one board-level pass. Return only genuinely ambiguous phrases."
+    for (index, card) in cards.enumerated() {
+      prompt += """
+
+
+      Card \(index + 1)
+      Resolved connector context:
+      \(contexts[index].summary)
+      Visible draft to quote phrases from:
+      \(card.visibleText)
+      """
+    }
     return prompt
   }
 }
@@ -225,7 +340,7 @@ private struct ConnectorLintContext {
 
   func shouldKeep(_ flag: LintFlag) -> Bool {
     let phrase = flag.phrase.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !phrase.isEmpty, !phrase.hasPrefix("@"), !phrase.contains("\u{fffc}") else { return false }
+    guard !phrase.isEmpty, !phrase.contains("@"), !phrase.contains("\u{fffc}") else { return false }
 
     let lower = phrase.lowercased()
     if flag.kind == .unresolvedReference || flag.kind == .missingContext {
@@ -277,6 +392,37 @@ private struct LintIssue {
 
   @Guide(description: "Up to 3 rewrites of the phrase, each a drop-in replacement that removes the ambiguity.")
   let suggestions: [String]
+}
+
+/// Guided board-level output: indexes keep the model away from fragile UUIDs while the service maps
+/// results back to real cards and verifies every quoted phrase against that card's current text.
+@available(macOS 26, *)
+@Generable
+private struct BoardLintResult {
+  @Guide(description: "Every genuinely ambiguous phrase on this board. Empty if all cards are clear.")
+  let issues: [BoardLintIssue]
+}
+
+@available(macOS 26, *)
+@Generable
+private struct BoardLintIssue {
+  @Guide(description: "The 1-based number of the card containing phrase.")
+  let cardIndex: Int
+
+  @Guide(description: "The ambiguous phrase copied word-for-word from the named card.")
+  let phrase: String
+
+  @Guide(description: "What kind of ambiguity this is.")
+  let kind: LintIssueKind
+
+  @Guide(description: "One short clarifying question for the author. Max 8 words, ending with '?'.")
+  let question: String
+
+  @Guide(description: "Up to 3 rewrites of phrase, each a drop-in replacement that resolves the ambiguity.")
+  let suggestions: [String]
+
+  @Guide(description: "Other 1-based card numbers needed for conflicting or missingContext; empty for all other kinds.")
+  let relatedCardIndices: [Int]
 }
 
 @available(macOS 26, *)

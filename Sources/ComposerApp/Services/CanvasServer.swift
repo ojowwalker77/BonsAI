@@ -15,6 +15,8 @@ final class CanvasServer {
   /// The server is loopback-only, but an agent/tool bug should still not be able to grow an
   /// in-memory request buffer without bound. Canvas mutations are deliberately tiny JSON.
   private static let maximumRequestBytes = 1 * 1_024 * 1_024
+  /// A partial HTTP request should not retain a loopback connection forever.
+  private static let requestDeadline: TimeInterval = 15
 
   private var listener: NWListener?
   private let queue = DispatchQueue(label: "dev.jow.Composer.canvas-server")
@@ -41,27 +43,33 @@ final class CanvasServer {
 
   private func accept(_ connection: NWConnection) {
     connection.start(queue: queue)
-    read(connection, buffer: Data())
+    let deadline = DispatchWorkItem { connection.cancel() }
+    queue.asyncAfter(deadline: .now() + Self.requestDeadline, execute: deadline)
+    read(connection, buffer: Data(), deadline: deadline)
   }
 
-  private func read(_ connection: NWConnection, buffer: Data) {
+  private func read(_ connection: NWConnection, buffer: Data, deadline: DispatchWorkItem) {
     connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
       guard let self else { return }
       var buffer = buffer
       if let data { buffer.append(data) }
       guard buffer.count <= Self.maximumRequestBytes else {
+        deadline.cancel()
         self.send(connection, status: "413 Payload Too Large", json: ["ok": false, "error": "request too large"])
         return
       }
       if let request = HTTPRequest(buffer), request.bodyStart + request.contentLength <= Self.maximumRequestBytes,
          buffer.count - request.bodyStart >= request.contentLength {
+        deadline.cancel()
         self.route(request, buffer: buffer, on: connection)
       } else if let request = HTTPRequest(buffer), request.bodyStart + request.contentLength > Self.maximumRequestBytes {
+        deadline.cancel()
         self.send(connection, status: "413 Payload Too Large", json: ["ok": false, "error": "request too large"])
       } else if isComplete || error != nil {
+        deadline.cancel()
         self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": "bad request"])
       } else {
-        self.read(connection, buffer: buffer)
+        self.read(connection, buffer: buffer, deadline: deadline)
       }
     }
   }

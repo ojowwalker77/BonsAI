@@ -148,8 +148,10 @@ struct XcodeService {
     guard result.status == 0 else {
       throw AppSearchError.message(UserFacingError.commandFailure(command: "Xcode result reader", result: result))
     }
+    let output = result.stdout.trimmed
+    guard !output.isEmpty else { return [:] }
     do {
-      guard let json = try JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any] else {
+      guard let json = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any] else {
         throw AppSearchError.message("Xcode result reader returned JSON in an unexpected shape.")
       }
       return json
