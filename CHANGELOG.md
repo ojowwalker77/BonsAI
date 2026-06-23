@@ -21,6 +21,40 @@ heading only when you have an entry for it; delete this comment when you do.
 ### Removed    — things taken out
 -->
 
+## [1.0.4] - 2026-06-23
+
+### Added
+- **⌘K command palette.** A transient spotlight over the board with two sections:
+  **Boards** — fuzzy-search every board by title (exact > prefix > substring >
+  subsequence ranking; an empty query lists the most recent) — and **Actions** — the
+  buried, shortcut-less board commands (Fit, Describe, ground/clear grounding,
+  reset/stop agent, compile, copy, new board, toggle Agent, Settings). Esc or click-away
+  returns the caret to the card you were editing.
+- **Board-wide ambiguity linting.** The invisible on-device semantic linter can now
+  analyze the whole board in a single pass, catching contradictions and missing context
+  *between* cards — not just ambiguity within one card. It stays fully on-device and
+  skips boards too large to fit the model.
+
+### Changed
+- **Live agent state in the toolbar and ⌘K palette.** The agent's coarse running state
+  is now observed separately from its streaming transcript, so the toolbar and palette
+  reflect whether the agent is running without the board re-rendering on every streamed
+  token.
+- **Hardened board services.** The canvas bridge/server, GitHub and Xcode connectors,
+  and board persistence are more defensively guarded against edge-case failures.
+
+### Fixed
+- **Stop-then-send no longer breaks the agent.** Hitting stop and immediately sending
+  again used to race: the old run's trailing cleanup clobbered the new turn — the spinner
+  vanished and the live agent could no longer be stopped. Runs now carry a generation
+  token, so only the current turn writes back state.
+- **Stop works at the very start of a turn.** A stop fired before the agent process was
+  assigned could not terminate the turn; the process launch is now guarded and assigned
+  before the run begins.
+- **The command palette restores your cursor on cancel.** Esc, click-away, or a second
+  ⌘K now returns the caret to the card you were editing; the editing-card reference was
+  previously cleared before dismiss could run.
+
 ## [1.0.3] - 2026-06-22
 
 ### Added
