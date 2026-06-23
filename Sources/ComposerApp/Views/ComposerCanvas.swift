@@ -31,6 +31,9 @@ struct ComposerCanvas: View {
   @State private var showAgent = false
   /// The ⌘K command palette (board switcher + buried board-level actions) is showing.
   @State private var showPalette = false
+  /// The card that held the caret when the palette was summoned, captured before the palette's
+  /// search field steals first responder — so a cancel can hand editing back to it.
+  @State private var paletteReturnCardID: UUID?
   /// Mirrors the agent's grounding folder so the toolbar reflects it reactively.
   @AppStorage("agent.groundingDirectory") private var groundingPath = ""
 
@@ -731,23 +734,30 @@ struct ComposerCanvas: View {
   }
 
   private func togglePalette() {
-    if showPalette { showPalette = false; return }
+    if showPalette { dismissPalette(); return }
     // The compiled-draft overlay is a focused modal — dismiss it before opening the palette.
     guard store.compiledDraft == nil else { return }
     store.isHistoryOpen = false
+    // Capture the editing card now: mounting the palette's search field resigns the editor's
+    // first responder (async), which clears `board.editingCardID` before a later dismiss can read it.
+    paletteReturnCardID = board.editingCardID
     dismissEditorOverlays()
     showPalette = true
   }
 
-  private func closePalette() { showPalette = false }
+  /// Pick-a-board / run-an-action paths relocate focus themselves, so just close.
+  private func closePalette() {
+    showPalette = false
+    paletteReturnCardID = nil
+  }
 
-  /// Cancel (Esc / click-away) closes the palette and returns the caret to the card you were
-  /// writing in when you summoned it — the palette stole first responder, so without this you'd
-  /// land back on the board instead of mid-sentence. Picking a board / running an action skip this
-  /// (they relocate focus themselves).
+  /// Cancel (Esc / click-away / a second ⌘K) closes the palette and returns the caret to the card
+  /// you were writing in when you summoned it — the palette stole first responder, so without this
+  /// you'd land back on the board instead of mid-sentence.
   private func dismissPalette() {
     showPalette = false
-    guard let id = board.editingCardID else { return }
+    guard let id = paletteReturnCardID else { return }
+    paletteReturnCardID = nil
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
       board.interaction(for: id).controller.focus()
     }
