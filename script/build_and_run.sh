@@ -145,6 +145,40 @@ $SPARKLE_KEY_ENTRY
 </plist>
 PLIST
 
+# Code signing for local builds. macOS keys TCC permissions (Screen Recording, etc.) to the app's
+# code signature. An unsigned or ad-hoc build gets a fresh code hash every rebuild, so the system
+# treats each build as a new app and re-prompts. Signing with a STABLE identity keeps one designated
+# requirement across rebuilds, so a granted permission sticks. Override the identity with
+# BONSAI_CODESIGN_IDENTITY; otherwise prefer a local "Apple Development" cert. With none available the
+# app is left unsigned (the old behavior) and TCC will keep re-prompting. This is signing only — it
+# does not touch the board/dock layout CLAUDE.md guards. (The release workflow does its own
+# hardened-runtime + notarized signing; this is purely the local convenience signature.)
+CODESIGN_IDENTITY="${BONSAI_CODESIGN_IDENTITY:-}"
+if [[ -z "$CODESIGN_IDENTITY" ]]; then
+  # Prefer a Developer ID Application identity: macOS treats it as a stable, distributable identity
+  # and keeps the TCC grant across rebuilds (the binary hash changes every build, but the grant is
+  # matched on the signing identity, not the hash). An Apple Development cert is a weaker fallback —
+  # macOS tends to re-pin those to the exact binary, so Screen Recording re-prompts on each rebuild.
+  CODESIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk -F'"' '/Developer ID Application:/ {print $2; exit}')"
+  if [[ -z "$CODESIGN_IDENTITY" ]]; then
+    CODESIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+      | awk -F'"' '/Apple Development:/ {print $2; exit}')"
+  fi
+fi
+if [[ -n "$CODESIGN_IDENTITY" ]]; then
+  # --deep signs nested code (Sparkle.framework and its helpers) inside-out, then the app last —
+  # after every binary edit above (rpath, strip), which is required for a valid signature.
+  if codesign --force --deep --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE" >/dev/null 2>&1; then
+    echo "Signed locally as: $CODESIGN_IDENTITY"
+  else
+    echo "warning: codesign failed; app left unsigned (Screen Recording permission may re-prompt)." >&2
+  fi
+else
+  echo "note: no codesigning identity found — app unsigned, so TCC permissions re-prompt each rebuild." >&2
+  echo "      set BONSAI_CODESIGN_IDENTITY=\"Apple Development: …\" to keep grants across rebuilds." >&2
+fi
+
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
 }
