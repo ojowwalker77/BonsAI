@@ -133,7 +133,10 @@ final class BoardViewModel: ObservableObject {
 
   /// Reads the most recent text without creating a runtime/editor bundle for an off-screen card.
   func plainText(for card: CardState) -> String {
-    interactions[card.id]?.plainText ?? card.text
+    // A screenshot card has no editable text; it contributes its on-device "understanding" (OCR +
+    // classification) instead, so the image becomes real context for Compile, copy, and the agent.
+    if card.elementKind == .image { return card.imageUnderstanding ?? "" }
+    return interactions[card.id]?.plainText ?? card.text
   }
 
   var selectedInteraction: CardInteraction? { selectedCardID.flatMap { interactions[$0] } }
@@ -482,6 +485,15 @@ final class BoardViewModel: ObservableObject {
   }
 
   /// Replace a card's text (serialized form). The live editor re-chipifies it if mounted.
+  /// Fill in an image card's on-device understanding once the OCR/classification pass finishes.
+  /// Not an undoable user edit — it's the async completion of a capture, so it skips undo and just
+  /// persists. Safe to call after the card was deleted (it no-ops).
+  func setImageUnderstanding(_ id: UUID, _ understanding: String) {
+    guard let i = cards.firstIndex(where: { $0.id == id }) else { return }
+    cards[i].imageUnderstanding = understanding
+    scheduleSave()
+  }
+
   func setText(_ id: UUID, _ text: String) {
     guard let i = cards.firstIndex(where: { $0.id == id }) else { return }
     registerUndo()
