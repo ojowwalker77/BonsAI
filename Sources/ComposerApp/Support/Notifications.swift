@@ -66,4 +66,10 @@ extension Notification.Name {
   static let composerStyleCacheUpdated = Notification.Name("composerStyleCacheUpdated")
   /// Re-bind the global summon hotkey after the user records a new shortcut in Settings.
   static let composerShortcutChanged = Notification.Name("composerShortcutChanged")
+  /// Fires on the capture hotkey ("Snap to board") — grab a screen region, understand it on-device,
+  /// and drop it on the board as an agent-ready card.
+  static let composerCaptureToBoard = Notification.Name("composerCaptureToBoard")
+  /// Fires after a region was captured and saved; `userInfo["path"]` is the PNG. The board adds the
+  /// image card here and kicks off its on-device understanding.
+  static let composerCaptureCompleted = Notification.Name("composerCaptureCompleted")
 }

@@ -526,7 +526,25 @@ private struct SettingsContent: View {
             .foregroundStyle(Theme.Palette.body)
             .lineLimit(1)
           Spacer(minLength: 8)
-          ShortcutRecorder(store: shortcutStore)
+          ShortcutRecorder(shortcut: $shortcutStore.shortcut, defaultValue: .default)
+        }
+        .padding(.horizontal, 13)
+        .frame(minHeight: 46)
+        .settingsCard()
+
+        HStack(spacing: 10) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Snap to board")
+              .font(.callout.weight(.medium))
+              .foregroundStyle(Theme.Palette.body)
+              .lineLimit(1)
+            Text("Capture a screen region — read on-device into an agent-ready card.")
+              .font(.caption)
+              .foregroundStyle(Theme.Palette.menuDesc)
+              .lineLimit(1)
+          }
+          Spacer(minLength: 8)
+          ShortcutRecorder(shortcut: $shortcutStore.captureShortcut, defaultValue: .defaultCapture)
         }
         .padding(.horizontal, 13)
         .frame(minHeight: 46)

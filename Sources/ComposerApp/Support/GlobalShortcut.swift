@@ -16,6 +16,13 @@ struct GlobalShortcut: Equatable {
     modifierFlags: [.control, .option]
   )
 
+  /// Default "Snap to board" capture key (⌘⇧Space) — clear of the system screenshot keys (⌘⇧3/4/5)
+  /// and the summon key (⌃⌥Space).
+  static let defaultCapture = GlobalShortcut(
+    keyCode: UInt32(kVK_Space),
+    modifierFlags: [.command, .shift]
+  )
+
   var hasModifier: Bool {
     !modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
   }
@@ -115,6 +122,8 @@ final class ShortcutStore: ObservableObject {
 
   private let keyCodeKey = "composer.shortcut.keyCode"
   private let modifiersKey = "composer.shortcut.modifiers"
+  private let captureKeyCodeKey = "composer.captureShortcut.keyCode"
+  private let captureModifiersKey = "composer.captureShortcut.modifiers"
 
   @Published var shortcut: GlobalShortcut {
     didSet {
@@ -122,6 +131,18 @@ final class ShortcutStore: ObservableObject {
       let defaults = UserDefaults.standard
       defaults.set(Int(shortcut.keyCode), forKey: keyCodeKey)
       defaults.set(Int(shortcut.modifierFlags.rawValue), forKey: modifiersKey)
+      NotificationCenter.default.post(name: .composerShortcutChanged, object: nil)
+    }
+  }
+
+  /// The "Snap to board" capture hotkey. Re-registered alongside `shortcut` via the same change
+  /// notification, so the hotkey registrar re-binds both whenever either changes.
+  @Published var captureShortcut: GlobalShortcut {
+    didSet {
+      guard captureShortcut != oldValue else { return }
+      let defaults = UserDefaults.standard
+      defaults.set(Int(captureShortcut.keyCode), forKey: captureKeyCodeKey)
+      defaults.set(Int(captureShortcut.modifierFlags.rawValue), forKey: captureModifiersKey)
       NotificationCenter.default.post(name: .composerShortcutChanged, object: nil)
     }
   }
@@ -136,9 +157,20 @@ final class ShortcutStore: ObservableObject {
     } else {
       shortcut = .default
     }
+    if defaults.object(forKey: captureKeyCodeKey) != nil {
+      captureShortcut = GlobalShortcut(
+        keyCode: UInt32(defaults.integer(forKey: captureKeyCodeKey)),
+        modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(defaults.integer(forKey: captureModifiersKey)))
+      )
+    } else {
+      captureShortcut = .defaultCapture
+    }
   }
 
-  func reset() { shortcut = .default }
+  func reset() {
+    shortcut = .default
+    captureShortcut = .defaultCapture
+  }
 }
 
 extension View {

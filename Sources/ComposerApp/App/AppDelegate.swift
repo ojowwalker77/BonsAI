@@ -18,6 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NotificationCenter.default.addObserver(
       self, selector: #selector(toggle),
       name: .composerToggleWindow, object: nil)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(captureToBoard),
+      name: .composerCaptureToBoard, object: nil)
 
     // Surface the board on launch.
     panelController.show()
@@ -30,6 +33,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc private func toggle() { panelController.toggle() }
+
+  /// "Snap to board": run the region capture overlay, save the shot, summon the board, and hand the
+  /// PNG to the canvas to add the card and read it on-device. Capture runs above all apps, so this
+  /// works even when BonsAI isn't frontmost.
+  @objc private func captureToBoard() {
+    Task { @MainActor in
+      guard let cgImage = await ScreenCaptureService.shared.capture() else { return }
+      // Encode the PNG off the main thread (a retina region is multi-MB); the board reuses the
+      // in-memory image for OCR, so it never re-decodes this file.
+      guard let url = await Task.detached(priority: .userInitiated, operation: { saveCapturedPNG(cgImage) }).value else { return }
+      CapturedShotStore.shared.stash(cgImage, for: url.path)
+      panelController.show()
+      NotificationCenter.default.post(
+        name: .composerCaptureCompleted, object: nil, userInfo: ["path": url.path])
+    }
+  }
 
   /// Summon the board (if hidden) and open its companion Settings window.
   func showSettings() {
