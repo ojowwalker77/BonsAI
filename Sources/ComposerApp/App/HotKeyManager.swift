@@ -71,7 +71,7 @@ final class HotKeyManager {
     if let existing { UnregisterEventHotKey(existing) }
     var ref: EventHotKeyRef?
     let hotKeyID = EventHotKeyID(signature: "CMPR".fourCharCode, id: id)
-    RegisterEventHotKey(
+    let status = RegisterEventHotKey(
       shortcut.keyCode,
       shortcut.carbonModifiers,
       hotKeyID,
@@ -79,6 +79,9 @@ final class HotKeyManager {
       0,
       &ref
     )
+    if status != noErr {
+      UserFacingError.report("Couldn't register a global keyboard shortcut — the key combination may already be in use by another shortcut or app. Pick a different one in Settings ▸ Keyboard.")
+    }
     return ref
   }
 

@@ -797,12 +797,17 @@ func saveCapturedPNG(_ cgImage: CGImage) -> URL? {
   do {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
   } catch {
+    UserFacingError.report(error, while: "Saving the captured screenshot")
     return nil
   }
   guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+    UserFacingError.report("Saving the captured screenshot failed: couldn't create the PNG encoder.")
     return nil
   }
   CGImageDestinationAddImage(destination, cgImage, nil)
-  guard CGImageDestinationFinalize(destination) else { return nil }
+  guard CGImageDestinationFinalize(destination) else {
+    UserFacingError.report("Saving the captured screenshot failed while writing the PNG to disk.")
+    return nil
+  }
   return url
 }
