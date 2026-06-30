@@ -93,7 +93,16 @@ struct AgentDock: View {
         .font(.callout)
         .foregroundStyle(Theme.Palette.body)
         .focused($inputFocused)
-        .onSubmit(submit)
+        // Enter sends; Shift+Enter inserts a newline — the standard chat convention (Slack, Discord,
+        // Linear). `.onSubmit` fired on every Return, including Shift+Return, so a shifted Return sent
+        // instead of breaking the line. We intercept the key instead: plain Return we consume and
+        // submit; for Shift+Return we return `.ignored` so the field editor inserts the break at the
+        // caret. See https://github.com/ojowwalker77/BonsAI/issues/27.
+        .onKeyPress(.return, phases: .down) { keyPress in
+          if keyPress.modifiers.contains(.shift) { return .ignored }
+          submit()
+          return .handled
+        }
       if agent.isRunning {
         Button(action: agent.stop) {
           Image(systemName: "stop.circle.fill").font(.title3).foregroundStyle(Theme.Palette.title)

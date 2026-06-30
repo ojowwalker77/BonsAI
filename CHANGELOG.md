@@ -11,6 +11,11 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Fixed
+- **Shift+Enter in the Agent chat inserts a newline instead of sending.** The input used `.onSubmit`,
+  which fired on every Return — including Shift+Return — so holding Shift still sent the message. It
+  now follows the standard chat convention (Slack, Discord, Linear): plain **Enter sends**, and
+  **Shift+Enter** breaks the line at the caret. ([#27](https://github.com/ojowwalker77/BonsAI/issues/27))
 ## [1.1.0] - 2026-06-24
 
 ### Added
