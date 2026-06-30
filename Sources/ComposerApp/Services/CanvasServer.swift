@@ -6,12 +6,15 @@ import Network
 /// (Network.framework) and bound to 127.0.0.1 so it never leaves the machine.
 ///
 /// Endpoints:
+///   GET  /health   → liveness + API version
 ///   GET  /canvas   → the full `CanvasGraph`
 ///   POST /canvas   → one `{ "op": …, … }` mutation, returns `{ "ok": …, … }`
-///   GET  /health   → liveness check
+///   POST /capture  → `{ "text": "…" }` append a card to the open board
+///   POST /mcp      → JSON-RPC for MCP tools
 final class CanvasServer {
   static let shared = CanvasServer()
   static let port: UInt16 = 7337
+  static let apiVersion = "1"
   /// The server is loopback-only, but an agent/tool bug should still not be able to grow an
   /// in-memory request buffer without bound. Canvas mutations are deliberately tiny JSON.
   private static let maximumRequestBytes = 1 * 1_024 * 1_024
@@ -77,7 +80,12 @@ final class CanvasServer {
   private func route(_ request: HTTPRequest, buffer: Data, on connection: NWConnection) {
     switch (request.method, request.path) {
     case ("GET", "/health"):
-      send(connection, status: "200 OK", json: ["ok": true, "service": "composer-canvas"])
+      send(connection, status: "200 OK", json: [
+        "ok": true,
+        "service": "bonsai-canvas",
+        "apiVersion": Self.apiVersion,
+        "port": Self.port,
+      ])
 
     case ("GET", "/canvas"):
       Task { @MainActor in
@@ -90,6 +98,28 @@ final class CanvasServer {
             "error": UserFacingError.message(for: error, while: "Encoding the canvas graph"),
           ])
         }
+      }
+
+    case ("POST", "/capture"):
+      let body = self.body(of: buffer, request: request)
+      Task { @MainActor in
+        let payload: [String: Any]
+        do {
+          guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": "Capture request must be a JSON object."])
+            return
+          }
+          payload = decoded
+        } catch {
+          self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": UserFacingError.message(for: error, while: "Decoding the capture request")])
+          return
+        }
+        let text = payload["text"]
+        var op: [String: Any] = ["op": "capture"]
+        if let text { op["text"] = text }
+        let result = CanvasBridge.shared.apply(op)
+        let ok = (result["ok"] as? Bool) ?? false
+        self.send(connection, status: ok ? "200 OK" : "422 Unprocessable Entity", json: result)
       }
 
     case ("POST", "/canvas"):
@@ -133,8 +163,33 @@ final class CanvasServer {
         }
       }
 
-    case ("GET", "/mcp"):
-      // No server-initiated SSE stream; this server is request/response only.
+    // MCP permission-prompt server: the agent's `--permission-prompt-tool` calls this so a tool
+    // outside the canvas allow-list (an account connector, a built-in) gets a real allow/deny
+    // dialog instead of a silent wall. Separate server name (`composer`) from `/mcp`'s `canvas`
+    // so the model can't reach the arbiter through `--allowedTools mcp__canvas__*`.
+    case ("POST", "/permission"):
+      let body = self.body(of: buffer, request: request)
+      Task { @MainActor in
+        let message: [String: Any]
+        do {
+          guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            self.send(connection, status: "400 Bad Request", json: ["error": "MCP request must be a JSON object."])
+            return
+          }
+          message = decoded
+        } catch {
+          self.send(connection, status: "400 Bad Request", json: ["error": UserFacingError.message(for: error, while: "Decoding the MCP request")])
+          return
+        }
+        if let response = PermissionMCP.handle(message) {
+          self.send(connection, status: "200 OK", json: response)
+        } else {
+          self.send(connection, status: "202 Accepted", data: Data())   // notification: no body
+        }
+      }
+
+    case ("GET", "/mcp"), ("GET", "/permission"):
+      // No server-initiated SSE stream; these servers are request/response only.
       send(connection, status: "405 Method Not Allowed", json: ["error": "use POST"])
 
     default:

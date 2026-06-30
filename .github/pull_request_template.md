@@ -12,5 +12,6 @@
 ## Checklist
 
 - [ ] Added a note under `## [Unreleased]` in `CHANGELOG.md` (or applied the `skip-changelog` label)
+- [ ] Opened this PR into the active `release-*` branch, or created `release-[next_release_number]` from `main` first
 - [ ] `swift build -c release` and `swift test` pass locally
 - [ ] If layout/panel code changed: launched the app and verified the board + dock composition (see `CLAUDE.md`)

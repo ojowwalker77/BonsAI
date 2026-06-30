@@ -117,6 +117,9 @@ struct ComposerCanvas: View {
       enterEditingForEntry()
       CanvasBridge.shared.register(board)
       showLatestReportedError()
+      for text in CaptureInbox.shared.drainPending() {
+        ingestQuickCapture(text)
+      }
     }
     .onChange(of: inner) { _, value in lastViewportSize = value }
   }
@@ -209,6 +212,16 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerTogglePalette)) { _ in
         togglePalette()
       }
+      .onReceive(NotificationCenter.default.publisher(for: .composerQuickCapture)) { note in
+        if let text = note.object as? String {
+          ingestQuickCapture(text)
+        }
+      }
+  }
+
+  private func ingestQuickCapture(_ text: String) {
+    guard board.captureExternalText(text) != nil else { return }
+    show(Toast(text: "Captured on board", symbol: "leaf.fill", tint: .accentColor))
   }
 
   /// The agent and Settings share the single auxiliary-panel slot.
@@ -502,7 +515,7 @@ struct ComposerCanvas: View {
   @ViewBuilder
   private var toastView: some View {
     if let toast {
-      VStack {
+      VStack(spacing: 10) {
         Spacer()
         HStack(spacing: 8) {
           Image(systemName: toast.symbol).foregroundStyle(toast.tint)
@@ -512,15 +525,13 @@ struct ComposerCanvas: View {
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
-        .frame(maxWidth: 620, alignment: .leading)
-        .floatingGlass(Capsule(style: .continuous))
-        .padding(.bottom, 30)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .composerPopupSurface()
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .padding(.bottom, 24)
+      .frame(maxWidth: .infinity)
       .transition(.move(edge: .bottom).combined(with: .opacity))
-      .allowsHitTesting(false)
     }
   }
 
@@ -1014,22 +1025,28 @@ struct ComposerCanvas: View {
   }
 
   private func preferredEngine() -> HeadlessEngine? {
-    if EnginePreferences.isEnabled(.claude), engineCapabilities.isAvailable(.claude) { return .claude }
+    for engine in HeadlessEngine.allCases {
+      if EnginePreferences.isEnabled(engine), engineCapabilities.isAvailable(engine) { return engine }
+    }
     return nil
   }
 
   private func unavailableEngineMessage() -> String {
-    guard EnginePreferences.isEnabled(.claude) else {
-      return "Claude is disabled in Settings → Runtime. Enable it before using this action."
+    let enabled = HeadlessEngine.allCases.filter { EnginePreferences.isEnabled($0) }
+    guard !enabled.isEmpty else {
+      return "All engines are disabled in Settings → Runtime. Enable one before using this action."
     }
-    switch engineCapabilities.status(for: .claude) {
-    case .checking:
-      return "Composer is still checking whether Claude can run. Wait a moment or use Settings → Runtime → Recheck."
-    case let .unavailable(reason):
-      return "Claude is unavailable: \(reason). Open Settings → Runtime → Recheck after fixing it."
-    case .available:
-      return "Claude is available, but Composer could not select it. Open Settings → Runtime → Recheck."
+    let reasons = enabled.compactMap { engine -> String? in
+      switch engineCapabilities.status(for: engine) {
+      case .checking: return "\(engine.title) is still being checked"
+      case let .unavailable(reason): return "\(engine.title): \(reason)"
+      case .available: return nil
+      }
     }
+    if reasons.isEmpty {
+      return "No engine could be selected. Open Settings → Runtime → Recheck."
+    }
+    return reasons.joined(separator: " · ")
   }
 
   @discardableResult

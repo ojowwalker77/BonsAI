@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// The result of "Compile to draft" — a full-card frosted sheet (same idiom as Settings)
-/// showing the one merged prompt, selectable, with Copy + Close. The board sits untouched
-/// behind it; Esc closes it via the editor coordinator's cancel chain (store.compiledDraft).
+/// The result of "Compile to draft" — a full-card frosted sheet showing the merged prompt,
+/// with Copy and Close.
 struct CompiledDraftOverlay: View {
   let text: String
   var onCopy: () -> Void

@@ -9,6 +9,7 @@ enum ComposerDockKind: String {
 
 extension Notification.Name {
   static let composerToggleWindow = Notification.Name("composerToggleWindow")
+  static let composerShowWindow = Notification.Name("composerShowWindow")
   static let composerDismiss = Notification.Name("composerDismiss")
   static let composerCopy = Notification.Name("composerCopy")
   /// Fires on ⌘R / ⌘↩ — compile the whole board into one paste-ready draft.
@@ -72,4 +73,6 @@ extension Notification.Name {
   /// Fires after a region was captured and saved; `userInfo["path"]` is the PNG. The board adds the
   /// image card here and kicks off its on-device understanding.
   static let composerCaptureCompleted = Notification.Name("composerCaptureCompleted")
+  /// Quick capture from the menu bar, Services menu, URL scheme, or loopback API.
+  static let composerQuickCapture = Notification.Name("composerQuickCapture")
 }

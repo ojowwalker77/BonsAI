@@ -42,11 +42,20 @@ final class CanvasBridge {
   /// Applies one `{ "op": …, … }` mutation; returns a JSON-serializable result.
   func apply(_ op: [String: Any]) -> [String: Any] {
     guard let board else { return fail("no active canvas") }
-    // Everything the agent applies is tagged as agent-authored (whoWrote = 2); direct user
-    // gestures stay human (1). This is how the agent later tells its own work from the user's.
+    guard let name = op["op"] as? String else { return fail("missing \"op\"") }
+
+    if name == "capture" {
+      guard let text = string(op["text"]),
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return fail("missing or empty \"text\"")
+      }
+      guard let id = board.captureExternalText(text) else { return fail("could not capture text") }
+      return ok(["id": id.uuidString])
+    }
+
+    // Agent-driven mutations are tagged whoWrote = 2; user gestures stay human (1).
     board.nextAuthor = BoardViewModel.Author.agent
     defer { board.nextAuthor = BoardViewModel.Author.human }
-    guard let name = op["op"] as? String else { return fail("missing \"op\"") }
 
     switch name {
     case "add_text":

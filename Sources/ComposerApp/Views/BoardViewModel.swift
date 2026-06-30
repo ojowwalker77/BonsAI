@@ -670,6 +670,16 @@ final class BoardViewModel: ObservableObject {
     return insertText(text, at: autoPlacePoint(for: size))
   }
 
+  /// Append captured text from the menu bar, Services menu, URL scheme, or loopback API.
+  @discardableResult
+  func captureExternalText(_ text: String) -> UUID? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let id = insertTextAutoPlaced(trimmed)
+    beginEditing(id)
+    return id
+  }
+
   /// A clear board point below existing content for an auto-placed element.
   func autoPlacePoint(for size: CGSize) -> CGPoint {
     guard !cards.isEmpty else { return CGPoint(x: 120, y: 120) }
