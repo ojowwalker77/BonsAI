@@ -2,17 +2,19 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
-/// A click-to-record control for the global summon shortcut. Click it, then press
-/// a key combination (which must include at least one modifier). Esc cancels.
+/// A click-to-record control for a global shortcut. Click it, then press a key combination (which
+/// must include at least one modifier). Esc cancels. Binds to whichever shortcut it's given, so the
+/// same control records the summon key and the "Snap to board" capture key.
 struct ShortcutRecorder: View {
-  @ObservedObject var store: ShortcutStore
+  @Binding var shortcut: GlobalShortcut
+  var defaultValue: GlobalShortcut = .default
   @State private var recording = false
   @State private var monitor: Any?
 
   var body: some View {
     HStack(spacing: 8) {
       Button(action: toggle) {
-        Text(recording ? "Type a shortcut…" : store.shortcut.displayString)
+        Text(recording ? "Type a shortcut…" : shortcut.displayString)
           .font(.system(size: 11, weight: .medium))
           .foregroundStyle(recording ? Color.accentColor : .secondary)
           .padding(.horizontal, 8).padding(.vertical, 3)
@@ -28,8 +30,8 @@ struct ShortcutRecorder: View {
       }
       .buttonStyle(.plain)
 
-      if store.shortcut != .default {
-        Button("Reset") { store.reset() }
+      if shortcut != defaultValue {
+        Button("Reset") { shortcut = defaultValue }
           .buttonStyle(.plain)
           .font(.system(size: 11))
           .foregroundStyle(.tertiary)
@@ -60,7 +62,7 @@ struct ShortcutRecorder: View {
     if event.keyCode == UInt16(kVK_Escape) { stop(); return }
     let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
     guard !flags.isEmpty else { return } // a bare key would be too easy to trigger
-    store.shortcut = GlobalShortcut(keyCode: UInt32(event.keyCode), modifierFlags: flags)
+    shortcut = GlobalShortcut(keyCode: UInt32(event.keyCode), modifierFlags: flags)
     stop()
   }
 }

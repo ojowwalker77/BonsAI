@@ -16,6 +16,27 @@ under the new version heading.
   which fired on every Return — including Shift+Return — so holding Shift still sent the message. It
   now follows the standard chat convention (Slack, Discord, Linear): plain **Enter sends**, and
   **Shift+Enter** breaks the line at the caret. ([#27](https://github.com/ojowwalker77/BonsAI/issues/27))
+## [1.1.0] - 2026-06-24
+
+### Added
+- **Snap to board.** A global hotkey (⇧⌘Space, rebindable in Settings ▸ Keyboard) drops a dim
+  crosshair over every display. Drag out a region and it **freezes** into a quick markup step —
+  move, arrow, box, highlighter, and text tools with colors, undo, and ⌘↩ to send (Esc cancels) —
+  then it lands on the board. The shot is read **entirely on-device**: Vision OCR, then cleaned and
+  classified by Apple Intelligence (falling back to raw OCR when it's unavailable), so a screenshot
+  now **compiles into the prompt as real text** — a terminal error, transcribed code, a described
+  UI, a Markdown table — instead of an inert image the board used to drop on copy. Nothing leaves
+  your Mac. The markup overlay mirrors the board's own interaction model (move is the default tool,
+  drawing one shape returns to move, double-click adds or edits a text label), works across every
+  display, and is also reachable from the command palette (⌘K ▸ "Capture screen to board"). A small
+  badge marks an image card once it's been read.
+
+### Changed
+- **The board feels immediate.** Drawing shapes, freehand, the selection rectangle, panning, and
+  zooming no longer re-render every card each frame — the card layer is isolated (an `Equatable`
+  layer with live pan applied outside it) so it rebuilds only when a card actually changes. Editing,
+  typing, dragging, and resizing a card still update just that card. Gestures now glide, matching the
+  snappiness of the capture overlay; no behavior or features changed.
 
 ## [1.0.5] - 2026-06-23
 

@@ -42,6 +42,11 @@ struct CardState: Codable, Identifiable, Equatable {
   var groupID: UUID?
   var isLocked: Bool?
   var imagePath: String?
+  /// For `.image` cards: the on-device, agent-ready text read out of the screenshot (OCR + a short
+  /// classification, e.g. "Terminal error: …"). This is what an image card contributes to the
+  /// compiled prompt and to `CanvasBridge.snapshot()` — without it a screenshot is invisible to a
+  /// coding agent. Nil while still being read (or when nothing legible was found).
+  var imageUnderstanding: String?
   /// A superseded idea — kept on the board for lineage but visually faded (provenance).
   var archived: Bool?
   /// Who last authored this card: 1 = human, 2 = agent. Nil on legacy cards (treated as unknown).
@@ -62,6 +67,7 @@ struct CardState: Codable, Identifiable, Equatable {
        groupID: UUID? = nil,
        isLocked: Bool = false,
        imagePath: String? = nil,
+       imageUnderstanding: String? = nil,
        archived: Bool = false,
        whoWrote: Int? = nil) {
     self.id = id
@@ -78,6 +84,7 @@ struct CardState: Codable, Identifiable, Equatable {
     self.groupID = groupID
     self.isLocked = isLocked ? true : nil
     self.imagePath = imagePath
+    self.imageUnderstanding = imageUnderstanding
     self.archived = archived ? true : nil
     self.whoWrote = whoWrote
   }

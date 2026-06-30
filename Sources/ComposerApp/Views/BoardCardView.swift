@@ -389,6 +389,19 @@ private struct CanvasElementContent: View {
           FreehandShape(points: card.points ?? CardState.defaultFreehandPoints())
         case .image:
           ImageObjectPlaceholder(path: card.imagePath)
+            .overlay(alignment: .bottomTrailing) {
+              // A captured screenshot that's been read on-device carries text into the prompt; mark
+              // it so it doesn't look like an inert image.
+              if let understanding = card.imageUnderstanding, !understanding.isEmpty {
+                Image(systemName: "text.viewfinder")
+                  .font(.system(size: 11, weight: .semibold))
+                  .foregroundStyle(.white)
+                  .padding(5)
+                  .background(Color.black.opacity(0.55), in: Circle())
+                  .padding(6)
+                  .help("Read on-device — this screenshot adds text to the compiled prompt")
+              }
+            }
         }
       }
 
