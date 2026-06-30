@@ -11,6 +11,10 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Added
+- **PR trust and size labels.** GitHub Actions now label pull requests by effective
+  change size and whether the author is vouched for the repository.
+
 ## [1.0.5] - 2026-06-23
 
 ### Added
