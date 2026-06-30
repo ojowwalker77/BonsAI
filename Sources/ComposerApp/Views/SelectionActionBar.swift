@@ -7,6 +7,7 @@ struct SelectionActionBar: View {
   var onCopy: () -> Void
 
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
+  @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
   @ObservedObject private var capabilities = EngineCapabilityStore.shared
   @State private var shown = false
 
@@ -14,6 +15,7 @@ struct SelectionActionBar: View {
     HeadlessEngine.allCases.filter { engine in
       let enabled = switch engine {
       case .claude: claudeEnabled
+      case .codex: codexEnabled
       }
       return enabled && capabilities.isAvailable(engine)
     }
@@ -53,15 +55,13 @@ struct SelectionActionBar: View {
   }
 
   private var unavailableEngineMessage: String {
-    guard claudeEnabled else { return "Claude disabled in Settings → Runtime" }
-    switch capabilities.status(for: .claude) {
-    case .checking:
-      return "Claude availability is still being checked"
-    case let .unavailable(reason):
-      return "Claude unavailable: \(reason)"
-    case .available:
-      return "Claude is available but no refine action was configured"
+    if enabledEngines.isEmpty {
+      if !claudeEnabled && !codexEnabled {
+        return "All engines disabled in Settings → Runtime"
+      }
+      return "No engines ready — open Settings → Runtime → Recheck"
     }
+    return "No engines ready"
   }
 
   @ViewBuilder

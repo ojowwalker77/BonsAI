@@ -6,9 +6,9 @@ struct ComposerApp: App {
 
   var body: some Scene {
     // BonsAI's UI is the AppKit board + dock owned by PanelController; this SwiftUI App only
-    // hosts the delegate. There is no menu-bar item — the board is summoned by the global hotkey
-    // (HotKeyManager) or the Dock icon. The placeholder Settings scene exists solely so the
-    // standard Cmd-, routes to the in-board settings instead of opening a separate window.
+    // hosts the delegate. The board is summoned by the global hotkey (HotKeyManager), the Dock
+    // icon, or the menu-bar leaf. The placeholder Settings scene exists solely so the standard
+    // Cmd-, routes to the in-board settings instead of opening a separate window.
     Settings {
       EmptyView()
     }

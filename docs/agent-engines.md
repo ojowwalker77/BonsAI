@@ -1,27 +1,27 @@
-# Agent engines: `claude -p` and Apple Intelligence
+# Agent engines: `claude -p`, `codex exec`, and Apple Intelligence
 
 > BonsAI never ships its own model or an API key. Every "AI" surface shells out
 > to a coding-agent CLI you already have, or to the model already on your Mac.
 > This document is the map of which engine runs where, how each is invoked, and
 > how one gets picked — and how to add another.
 
-There are two engines today, and they are not interchangeable — each earns its
-place on a different surface:
+There are three engines today — two CLI, one on-device — each earning its place
+on a different surface:
 
 | Engine                 | CLI / runtime                | Where it's used                                          | Mode                 |
 | ---------------------- | ---------------------------- | ------------------------------------------------------- | -------------------- |
 | **Claude Code**        | `claude -p`                  | Refine, Compile, **and** the in-canvas chat agent       | one-shot + streaming |
+| **Codex**              | `codex exec`                 | Refine, Compile (read-only sandbox; no streaming agent) | one-shot             |
 | **Apple Intelligence** | on-device Foundation Models  | the semantic linter (only)                              | on-device, in-process |
 
 Two facts to anchor on before the details, because they're the things people
 assume wrong:
 
-1. **There is exactly one CLI engine today — Claude — but the layer is built for
-   more.** Engine choice runs through a small enum + preference + capability
-   machinery (below) that's deliberately multi-engine. Adding Codex, OpenCode, Pi,
-   or another agent CLI is a well-scoped change — see
-   [Adding an engine](#adding-an-engine). (An earlier Codex path was removed
-   because it couldn't be tested; the seams it left are the extension points.)
+1. **The CLI engines run through one shared layer built for more.** Engine choice
+   runs through a small enum + preference + capability machinery (below) that's
+   deliberately multi-engine — Claude and Codex are just the two `case`s wired up
+   today. Adding OpenCode, Pi, or another agent CLI is a well-scoped change — see
+   [Adding an engine](#adding-an-engine).
 2. **Apple Intelligence is *not* a fallback for chat or refine.** It is a
    separate, in-process, on-device path that today powers exactly one feature —
    the [semantic linter](semanticlinter.md). See

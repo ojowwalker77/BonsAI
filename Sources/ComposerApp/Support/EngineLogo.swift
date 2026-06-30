@@ -32,8 +32,8 @@ struct AgentEngineIcon: View {
   @ObservedObject private var capabilities = EngineCapabilityStore.shared
 
   var body: some View {
-    if EnginePreferences.isEnabled(.claude), capabilities.isAvailable(.claude) {
-      EngineLogo(engine: .claude)
+    if let engine = preferredEngine {
+      EngineLogo(engine: engine)
     } else {
       Image(systemName: "apple.intelligence")
         .resizable()
@@ -44,6 +44,13 @@ struct AgentEngineIcon: View {
             gradient: Gradient(colors: [.orange, .red, .purple, .blue, .cyan, .orange]),
             center: .center))
     }
+  }
+
+  private var preferredEngine: HeadlessEngine? {
+    for engine in HeadlessEngine.allCases {
+      if EnginePreferences.isEnabled(engine), capabilities.isAvailable(engine) { return engine }
+    }
+    return nil
   }
 }
 

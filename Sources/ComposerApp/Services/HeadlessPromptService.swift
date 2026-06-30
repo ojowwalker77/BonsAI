@@ -65,6 +65,9 @@ struct HeadlessPromptService {
     switch engine {
     case .claude:
       arguments = [executable.path, "-p", prompt]
+    case .codex:
+      // Read-only sandbox: one-shot refine/compile must not mutate the user's repo.
+      arguments = [executable.path, "exec", "--sandbox", "read-only", "--ephemeral", prompt]
     }
     let result: Shell.Result
     do {

@@ -151,6 +151,7 @@ private struct SettingsContent: View {
   @ObservedObject private var capabilities = EngineCapabilityStore.shared
   @ObservedObject private var shortcutStore = ShortcutStore.shared
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
+  @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
   @AppStorage(ComposerPreferences.panelTransparencyKey) private var panelTransparency = ComposerPreferences.defaultPanelTransparency
   @AppStorage(ComposerPreferences.resolveShellAtCopyKey) private var resolveShellAtCopy = false
   /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
@@ -191,10 +192,7 @@ private struct SettingsContent: View {
   // MARK: Runtime
 
   private var runtimePage: some View {
-    let states = [
-      capabilities.status(for: .claude),
-      capabilities.appleIntelligence,
-    ]
+    let states = HeadlessEngine.allCases.map { capabilities.status(for: $0) } + [capabilities.appleIntelligence]
     let ready = states.filter { $0.isAvailable }.count
 
     return VStack(alignment: .leading, spacing: 16) {
@@ -223,6 +221,12 @@ private struct SettingsContent: View {
           availability: capabilities.status(for: .claude),
           toggle: $claudeEnabled
         ) { EngineLogo(engine: .claude).frame(width: 18, height: 18) }
+        engineRow(
+          name: HeadlessEngine.codex.title,
+          command: HeadlessEngine.codex.commandLabel,
+          availability: capabilities.status(for: .codex),
+          toggle: $codexEnabled
+        ) { EngineLogo(engine: .codex).frame(width: 18, height: 18) }
 
         engineRow(
           name: "Apple Intelligence",
@@ -240,7 +244,7 @@ private struct SettingsContent: View {
         }
       }
 
-      Label("CLI prompts stay on your configured Claude account. Apple Intelligence runs the on-device lint and never sends a draft off your Mac.", systemImage: "lock.fill")
+      Label("CLI prompts stay on your configured agent accounts. Apple Intelligence runs the on-device lint and never sends a draft off your Mac.", systemImage: "lock.fill")
         .font(.caption)
         .foregroundStyle(Theme.Palette.count)
         .fixedSize(horizontal: false, vertical: true)
