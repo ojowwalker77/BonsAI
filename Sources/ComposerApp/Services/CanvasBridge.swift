@@ -11,6 +11,13 @@ final class CanvasBridge {
 
   func register(_ board: BoardViewModel) { self.board = board }
 
+  /// Force any debounced board edit to disk right now. Call before the app actually exits —
+  /// `DumpStore`'s autosave is debounced ~400ms, so an edit (including one from an external
+  /// agent via the canvas API) made just before quit would otherwise never reach disk.
+  func flush() {
+    board?.flushSave()
+  }
+
   // MARK: Read
 
   func snapshot() -> CanvasGraph {
