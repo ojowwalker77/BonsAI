@@ -17,6 +17,10 @@ longer, it probably doesn't belong here.
 
 ---
 
+## Stars
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ojowwalker77/BonsAI&type=Date)](https://www.star-history.com/#ojowwalker77/BonsAI&Date)
+
 ## Requirements
 
 - **macOS 26 (Tahoe)** or later.
@@ -101,7 +105,3 @@ Contributions are welcome — especially around UX friction, new connectors, and
 the semantic-linter layer. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first;
 it explains the philosophy a change has to fit, and what will get a PR rejected.
 Every PR records a note in [CHANGELOG.md](CHANGELOG.md).
-
-## License
-
-To be decided before the repository is opened up publicly.
