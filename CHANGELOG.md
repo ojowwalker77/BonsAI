@@ -11,11 +11,16 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Added
+- **Agent tool permission prompts.** Agent-run MCP tool calls now ask before running, remember
+  allowed tools, and include a Settings control to reset remembered permissions.
+
 ### Fixed
 - **Shift+Enter in the Agent chat inserts a newline instead of sending.** The input used `.onSubmit`,
   which fired on every Return — including Shift+Return — so holding Shift still sent the message. It
   now follows the standard chat convention (Slack, Discord, Linear): plain **Enter sends**, and
   **Shift+Enter** breaks the line at the caret. ([#27](https://github.com/ojowwalker77/BonsAI/issues/27))
+
 ## [1.1.0] - 2026-06-24
 
 ### Added
@@ -37,7 +42,6 @@ under the new version heading.
   layer with live pan applied outside it) so it rebuilds only when a card actually changes. Editing,
   typing, dragging, and resizing a card still update just that card. Gestures now glide, matching the
   snappiness of the capture overlay; no behavior or features changed.
-
 ## [1.0.5] - 2026-06-23
 
 ### Added
