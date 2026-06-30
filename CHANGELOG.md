@@ -11,6 +11,8 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-30
+
 ### Added
 - **Smart paste.** Pasting a GitHub issue/PR URL, an existing file path (`/…`, `~/…`, or `file://…`), or a library name like `next.js` / `vercel/next.js` now becomes the matching connector chip (`@github`, `@finder`, `@context7`) instead of raw text.
 - **Quick capture.** A menu-bar leaf opens a one-line capture field (↩ sends to the current board). macOS **Services → Send to BonsAI** and `bonsai://capture?text=…` use the same path. The loopback API adds `POST /capture`.
