@@ -5,11 +5,9 @@
 <img width="3420" height="2224" alt="image" src="https://github.com/user-attachments/assets/eca1bad8-7cdd-4655-a342-9483406740db" />
 
 BonsAI is a small, native macOS app. It gives you a board of cards where you
-capture half-formed ideas, pull in just-enough context with **connectors**
-(your files, open tabs, library docs, tickets, designs, errors…), and an
-invisible **on-device semantic linter** quietly flags the spots that are too
-vague for an AI agent to act on. When a card is ready, you copy it out into
-whatever AI tool you drive next.
+capture half-formed ideas and pull in just-enough context with **connectors**
+(your files, open tabs, library docs, tickets, designs, errors…). When a card is
+ready, you copy it out into whatever AI tool you drive next.
 
 The pillar behind every design decision: **remove friction between having a
 thought and getting it into a coding agent.** If a feature makes that path
@@ -20,8 +18,6 @@ longer, it probably doesn't belong here.
 ## Requirements
 
 - **macOS 26 (Tahoe)** or later.
-- **Apple Intelligence** enabled, for the semantic linter — without it, the
-  linter quietly turns itself off and everything else works.
 
 There's nothing to install or configure: download `BonsAI.dmg` from
 [Releases](../../releases) and drag **BonsAI** onto **Applications**. Building from source
@@ -64,21 +60,13 @@ build one, see [CONTRIBUTING.md](CONTRIBUTING.md#connectors).)
 
 Tokens are entered in **Settings** and stored via the system keychain.
 
-## Semantic linter
-
-What a linter is for a programming language, this is for the *meaning* of your
-prose. It runs fully on-device (Apple's Foundation Models), so it's free and
-private enough to run on every typing pause, and it's tuned hard for precision.
-Full write-up: [docs/semanticlinter.md](docs/semanticlinter.md).
-
 ## Agent & engines
 
 BonsAI ships no model of its own. **Refine** and **Compile** shell out to a
 coding-agent CLI you already have (`claude -p`), and the in-canvas **chat agent**
 spawns `claude` in streaming mode with a loopback MCP server attached, so it can
-read and reshape the board live as you talk. Apple Intelligence is on-device and
-powers the linter only. The engine layer is built to be multi-engine — adding
-another agent CLI is a small, well-scoped change.
+read and reshape the board live as you talk. The engine layer is built to be
+multi-engine — adding another agent CLI is a small, well-scoped change.
 
 - [docs/agent-engines.md](docs/agent-engines.md) — the engines, how each is
   invoked, how one gets picked, and how to add another.
@@ -97,8 +85,8 @@ Read those before touching panel geometry.
 
 ## Contributing
 
-Contributions are welcome — especially around UX friction, new connectors, and
-the semantic-linter layer. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first;
+Contributions are welcome — especially around UX friction and new connectors.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) first;
 it explains the philosophy a change has to fit, and what will get a PR rejected.
 Every PR records a note in [CHANGELOG.md](CHANGELOG.md).
 

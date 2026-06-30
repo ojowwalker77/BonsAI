@@ -11,11 +11,24 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Added
+- **Smart paste.** Pasting a GitHub issue/PR URL, an existing file path (`/…`, `~/…`, or `file://…`), or a library name like `next.js` / `vercel/next.js` now becomes the matching connector chip (`@github`, `@finder`, `@context7`) instead of raw text.
+- **Quick capture.** A menu-bar leaf opens a one-line capture field (↩ sends to the current board). macOS **Services → Send to BonsAI** and `bonsai://capture?text=…` use the same path. The loopback API adds `POST /capture`.
+- **Codex engine.** Refine and Compile can run through `codex exec` (read-only sandbox) when Codex CLI is installed — toggle in Settings ▸ Runtime.
+- **Canvas API docs + integrations.** [docs/canvas-api.md](docs/canvas-api.md) formalizes the `127.0.0.1:7337` API; [integrations/raycast](integrations/raycast/README.md) and [integrations/alfred](integrations/alfred/README.md) ship starter scripts.
+
+### Removed
+- **The semantic linter.** The invisible on-device ambiguity linter (built on Apple's
+  Foundation Models) and its Settings ▸ Runtime row have been removed, ahead of a larger
+  pivot. Drafts are no longer analyzed for ambiguity; the agent and `claude -p` engine paths
+  are unchanged, and Snap to board still reads screenshots on-device.
+
 ### Fixed
 - **Shift+Enter in the Agent chat inserts a newline instead of sending.** The input used `.onSubmit`,
   which fired on every Return — including Shift+Return — so holding Shift still sent the message. It
   now follows the standard chat convention (Slack, Discord, Linear): plain **Enter sends**, and
   **Shift+Enter** breaks the line at the caret. ([#27](https://github.com/ojowwalker77/BonsAI/issues/27))
+
 ## [1.1.0] - 2026-06-24
 
 ### Added

@@ -214,5 +214,3 @@ Two mutations exist purely to keep the board legible as decisions evolve:
 
 - [agent-engines.md](agent-engines.md) — how `claude` is invoked in streaming
   mode with this server attached, and the engine landscape overall.
-- [semanticlinter.md](semanticlinter.md) — the on-device linter, which reads the
-  same board as read-only `boardContext`.

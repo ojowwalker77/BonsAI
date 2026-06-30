@@ -13,11 +13,10 @@ final class CardInteraction: ObservableObject, Identifiable {
   let id: UUID
   // A visible non-editing card only needs its serialized text and drag preview. Keep the
   // AppKit/editor support graph lazy so panning across a large board does not allocate an
-  // NSTextView controller, linter, popover state, and connector search state for every card.
+  // NSTextView controller, popover state, and connector search state for every card.
   lazy var mentions = MentionState()
   lazy var appSearch = AppSearchState()
   lazy var controller = EditorController()
-  lazy var lint = LintState()
   lazy var refine = RefineState()
   private var plainTextCache: String
   private var attributedCache: NSAttributedString?
@@ -86,7 +85,7 @@ final class BoardViewModel: ObservableObject {
   /// cards are selected.
   @Published private(set) var primarySelectedCardID: UUID?
   /// The card in text-edit mode (its editor holds first responder). Anchored overlays
-  /// (mentions, connector search, linter, selection bar) route here.
+  /// (mentions, connector search, selection bar) route here.
   @Published var editingCardID: UUID?
 
   /// `$(…)` commands that failed on the last Copy Board, so their tokens render amber. Set by the
@@ -670,6 +669,16 @@ final class BoardViewModel: ObservableObject {
     return insertText(text, at: autoPlacePoint(for: size))
   }
 
+  /// Append captured text from the menu bar, Services menu, URL scheme, or loopback API.
+  @discardableResult
+  func captureExternalText(_ text: String) -> UUID? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let id = insertTextAutoPlaced(trimmed)
+    beginEditing(id)
+    return id
+  }
+
   /// A clear board point below existing content for an auto-placed element.
   func autoPlacePoint(for size: CGSize) -> CGPoint {
     guard !cards.isEmpty else { return CGPoint(x: 120, y: 120) }
@@ -1122,26 +1131,6 @@ final class BoardViewModel: ObservableObject {
   }
 
   // MARK: Derived context
-
-  /// Read-only context for the linter: the OTHER cards' plain text, lightly labeled and
-  /// length-capped so it stays inside the on-device window. `nil` for a lone card.
-  func lintContext(excluding id: UUID) -> String? {
-    let others = readingOrder().filter { $0.id != id }
-      .compactMap { card -> String? in
-        let text = plainText(for: card).trimmed
-        return text.isEmpty ? nil : text
-      }
-    guard !others.isEmpty else { return nil }
-    var budget = 2_400
-    var lines: [String] = []
-    for (index, text) in others.enumerated() {
-      let clipped = String(text.prefix(budget))
-      lines.append("Card \(index + 1): \(clipped)")
-      budget -= clipped.count
-      if budget <= 0 { break }
-    }
-    return lines.joined(separator: "\n")
-  }
 
   /// Every card's plain text in spatial reading order — the source for both Compile
   /// (→ engine) and self-contained Copy (→ SelfContainedRenderer).

@@ -132,6 +132,35 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>$BUNDLE_ID</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>bonsai</string>
+      </array>
+    </dict>
+  </array>
+  <key>NSServices</key>
+  <array>
+    <dict>
+      <key>NSMenuItem</key>
+      <dict>
+        <key>default</key>
+        <string>Send to BonsAI</string>
+      </dict>
+      <key>NSMessage</key>
+      <string>captureFromService</string>
+      <key>NSPortName</key>
+      <string>$APP_NAME</string>
+      <key>NSSendTypes</key>
+      <array>
+        <string>public.plain-text</string>
+      </array>
+    </dict>
+  </array>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
   <key>SUFeedURL</key>

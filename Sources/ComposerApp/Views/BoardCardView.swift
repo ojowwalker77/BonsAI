@@ -102,12 +102,10 @@ struct BoardCardView: View {
             // + the editor's vertical padding below, so the card frame fits the text exactly.
             board.fitTextHeight(card.id, to: contentHeight + 20)
           },
-          boardContext: { board.lintContext(excluding: card.id) },
           definedVariables: { board.definedVariableNames },
           mentions: interaction.mentions,
           appSearch: interaction.appSearch,
           controller: interaction.controller,
-          lint: interaction.lint,
           refine: interaction.refine,
           store: DumpStore.shared
         )

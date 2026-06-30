@@ -1,20 +1,18 @@
-# Agent engines: `claude -p` and Apple Intelligence
+# Agent engines: `claude -p`
 
 > BonsAI never ships its own model or an API key. Every "AI" surface shells out
-> to a coding-agent CLI you already have, or to the model already on your Mac.
-> This document is the map of which engine runs where, how each is invoked, and
-> how one gets picked — and how to add another.
+> to a coding-agent CLI you already have. This document is the map of which engine
+> runs where, how it's invoked, and how one gets picked — and how to add another.
 
-There are two engines today, and they are not interchangeable — each earns its
-place on a different surface:
+There is one engine today, used on the surfaces below:
 
 | Engine                 | CLI / runtime                | Where it's used                                          | Mode                 |
 | ---------------------- | ---------------------------- | ------------------------------------------------------- | -------------------- |
 | **Claude Code**        | `claude -p`                  | Refine, Compile, **and** the in-canvas chat agent       | one-shot + streaming |
-| **Apple Intelligence** | on-device Foundation Models  | the semantic linter (only)                              | on-device, in-process |
+| **Codex**              | `codex exec`                 | Refine, Compile (read-only sandbox; no streaming agent) | one-shot             |
 
-Two facts to anchor on before the details, because they're the things people
-assume wrong:
+One fact to anchor on before the details, because it's the thing people assume
+wrong:
 
 1. **There is exactly one CLI engine today — Claude — but the layer is built for
    more.** Engine choice runs through a small enum + preference + capability
@@ -22,11 +20,6 @@ assume wrong:
    or another agent CLI is a well-scoped change — see
    [Adding an engine](#adding-an-engine). (An earlier Codex path was removed
    because it couldn't be tested; the seams it left are the extension points.)
-2. **Apple Intelligence is *not* a fallback for chat or refine.** It is a
-   separate, in-process, on-device path that today powers exactly one feature —
-   the [semantic linter](semanticlinter.md). See
-   [What about Apple Intelligence as a fallback?](#what-about-apple-intelligence-as-a-fallback)
-   for the honest state and what a real fallback would take.
 
 ---
 
@@ -142,10 +135,10 @@ return nil   // → "No engines enabled in Settings"
 ```
 
 Refine-selection takes the engine the user picked in the selection bar (one
-button per enabled engine); the linter's **"Ask Claude"** escalation always
-forces `.claude`. If the chosen engine is disabled or missing, the action toasts
-and stops rather than silently substituting a different model. When a second
-engine is added, this is the function that decides the order they're preferred in.
+button per enabled engine). If the chosen engine is disabled or missing, the
+action toasts and stops rather than silently substituting a different model. When
+a second engine is added, this is the function that decides the order they're
+preferred in.
 
 ---
 
@@ -200,38 +193,15 @@ execution agree on where a binary lives.
 
 ---
 
-## What about Apple Intelligence as a fallback?
+## No offline fallback today
 
-Short answer: **there isn't one today, and the code should be read with that in
-mind.** It's a natural thing to assume (BonsAI does use on-device intelligence),
-so here is the precise state:
+If `claude` isn't installed, BonsAI does **not** silently fall back to another
+model:
 
-- **Apple Intelligence is used by exactly one feature** — the
-  [semantic linter](semanticlinter.md), via Apple's Foundation Models
-  (`SystemLanguageModel` / `LanguageModelSession`) inside
-  [`SemanticLintService`](../Sources/ComposerApp/Services/SemanticLintService.swift).
-  It runs **in-process**, not as a CLI, and is chosen for that surface precisely
-  because it's free-per-call, private, and offline — the right fit for something
-  that fires on every typing pause.
-- **The chat agent does not fall back to it.** If `claude` isn't installed,
+- **The chat agent does not fall back.** If `claude` isn't installed,
   `CanvasAgent` posts an error ("Couldn't find the `claude` CLI…") and stops.
-- **Refine / Compile do not fall back to it either.** If no CLI engine is enabled
-  and available, `preferredEngine()` returns nil and the action toasts.
-
-`EngineCapabilityStore` *does* track Apple Intelligence availability
-(`appleIntelligenceAvailability()` — gated on **macOS 26+** with Apple
-Intelligence enabled and the model ready), but that state today only drives the
-linter's on/off and the Settings readout. It is the obvious hook if we ever want
-a true offline fallback.
-
-**If you want to build that fallback,** the on-device model is a poor fit for the
-*agentic* path (it has no tools and a small context window, so it can't drive the
-canvas MCP), but it's a reasonable fit for the *one-shot text transforms*. The
-shape would be: extend `preferredEngine()` (or `HeadlessPromptService`) to fall
-through to a Foundation Models path when no CLI engine is available, reusing the
-same `RefineIntent` / `BoardCompile` prompts against a `LanguageModelSession`.
-Keep the linter's hard precision bias in mind — and don't wire it into the chat
-agent, which fundamentally needs tools the on-device model doesn't have.
+- **Refine / Compile do not fall back either.** If no CLI engine is enabled and
+  available, `preferredEngine()` returns nil and the action toasts.
 
 ---
 
@@ -240,5 +210,3 @@ agent, which fundamentally needs tools the on-device model doesn't have.
 - [canvas-agent.md](canvas-agent.md) — the board as an agent-readable graph: the
   MCP tools, the loopback server, and how the chat agent reads and writes board
   state.
-- [semanticlinter.md](semanticlinter.md) — the on-device Apple Intelligence
-  feature in full.

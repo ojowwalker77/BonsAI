@@ -70,20 +70,6 @@ needs a secret (`ConnectorAuth` → rendered in Settings, stored via
 The `@token` serialization is the source of truth for chips, so new connectors
 get round-trip tests alongside the others in `ConnectorTokenTests`.
 
-## Semantic linter layer
-
-This is a newer, more experimental concept, and we'll be honest: we're **not
-fully happy with it yet** — there's a lot of room to improve. The idea is simple,
-though. **What a linter is for a programming language, this is for the meaning of
-your prose.** We lean on Apple Intelligence and on-device Foundation Models to
-*lint semantics* — to quietly flag the phrases in a draft that are too ambiguous
-or underspecified for an AI agent to act on without guessing.
-
-If you want to push on this, read [docs/semanticlinter.md](docs/semanticlinter.md)
-for the full context — the on-device/privacy constraints, the precision bias (a
-wrong squiggle is worse than a missed one), the kinds of ambiguity it flags, and
-where the prompt that drives it lives. This is a great area to experiment in.
-
 ## Agent & engine layer
 
 The AI surfaces never ship a model — they shell out to a coding-agent CLI you
@@ -91,10 +77,10 @@ already use (`claude -p`) for Refine and Compile, and spawn `claude` in streamin
 mode with a loopback MCP server for the in-canvas chat agent. Two write-ups cover
 the whole layer:
 
-- [docs/agent-engines.md](docs/agent-engines.md) — the engines (Claude +
-  on-device Apple Intelligence), the one-shot vs streaming execution paths, how an
-  engine is selected, and the `PATH` gotcha for a GUI-launched app. Read this
-  before touching engine selection or adding a CLI integration.
+- [docs/agent-engines.md](docs/agent-engines.md) — the engines (`claude -p`), the
+  one-shot vs streaming execution paths, how an engine is selected, and the `PATH`
+  gotcha for a GUI-launched app. Read this before touching engine selection or
+  adding a CLI integration.
 - [docs/canvas-agent.md](docs/canvas-agent.md) — the board as an agent-readable
   graph (`CanvasGraph` nodes/edges, reading order, authorship), the loopback
   server → MCP → bridge plumbing, and the tool catalog. Read this before changing

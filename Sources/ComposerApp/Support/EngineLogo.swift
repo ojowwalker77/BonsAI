@@ -26,24 +26,28 @@ struct EngineLogo: View {
 }
 
 /// The mark for the in-canvas agent: the active engine's brand logo (Claude today), falling back to
-/// the Apple Intelligence mark when no CLI engine is enabled and available.
+/// a neutral glyph when no CLI engine is enabled and available.
 struct AgentEngineIcon: View {
   var size: CGFloat = 15
   @ObservedObject private var capabilities = EngineCapabilityStore.shared
 
   var body: some View {
-    if EnginePreferences.isEnabled(.claude), capabilities.isAvailable(.claude) {
-      EngineLogo(engine: .claude)
+    if let engine = preferredEngine {
+      EngineLogo(engine: engine)
     } else {
-      Image(systemName: "apple.intelligence")
+      Image(systemName: "sparkles")
         .resizable()
         .scaledToFit()
         .frame(width: size, height: size)
-        .foregroundStyle(
-          AngularGradient(
-            gradient: Gradient(colors: [.orange, .red, .purple, .blue, .cyan, .orange]),
-            center: .center))
+        .foregroundStyle(Theme.Palette.body)
     }
+  }
+
+  private var preferredEngine: HeadlessEngine? {
+    for engine in HeadlessEngine.allCases {
+      if EnginePreferences.isEnabled(engine), capabilities.isAvailable(engine) { return engine }
+    }
+    return nil
   }
 }
 

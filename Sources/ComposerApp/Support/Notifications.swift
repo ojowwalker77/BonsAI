@@ -72,4 +72,6 @@ extension Notification.Name {
   /// Fires after a region was captured and saved; `userInfo["path"]` is the PNG. The board adds the
   /// image card here and kicks off its on-device understanding.
   static let composerCaptureCompleted = Notification.Name("composerCaptureCompleted")
+  /// Quick capture from the menu bar, Services menu, URL scheme, or loopback API.
+  static let composerQuickCapture = Notification.Name("composerQuickCapture")
 }

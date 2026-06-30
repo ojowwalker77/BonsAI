@@ -10,6 +10,8 @@ final class ComposerTextView: NSTextView {
   /// Fired when this card's text view gains/loses first responder, so the canvas can
   /// track the active card and route per-card actions (font, selection refine) to it.
   var onFocusChange: ((Bool) -> Void)?
+  /// When set, pasted plain text may be turned into connector chips before insertion.
+  weak var smartPasteHandler: ComposerSmartPasteHandling?
 
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     if ComposerPreferences.handleEditorFontKeyEquivalent(event) { return true }
@@ -115,7 +117,35 @@ final class ComposerTextView: NSTextView {
       insertImageAttachment(image)
       return true
     }
+    if let string = pboard.string(forType: .string),
+       let handler = smartPasteHandler,
+       handler.handleSmartPaste(string, in: self) {
+      return true
+    }
     return super.readSelection(from: pboard, type: type)
+  }
+
+  /// Insert a serialized `@token` as a styled chip at the current selection (or replace `range`).
+  func insertTokenChip(_ token: String, replacing range: NSRange? = nil) {
+    let target = range ?? selectedRange()
+    let chip = ChipFactory.make(token: token, font: font ?? Theme.Typography.body)
+    let run = NSMutableAttributedString(attributedString: chip)
+    run.append(NSAttributedString(string: " ", attributes: bodyAttributes()))
+    guard shouldChangeText(in: target, replacementString: run.string) else { return }
+    textStorage?.replaceCharacters(in: target, with: run)
+    didChangeText()
+    setSelectedRange(NSRange(location: target.location + run.length, length: 0))
+    typingAttributes = bodyAttributes()
+  }
+
+  private func bodyAttributes() -> [NSAttributedString.Key: Any] {
+    let style = NSMutableParagraphStyle()
+    style.lineSpacing = Theme.Typography.bodyLineSpacing
+    return [
+      .font: font ?? Theme.Typography.body,
+      .foregroundColor: Theme.nsBodyText,
+      .paragraphStyle: style,
+    ]
   }
 
   // MARK: Extract an image — raw data first, then an image file URL.
@@ -213,37 +243,6 @@ final class ComposerTextView: NSTextView {
       UserFacingError.report(error, while: "Saving the pasted image")
       return nil
     }
-  }
-
-  // MARK: Hover reporting for the semantic linter
-  //
-  // Pure observation: we report the cursor's location so the coordinator can hit-test
-  // it against flagged ranges. We never consume the event, so caret placement, drag
-  // selection, and clicks are completely unaffected.
-
-  /// Called on every move with the point in text-view coords, or nil on exit.
-  var onHoverPoint: ((NSPoint?) -> Void)?
-  private var hoverTracking: NSTrackingArea?
-
-  override func updateTrackingAreas() {
-    super.updateTrackingAreas()
-    if let existing = hoverTracking { removeTrackingArea(existing) }
-    let area = NSTrackingArea(
-      rect: .zero,
-      options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-      owner: self, userInfo: nil)
-    addTrackingArea(area)
-    hoverTracking = area
-  }
-
-  override func mouseMoved(with event: NSEvent) {
-    super.mouseMoved(with: event)
-    onHoverPoint?(convert(event.locationInWindow, from: nil))
-  }
-
-  override func mouseExited(with event: NSEvent) {
-    super.mouseExited(with: event)
-    onHoverPoint?(nil)
   }
 
   // MARK: Re-fit inline images when the panel resizes (bounds-only, cheap).

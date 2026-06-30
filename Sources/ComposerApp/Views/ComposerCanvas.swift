@@ -4,7 +4,7 @@ import SwiftData
 
 /// The entire app surface: a pan/zoom board of text cards on a chromeless glass card, with a
 /// top tool toolbar and a left action rail floating in the gutters. Per-card editor chrome
-/// (mentions, connector search, the semantic linter) is routed to the active card; board-level
+/// (mentions, connector search) is routed to the active card; board-level
 /// actions (Compile, Copy) span every card.
 struct ComposerCanvas: View {
   @StateObject private var store = DumpStore.shared
@@ -92,9 +92,7 @@ struct ComposerCanvas: View {
           size: proxy.size,
           isWorking: isWorking,
           onRefine: { refineSelection($0, card: editing) },
-          onCopy: { copyBoard() },
-          onApplyFix: { editing.controller.applyLintFix(range: $0.range, expecting: $0.phrase, with: $1) },
-          onAskClaude: { askClaude(about: $0, card: editing) }
+          onCopy: { copyBoard() }
         )
         .id(editing.id)
       }
@@ -117,6 +115,9 @@ struct ComposerCanvas: View {
       enterEditingForEntry()
       CanvasBridge.shared.register(board)
       showLatestReportedError()
+      for text in CaptureInbox.shared.drainPending() {
+        ingestQuickCapture(text)
+      }
     }
     .onChange(of: inner) { _, value in lastViewportSize = value }
   }
@@ -209,6 +210,16 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerTogglePalette)) { _ in
         togglePalette()
       }
+      .onReceive(NotificationCenter.default.publisher(for: .composerQuickCapture)) { note in
+        if let text = note.object as? String {
+          ingestQuickCapture(text)
+        }
+      }
+  }
+
+  private func ingestQuickCapture(_ text: String) {
+    guard board.captureExternalText(text) != nil else { return }
+    show(Toast(text: "Captured on board", symbol: "leaf.fill", tint: .accentColor))
   }
 
   /// The agent and Settings share the single auxiliary-panel slot.
@@ -502,7 +513,7 @@ struct ComposerCanvas: View {
   @ViewBuilder
   private var toastView: some View {
     if let toast {
-      VStack {
+      VStack(spacing: 10) {
         Spacer()
         HStack(spacing: 8) {
           Image(systemName: toast.symbol).foregroundStyle(toast.tint)
@@ -512,15 +523,13 @@ struct ComposerCanvas: View {
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
-        .frame(maxWidth: 620, alignment: .leading)
-        .floatingGlass(Capsule(style: .continuous))
-        .padding(.bottom, 30)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .composerPopupSurface()
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .padding(.bottom, 24)
+      .frame(maxWidth: .infinity)
       .transition(.move(edge: .bottom).combined(with: .opacity))
-      .allowsHitTesting(false)
     }
   }
 
@@ -685,7 +694,6 @@ struct ComposerCanvas: View {
     guard let editing = board.editingInteraction else { return }
     if editing.mentions.isOpen { editing.mentions.isOpen = false; editing.mentions.items = [] }
     if editing.appSearch.isOpen { editing.appSearch.isOpen = false }
-    if editing.lint.activeFlagID != nil { editing.lint.activeFlagID = nil }
   }
 
   /// The sidebar gear toggles Settings the way ⌘J / the rail toggle Agent: a second click on the
@@ -987,49 +995,29 @@ struct ComposerCanvas: View {
     }
   }
 
-  /// Escalate one flagged phrase on the active card to Claude.
-  private func askClaude(about flag: LintFlag, card: CardInteraction) {
-    guard !isWorking else { return }
-    guard EnginePreferences.isEnabled(.claude) else {
-      show(Toast(text: "Claude is disabled in Settings", symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    guard engineCapabilities.isAvailable(.claude) else {
-      show(Toast(text: unavailableEngineMessage(), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    let whole = card.controller.plainText
-    isWorking = true
-    card.lint.activeFlagID = nil
-    Task {
-      do {
-        let result = try await service.refineSelection(whole: whole, selection: flag.phrase, engine: .claude)
-        card.controller.applyLintFix(range: flag.range, expecting: flag.phrase, with: result)
-        show(Toast(text: "Clarified with Claude", symbol: "checkmark.circle.fill", tint: .green))
-      } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Clarifying the selected text with Claude"), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      }
-      isWorking = false
-    }
-  }
-
   private func preferredEngine() -> HeadlessEngine? {
-    if EnginePreferences.isEnabled(.claude), engineCapabilities.isAvailable(.claude) { return .claude }
+    for engine in HeadlessEngine.allCases {
+      if EnginePreferences.isEnabled(engine), engineCapabilities.isAvailable(engine) { return engine }
+    }
     return nil
   }
 
   private func unavailableEngineMessage() -> String {
-    guard EnginePreferences.isEnabled(.claude) else {
-      return "Claude is disabled in Settings → Runtime. Enable it before using this action."
+    let enabled = HeadlessEngine.allCases.filter { EnginePreferences.isEnabled($0) }
+    guard !enabled.isEmpty else {
+      return "All engines are disabled in Settings → Runtime. Enable one before using this action."
     }
-    switch engineCapabilities.status(for: .claude) {
-    case .checking:
-      return "Composer is still checking whether Claude can run. Wait a moment or use Settings → Runtime → Recheck."
-    case let .unavailable(reason):
-      return "Claude is unavailable: \(reason). Open Settings → Runtime → Recheck after fixing it."
-    case .available:
-      return "Claude is available, but Composer could not select it. Open Settings → Runtime → Recheck."
+    let reasons = enabled.compactMap { engine -> String? in
+      switch engineCapabilities.status(for: engine) {
+      case .checking: return "\(engine.title) is still being checked"
+      case let .unavailable(reason): return "\(engine.title): \(reason)"
+      case .available: return nil
+      }
     }
+    if reasons.isEmpty {
+      return "No engine could be selected. Open Settings → Runtime → Recheck."
+    }
+    return reasons.joined(separator: " · ")
   }
 
   @discardableResult
@@ -1449,36 +1437,28 @@ private struct PinchZoomCatcher: NSViewRepresentable {
 // MARK: - Active-card overlays
 
 /// The caret/selection-anchored chrome for whichever card holds focus: the selection action
-/// bar, the `@`-mention menu, the connector search panel, and the linter popover. Observes the
-/// active card's state objects directly so it re-renders when they change; rebuilt (via `.id`)
-/// when the active card changes.
+/// bar, the `@`-mention menu, and the connector search panel. Observes the active card's state
+/// objects directly so it re-renders when they change; rebuilt (via `.id`) when the active card
+/// changes.
 private struct ActiveCardOverlays: View {
   @ObservedObject var card: CardInteraction
   @ObservedObject var mentions: MentionState
   @ObservedObject var appSearch: AppSearchState
-  @ObservedObject var lint: LintState
   let size: CGSize
   let isWorking: Bool
   let onRefine: (HeadlessEngine) -> Void
   let onCopy: () -> Void
-  let onApplyFix: (LintFlag, String) -> Void
-  let onAskClaude: (LintFlag) -> Void
 
   init(card: CardInteraction, size: CGSize, isWorking: Bool,
        onRefine: @escaping (HeadlessEngine) -> Void,
-       onCopy: @escaping () -> Void,
-       onApplyFix: @escaping (LintFlag, String) -> Void,
-       onAskClaude: @escaping (LintFlag) -> Void) {
+       onCopy: @escaping () -> Void) {
     self.card = card
     self.mentions = card.mentions
     self.appSearch = card.appSearch
-    self.lint = card.lint
     self.size = size
     self.isWorking = isWorking
     self.onRefine = onRefine
     self.onCopy = onCopy
-    self.onApplyFix = onApplyFix
-    self.onAskClaude = onAskClaude
   }
 
   var body: some View {
@@ -1486,13 +1466,11 @@ private struct ActiveCardOverlays: View {
       selectionBar
       mentionMenu
       appSearchPanel
-      lintPopover
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .animation(Theme.Motion.accessory, value: card.selection)
     .animation(Theme.Motion.accessory, value: mentions.isOpen)
     .animation(Theme.Motion.accessory, value: appSearch.isOpen)
-    .animation(Theme.Motion.accessory, value: lint.activeFlagID)
   }
 
   @ViewBuilder
@@ -1532,24 +1510,6 @@ private struct ActiveCardOverlays: View {
     }
   }
 
-  @ViewBuilder
-  private var lintPopover: some View {
-    if card.selection.isEmpty, !mentions.isOpen, !appSearch.isOpen, let flag = lint.activeFlag, let rect = flag.rectInView {
-      let popup = CGSize(width: 300, height: lintPopoverHeight(flag))
-      let origin = popupOrigin(anchor: CGPoint(x: rect.minX, y: rect.maxY + 1), popup: popup)
-      LintPopover(
-        flag: flag,
-        onPick: { onApplyFix(flag, $0) },
-        onAskClaude: { onAskClaude(flag) },
-        onHover: { hovering in if hovering { lint.cancelHide?() } else { lint.requestHide?() } }
-      )
-      .fixedSize(horizontal: true, vertical: false)
-      .frame(width: popup.width)
-      .position(x: origin.x + popup.width / 2, y: origin.y + popup.height / 2)
-      .transition(.opacity)
-    }
-  }
-
   // MARK: Geometry
 
   private var mentionMenuHeight: CGFloat {
@@ -1565,12 +1525,6 @@ private struct ActiveCardOverlays: View {
       content = min(CGFloat(max(appSearch.results.count, 1)), Theme.Size.menuMaxVisibleRows) * 46 + 10
     }
     return 42 + 1 + content + 26
-  }
-
-  private func lintPopoverHeight(_ flag: LintFlag) -> CGFloat {
-    let suggestions = CGFloat(flag.suggestions.count) * 42
-    let dividers = flag.suggestions.isEmpty ? 1.0 : 2.0
-    return min(260, 62 + suggestions + 42 + dividers)
   }
 
   private func popupOrigin(anchor: CGPoint, popup: CGSize) -> CGPoint {
