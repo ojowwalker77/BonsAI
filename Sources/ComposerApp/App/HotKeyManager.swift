@@ -3,18 +3,23 @@ import Carbon.HIToolbox
 
 final class HotKeyManager {
   private var hotKeyRef: EventHotKeyRef?
+  private var captureHotKeyRef: EventHotKeyRef?
   private var eventHandler: EventHandlerRef?
+
+  /// Hotkey identities: 1 = summon the board, 2 = "Snap to board" region capture.
+  private static let summonID: UInt32 = 1
+  private static let captureID: UInt32 = 2
 
   func register() {
     installHandler()
-    registerHotKey()
+    registerHotKeys()
     NotificationCenter.default.addObserver(
       self, selector: #selector(reregister),
       name: .composerShortcutChanged, object: nil)
   }
 
-  /// Re-bind the global hotkey after the user picks a new shortcut in Settings.
-  @objc private func reregister() { registerHotKey() }
+  /// Re-bind both global hotkeys after the user picks new shortcuts in Settings.
+  @objc private func reregister() { registerHotKeys() }
 
   private func installHandler() {
     var eventType = EventTypeSpec(
@@ -36,9 +41,15 @@ final class HotKeyManager {
           &hotKeyID
         )
 
-        if hotKeyID.id == 1 {
-          DispatchQueue.main.async {
+        let id = hotKeyID.id
+        DispatchQueue.main.async {
+          switch id {
+          case HotKeyManager.summonID:
             NotificationCenter.default.post(name: .composerToggleWindow, object: nil)
+          case HotKeyManager.captureID:
+            NotificationCenter.default.post(name: .composerCaptureToBoard, object: nil)
+          default:
+            break
           }
         }
         return noErr
@@ -50,26 +61,36 @@ final class HotKeyManager {
     )
   }
 
-  private func registerHotKey() {
-    if let hotKeyRef {
-      UnregisterEventHotKey(hotKeyRef)
-      self.hotKeyRef = nil
-    }
-    let shortcut = ShortcutStore.shared.shortcut
-    let hotKeyID = EventHotKeyID(signature: "CMPR".fourCharCode, id: 1)
-    RegisterEventHotKey(
+  private func registerHotKeys() {
+    let store = ShortcutStore.shared
+    hotKeyRef = register(store.shortcut, id: Self.summonID, replacing: hotKeyRef)
+    captureHotKeyRef = register(store.captureShortcut, id: Self.captureID, replacing: captureHotKeyRef)
+  }
+
+  private func register(_ shortcut: GlobalShortcut, id: UInt32, replacing existing: EventHotKeyRef?) -> EventHotKeyRef? {
+    if let existing { UnregisterEventHotKey(existing) }
+    var ref: EventHotKeyRef?
+    let hotKeyID = EventHotKeyID(signature: "CMPR".fourCharCode, id: id)
+    let status = RegisterEventHotKey(
       shortcut.keyCode,
       shortcut.carbonModifiers,
       hotKeyID,
       GetApplicationEventTarget(),
       0,
-      &hotKeyRef
+      &ref
     )
+    if status != noErr {
+      UserFacingError.report("Couldn't register a global keyboard shortcut — the key combination may already be in use by another shortcut or app. Pick a different one in Settings ▸ Keyboard.")
+    }
+    return ref
   }
 
   deinit {
     if let hotKeyRef {
       UnregisterEventHotKey(hotKeyRef)
+    }
+    if let captureHotKeyRef {
+      UnregisterEventHotKey(captureHotKeyRef)
     }
     if let eventHandler {
       RemoveEventHandler(eventHandler)
