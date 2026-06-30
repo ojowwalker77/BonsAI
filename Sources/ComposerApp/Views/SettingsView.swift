@@ -153,6 +153,9 @@ private struct SettingsContent: View {
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
   @AppStorage(ComposerPreferences.panelTransparencyKey) private var panelTransparency = ComposerPreferences.defaultPanelTransparency
   @AppStorage(ComposerPreferences.resolveShellAtCopyKey) private var resolveShellAtCopy = false
+  /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
+  /// visibility. Refreshed in `onAppear`; flipped false the moment the user resets.
+  @State private var agentHasGrants = false
 
   var body: some View {
     ScrollView {
@@ -241,7 +244,38 @@ private struct SettingsContent: View {
         .font(.caption)
         .foregroundStyle(Theme.Palette.count)
         .fixedSize(horizontal: false, vertical: true)
+
+      // Only appears once the agent has standing "Always Allow" grants - lets a user revoke them
+      // without editing defaults by hand.
+      if agentHasGrants {
+        HStack(spacing: 8) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Agent tool permissions")
+              .font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+            Text("Tools you chose \"Always Allow\" for run without asking again.")
+              .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          Spacer(minLength: 8)
+          Button {
+            AgentPermissionBroker.resetRememberedGrants()
+            agentHasGrants = false
+          } label: {
+            Label("Reset", systemImage: "arrow.counterclockwise")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+              .padding(.horizontal, 11)
+              .frame(height: 28)
+          }
+          .buttonStyle(SettingsPillButtonStyle())
+          .help("Ask again next time the agent uses one of these tools")
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 12)
+        .settingsCard()
+      }
     }
+    .onAppear { agentHasGrants = AgentPermissionBroker.hasRememberedGrants }
   }
 
   /// A live count of what's ready, in the mono "instrument" voice. One status dot, neutral capsule.

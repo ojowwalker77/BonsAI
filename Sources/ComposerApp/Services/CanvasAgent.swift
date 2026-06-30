@@ -122,16 +122,24 @@ final class CanvasAgent: ObservableObject {
       finish {}
       return
     }
-    let mcp = #"{"mcpServers":{"canvas":{"type":"http","url":"http://127.0.0.1:\#(CanvasServer.port)/mcp"}}}"#
+    // Two in-process MCP servers: `canvas` exposes the board tools the agent drives; `composer`
+    // exposes only the permission arbiter that backs `--permission-prompt-tool` (see below).
+    let port = CanvasServer.port
+    let mcp = #"{"mcpServers":{"canvas":{"type":"http","url":"http://127.0.0.1:\#(port)/mcp"},"\#(PermissionMCP.serverName)":{"type":"http","url":"http://127.0.0.1:\#(port)/permission"}}}"#
     // Grounded: run in the chosen folder with read-only file tools so the agent can argue from
     // real files. Otherwise: canvas-only, in a neutral scratch dir.
     let grounded = groundingDirectory
     let tools = grounded != nil ? "mcp__canvas__*,Read,Grep,Glob" : "mcp__canvas__*"
     let systemPrompt = grounded != nil ? Self.systemPrompt + "\n\n" + Self.groundingAddendum : Self.systemPrompt
+    // Anything the model reaches for beyond `tools` (an account connector like Craft, a built-in)
+    // routes to our permission arbiter, which shows a real allow/deny dialog instead of letting the
+    // CLI hit a silent wall in `-p` mode - the model used to invent a non-existent "approve in the
+    // app" popup (issue #28). The arbiter tool is intentionally not in `--allowedTools`.
     var args = ["-p", prompt,
                 "--output-format", "stream-json", "--verbose",
                 "--mcp-config", mcp,
                 "--allowedTools", tools,
+                "--permission-prompt-tool", "mcp__\(PermissionMCP.serverName)__\(PermissionMCP.toolName)",
                 "--append-system-prompt", systemPrompt]
     if let resume { args += ["--resume", resume] }
 
