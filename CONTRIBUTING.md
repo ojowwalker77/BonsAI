@@ -124,10 +124,16 @@ for maintainers in [docs/releasing.md](docs/releasing.md).
 
 - **Keep it focused and small.** One idea per PR. It's easier to review, and
   easier to say yes to.
-- **Add a CHANGELOG entry.** Every PR to `main` adds a note under
-  `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md); CI enforces it. For changes
-  that genuinely aren't user-facing (refactors, CI tweaks), apply the
-  `skip-changelog` label instead.
+- **Target the release branch.** Open contributor and agent branches against the
+  active release branch, not directly against `main`. If there is no active
+  release branch yet, create one from the latest `main` named
+  `release-[next_release_number]` (for example, `release-1.0.6`), then open the
+  PR from your branch into that release branch. When the release branch is ready,
+  maintainers merge it into `main`.
+- **Add a CHANGELOG entry.** Every non-doc app change adds a note under
+  `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), so the release branch has
+  complete notes before it merges to `main`. For changes that genuinely aren't
+  user-facing (refactors, CI tweaks), apply the `skip-changelog` label instead.
 - **Cover pure logic with tests.** Codecs, parsing, and other deterministic
   logic should get tests like those in `Tests/ComposerAppTests`.
 - **Don't disturb the board + dock composition.** The separate board / dock /

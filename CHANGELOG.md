@@ -22,6 +22,8 @@ under the new version heading.
   Foundation Models) and its Settings ▸ Runtime row have been removed, ahead of a larger
   pivot. Drafts are no longer analyzed for ambiguity; the agent and `claude -p` engine paths
   are unchanged, and Snap to board still reads screenshots on-device.
+- **Agent tool permission prompts.** Agent-run MCP tool calls now ask before running, remember
+  allowed tools, and include a Settings control to reset remembered permissions.
 
 ### Fixed
 - **Shift+Enter in the Agent chat inserts a newline instead of sending.** The input used `.onSubmit`,
@@ -50,7 +52,6 @@ under the new version heading.
   layer with live pan applied outside it) so it rebuilds only when a card actually changes. Editing,
   typing, dragging, and resizing a card still update just that card. Gestures now glide, matching the
   snappiness of the capture overlay; no behavior or features changed.
-
 ## [1.0.5] - 2026-06-23
 
 ### Added
