@@ -243,8 +243,9 @@ private struct SettingsContent: View {
           toggle: nil
         ) {
           // The genuine Apple Intelligence mark — brand identity, the same rainbow the agent icon
-          // uses — not decorative color.
-          Image(systemName: "apple.intelligence")
+          // uses — not decorative color. `apple.intelligence` is macOS 15+, so below the app's
+          // 14 floor it falls back to `sparkles` rather than showing a missing-glyph box.
+          Image(systemName: "apple.intelligence", fallback: "sparkles")
             .font(.system(size: 19, weight: .medium))
             .foregroundStyle(AngularGradient(
               gradient: Gradient(colors: [.orange, .red, .purple, .blue, .cyan, .orange]),

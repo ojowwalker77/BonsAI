@@ -245,7 +245,7 @@ private struct AgentTranscriptView: View {
       // One compact line per tool call: the summary never wraps — it truncates with an ellipsis,
       // and the full text is available on hover.
       HStack(spacing: 7) {
-        Image(systemName: "wand.and.sparkles").font(.system(size: 10))
+        Image(systemName: "wand.and.sparkles", fallback: "wand.and.stars").font(.system(size: 10))
         Text(message.text).font(.caption).lineLimit(1).truncationMode(.tail)
         Spacer(minLength: 0)
       }

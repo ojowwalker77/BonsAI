@@ -125,9 +125,12 @@ be rejected.** Smaller and sharper beats bigger and busier, every time.
 swift test                       # run the test suite
 ```
 
-A **Swift 6.2+ toolchain (Xcode 26)** on macOS 26 is all you need; the one external
-dependency — [Sparkle](https://sparkle-project.org) (auto-update) — is fetched by
-SwiftPM and bundled into the `.app` by `build_and_run.sh`. See the
+A **Swift 6.2+ toolchain (Xcode 26)** is all you need to build — the Tahoe SDK is
+required to compile the gated Apple Intelligence / Liquid Glass paths. The app itself
+deploys to **macOS 14 (Sonoma)** and up: those Tahoe-only features are weak-linked and
+guarded behind `#available(macOS 26, *)`, so the build runs unchanged on 14. The one
+external dependency — [Sparkle](https://sparkle-project.org) (auto-update) — is fetched
+by SwiftPM and bundled into the `.app` by `build_and_run.sh`. See the
 [README](README.md) for the full set of requirements.
 
 Releases are fully automated — pushing a `v*` tag builds and publishes the app with a

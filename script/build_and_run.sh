@@ -5,7 +5,10 @@ MODE="${1:-run}"
 APP_NAME="BonsAI"
 PRODUCT_NAME="Composer"   # SwiftPM executable output; the staged .app binary is renamed to APP_NAME
 BUNDLE_ID="dev.jow.BonsAI"
-MIN_SYSTEM_VERSION="26.0"
+# Keep in lockstep with the deployment target in Package.swift (.macOS(.v14)). macOS 14 (Sonoma)
+# is the floor set by SwiftData; Tahoe-only features (Apple Intelligence, Liquid Glass) are gated
+# at runtime, so the core board runs down to here.
+MIN_SYSTEM_VERSION="14.0"
 # Sparkle EdDSA public key — the public half of the pair from Sparkle's `generate_keys`. Safe to commit
 # (only the private key is secret; it lives in the SPARKLE_PRIVATE_KEY CI secret). Fill this in after
 # running setup; until then the updater stays idle (no SUPublicEDKey is emitted, so no insecure feed).

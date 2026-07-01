@@ -35,7 +35,7 @@ struct AgentEngineIcon: View {
     if let engine = preferredEngine {
       EngineLogo(engine: engine)
     } else {
-      Image(systemName: "apple.intelligence")
+      Image(systemName: "apple.intelligence", fallback: "sparkles")
         .resizable()
         .scaledToFit()
         .frame(width: size, height: size)

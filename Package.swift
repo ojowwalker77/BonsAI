@@ -5,7 +5,11 @@ import PackageDescription
 let package = Package(
   name: "Composer",
   platforms: [
-    .macOS(.v26)
+    // macOS 14 (Sonoma) is the floor: the board's persistence layer is SwiftData (`@Model` in
+    // DumpStore), which requires 14. Everything Tahoe-only — Apple Intelligence (FoundationModels,
+    // weak-linked) and Liquid Glass — is gated behind `#available(macOS 26, *)` and degrades
+    // gracefully below it, so the core board runs unchanged all the way down to 14.
+    .macOS(.v14)
   ],
   products: [
     .executable(name: "Composer", targets: ["ComposerApp"])
@@ -23,8 +27,8 @@ let package = Package(
       path: "Sources/ComposerApp",
       resources: [.process("Resources")],
       // Tools-version 6 defaults to the Swift 6 language mode (strict
-      // concurrency). Stay on Swift 5 mode — the macOS 26 bump is about the
-      // deployment target, not a concurrency migration.
+      // concurrency). Stay on Swift 5 mode — the deployment target is a
+      // compatibility floor, not a concurrency migration.
       swiftSettings: [.swiftLanguageMode(.v5)]
     ),
     .testTarget(

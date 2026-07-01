@@ -23,9 +23,11 @@ longer, it probably doesn't belong here.
 
 ## Requirements
 
-- **macOS 26 (Tahoe)** or later.
-- **Apple Intelligence** enabled, for the semantic linter — without it, the
-  linter quietly turns itself off and everything else works.
+- **macOS 14 (Sonoma)** or later. The board and every core feature run here.
+- **macOS 26 (Tahoe)** with **Apple Intelligence** enabled unlocks the on-device
+  extras — the semantic linter and screenshot cleanup — plus the Liquid Glass
+  look. Below Tahoe (or without Apple Intelligence) those quietly turn themselves
+  off and everything else works unchanged.
 
 There's nothing to install or configure: download `BonsAI.dmg` from
 [Releases](../../releases) and drag **BonsAI** onto **Applications**. Building from source
