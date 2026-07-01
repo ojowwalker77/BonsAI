@@ -11,6 +11,11 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Fixed
+- **Image selection ring no longer double-borders.** An image card draws its own rounded border, so
+  the accent selection ring — which sat a few pixels outside — read as a second, gapped border. The
+  ring now hugs the image's own edge as a single clean outline. Other elements are unchanged.
+
 ### Added
 - **Model pickers for the agent chat and board description.** Choose which Claude model each runs on
   (Opus / Sonnet / Haiku). The chat picker lives in the Agent panel header and mirrors a matching
