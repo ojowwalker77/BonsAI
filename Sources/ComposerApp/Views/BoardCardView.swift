@@ -165,10 +165,12 @@ struct BoardCardView: View {
       .padding(.vertical, 7)
       .frame(width: min(max(liveFrame.width - 20, 120), 220))
       .background(
+        // Same solid adaptive chip as the rendered label, so entering/leaving edit doesn't flash
+        // between a dark editor and a themed chip.
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(Color.black.opacity(0.36))
+          .fill(Theme.Palette.labelChipFill)
           .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+            .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
       )
       .focused($labelFocused)
       .onSubmit { board.endEditing(card.id) }
@@ -569,16 +571,17 @@ private struct CanvasLabel: View {
       .font(.system(size: 14 * zoom, weight: .semibold))
       .lineLimit(2)
       .multilineTextAlignment(.center)
-      .foregroundStyle(Color.white.opacity(0.90))
+      .foregroundStyle(Theme.Palette.body)
       .padding(.horizontal, 9 * zoom)
       .padding(.vertical, 5 * zoom)
       .background(
+        // Solid fill — a translucent chip lets its own drop shadow bleed through and muddies it.
         RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .fill(Color.black.opacity(0.34))
+          .fill(Theme.Palette.labelChipFill)
           .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+            .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
       )
-      .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+      .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
       .padding(8)
       .allowsHitTesting(false)
   }
@@ -589,9 +592,9 @@ private struct ShapeBox: View {
 
   var body: some View {
     BoxShape(kind: kind)
-      .fill(Color.black.opacity(0.22))
-      .overlay(BoxShape(kind: kind).stroke(Color.white.opacity(0.72), lineWidth: 2))
-      .shadow(color: .black.opacity(0.22), radius: 10, y: 4)
+      .fill(Theme.Palette.elementFill)
+      .overlay(BoxShape(kind: kind).stroke(Theme.Palette.elementStroke, lineWidth: 2))
+      .shadow(color: Theme.Palette.elementShadow, radius: 10, y: 4)
       .padding(2)
   }
 }
@@ -649,8 +652,8 @@ private struct LineShape: View {
           }
         }
       }
-      .stroke(Color.white.opacity(0.78), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-      .shadow(color: .black.opacity(0.20), radius: 6, y: 3)
+      .stroke(Theme.Palette.elementStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
     }
   }
 }
@@ -666,8 +669,8 @@ private struct FreehandShape: View {
         path.move(to: first)
         for point in mapped.dropFirst() { path.addLine(to: point) }
       }
-      .stroke(Color.white.opacity(0.78), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-      .shadow(color: .black.opacity(0.20), radius: 6, y: 3)
+      .stroke(Theme.Palette.elementStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
     }
   }
 }
@@ -687,11 +690,11 @@ private struct ImageObjectPlaceholder: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+          .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
         .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
       } else {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(Color.black.opacity(0.16))
+          .fill(Theme.Palette.elementFill)
           .overlay {
             VStack(spacing: 8) {
               Image(systemName: "photo")
@@ -700,11 +703,11 @@ private struct ImageObjectPlaceholder: View {
                 .font(.caption.weight(.medium))
                 .lineLimit(1)
             }
-            .foregroundStyle(Color.white.opacity(0.72))
+            .foregroundStyle(Theme.Palette.chromeText)
             .padding(10)
           }
           .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.26), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
+            .strokeBorder(Theme.Palette.chromeDivider, style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
           .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
       }
     }

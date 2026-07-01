@@ -6,12 +6,23 @@ import AppKit
 /// One source of truth for spatial, material, color, and motion tokens.
 /// Colors are adaptive so the panel and popovers follow the system appearance.
 enum Theme {
+  /// Light mode never uses pure black ink — every glyph, stroke, and text lands on #575757.
+  /// One constant so the whole light palette derives from a single ink.
+  static let lightInk: CGFloat = 0.341   // #575757
+
   static var nsBodyText: NSColor {
-    Adaptive.ns(light: Adaptive.white(0.04, 0.84), dark: Adaptive.white(1.00, 0.88))
+    Adaptive.ns(light: Adaptive.white(lightInk), dark: Adaptive.white(1.00, 0.88))
   }
 
   static var nsPlaceholderText: NSColor {
-    Adaptive.ns(light: Adaptive.white(0.02, 0.38), dark: Adaptive.white(1.00, 0.48))
+    Adaptive.ns(light: Adaptive.white(lightInk, 0.52), dark: Adaptive.white(1.00, 0.48))
+  }
+
+  /// The standard window's solid canvas: pure black in dark, paper white in light (the Books-style
+  /// reference). Shared by the window's AppKit backing and the SwiftUI canvas surface so the
+  /// system-rounded corners never show a mismatched sliver.
+  static var nsWindowCanvas: NSColor {
+    Adaptive.ns(light: Adaptive.white(0.99), dark: Adaptive.white(0.00))
   }
 
   enum Radius {
@@ -28,34 +39,6 @@ enum Theme {
   }
 
   enum Size {
-    /// The whole panel (card + the rail/toolbar gutters) fills this fraction of the screen's
-    /// visible frame, centered — Composer is a near-fullscreen canvas. The card auto-derives
-    /// from the window size minus the gutters in the canvas layout.
-    static let screenFraction: CGFloat = 0.95
-    /// Main-surface measurements are proportions of the current viewport. They deliberately live
-    /// here instead of as point constants: opening the dock must redistribute the *actual* window
-    /// width, whether Composer is on a compact laptop display or a wide external screen.
-    static func railGutter(in windowWidth: CGFloat) -> CGFloat {
-      // This owns the rail itself plus a small gap before the board card begins. Kept tight
-      // (6%) so the rail reads as attached to the board rather than marooned at the screen edge;
-      // it's the floor before the fixed-width rail starts crowding the card.
-      (max(windowWidth, 0) * 0.060).rounded()
-    }
-    static func railInset(in windowWidth: CGFloat) -> CGFloat {
-      (max(windowWidth, 0) * 0.014).rounded()
-    }
-    static func toolbarGutter(in windowHeight: CGFloat) -> CGFloat {
-      (max(windowHeight, 0) * 0.060).rounded()
-    }
-    static func toolbarInset(in windowHeight: CGFloat) -> CGFloat {
-      (max(windowHeight, 0) * 0.012).rounded()
-    }
-    static func dockMargin(in windowWidth: CGFloat) -> CGFloat {
-      (max(windowWidth, 0) * 0.009).rounded()
-    }
-    static func dockWidth(in windowWidth: CGFloat) -> CGFloat {
-      (max(windowWidth, 0) * 0.24).rounded()
-    }
     static let actionBarHeight: CGFloat = 34
     static let actionBarItemHeight: CGFloat = 28
     static let menuWidth: CGFloat = 320
@@ -83,38 +66,50 @@ enum Theme {
   /// All foreground and surface colors are adaptive. Avoid hard-coded white/black in views.
   enum Palette {
     static var body: Color { Color(nsColor: Theme.nsBodyText) }
-    static var title: Color { Adaptive.color(light: Adaptive.white(0.02, 0.42), dark: Adaptive.white(1.00, 0.36)) }
-    static var count: Color { Adaptive.color(light: Adaptive.white(0.02, 0.30), dark: Adaptive.white(1.00, 0.22)) }
+    static var title: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk, 0.60), dark: Adaptive.white(1.00, 0.36)) }
+    static var count: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk, 0.45), dark: Adaptive.white(1.00, 0.22)) }
     static var placeholder: Color { Color(nsColor: Theme.nsPlaceholderText) }
-    static var menuDesc: Color { Adaptive.color(light: Adaptive.white(0.02, 0.58), dark: Adaptive.white(1.00, 0.58)) }
+    static var menuDesc: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk, 0.80), dark: Adaptive.white(1.00, 0.58)) }
 
     static var accentFill: Color { Color.accentColor.opacity(0.20) }
     static var rowFill: Color { Adaptive.color(light: Adaptive.white(0.00, 0.045), dark: Adaptive.white(1.00, 0.055)) }
     static var selectedRowFill: Color { Color.accentColor.opacity(0.24) }
 
-    static var panelBase: Color {
-      Adaptive.color(
-        light: Adaptive.srgb(0.965, 0.960, 0.945),
-        dark: Adaptive.srgb(0.070, 0.078, 0.086)
-      )
-    }
-    static var panelScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.50), dark: Adaptive.white(0.00, 0.66)) }
-    static var panelBottomShade: Color { Adaptive.color(light: Adaptive.white(0.00, 0.035), dark: Adaptive.white(0.00, 0.10)) }
-    static var panelTopSheen: Color { Adaptive.color(light: Adaptive.white(1.00, 0.46), dark: Adaptive.white(1.00, 0.04)) }
     static var panelHairline: Color { Adaptive.color(light: Adaptive.white(0.00, 0.10), dark: Adaptive.white(1.00, 0.08)) }
     static var panelInnerLine: Color { Adaptive.color(light: Adaptive.white(1.00, 0.40), dark: Adaptive.white(1.00, 0.06)) }
 
     static var popupScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.56), dark: Adaptive.white(0.00, 0.24)) }
-    static var popupSheen: Color { Adaptive.color(light: Adaptive.white(1.00, 0.38), dark: Adaptive.white(1.00, 0.045)) }
-    static var popupHairline: Color { Adaptive.color(light: Adaptive.white(0.00, 0.10), dark: Adaptive.white(1.00, 0.08)) }
 
-    /// Uniform legibility tint + edge for the unified Liquid Glass surface (forced-dark panel).
-    static var raisedTint: Color { Color.black.opacity(0.16) }
-    static var raisedRim: Color { Color.white.opacity(0.07) }
+    /// Uniform legibility tint + edge for the unified Liquid Glass surface. Dark tint over the dark
+    /// theme; a milky lift in light so controls read as bright glass, not gray slabs.
+    static var raisedTint: Color { Adaptive.color(light: Adaptive.white(1.00, 0.44), dark: Adaptive.white(0.00, 0.16)) }
+    static var raisedRim: Color { Adaptive.color(light: Adaptive.white(0.00, 0.07), dark: Adaptive.white(1.00, 0.07)) }
 
-    static var barScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.60), dark: Adaptive.white(0.00, 0.42)) }
-    static var barHairline: Color { Adaptive.color(light: Adaptive.white(0.00, 0.10), dark: Adaptive.white(1.00, 0.08)) }
-    static var barSheen: Color { Adaptive.color(light: Adaptive.white(1.00, 0.36), dark: Adaptive.white(1.00, 0.055)) }
+    static var windowCanvas: Color { Color(nsColor: Theme.nsWindowCanvas) }
+
+    /// Chrome tokens for the floating rail / toolbar / pill controls. These replace the old
+    /// white-keyed literals so the same controls read correctly on light glass. All light-mode
+    /// variants derive from the single #575757 ink — never black.
+    static var chromeGlyph: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk, 0.85), dark: Adaptive.white(1.00, 0.62)) }
+    static var chromeGlyphHover: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk), dark: Adaptive.white(1.00, 0.95)) }
+    static var chromeGlyphDim: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk, 0.40), dark: Adaptive.white(1.00, 0.26)) }
+    static var chromeBadge: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk, 0.55), dark: Adaptive.white(1.00, 0.34)) }
+    static var chromeText: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk, 0.92), dark: Adaptive.white(1.00, 0.78)) }
+    static var hoverWash: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk, 0.10), dark: Adaptive.white(1.00, 0.12)) }
+    static var chromeDivider: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk, 0.28), dark: Adaptive.white(1.00, 0.12)) }
+    /// Ink for freehand strokes drawn straight on the board.
+    static var inkStroke: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk), dark: Adaptive.white(1.00, 0.82)) }
+    /// Drawn board elements (shapes, lines, arrows): white ink on the dark board, #575757 on light.
+    static var elementStroke: Color { Adaptive.color(light: Adaptive.white(Theme.lightInk), dark: Adaptive.white(1.00, 0.72)) }
+    /// Shape interiors: unfilled on paper (light mode is outline-only, like a whiteboard); a soft
+    /// dark fill on the dark board, where it grounds the shape against the glass. The light value
+    /// is near-zero alpha rather than `.clear` so the interior still hit-tests for click-to-select.
+    static var elementFill: Color { Adaptive.color(light: Adaptive.white(1.00, 0.001), dark: Adaptive.white(0.00, 0.22)) }
+    /// Elements cast a grounding shadow only on the dark board — ink on paper casts none.
+    static var elementShadow: Color { Adaptive.color(light: Adaptive.white(0.00, 0.0), dark: Adaptive.white(0.00, 0.22)) }
+    /// The shape-label chip: solid fills (a translucent fill lets the chip's own shadow bleed
+    /// through and muddy it — the "gray smear" bug).
+    static var labelChipFill: Color { Adaptive.color(light: Adaptive.white(0.955), dark: Adaptive.white(0.17)) }
 
     static var separator: Color { Adaptive.color(light: Adaptive.white(0.00, 0.085), dark: Adaptive.white(1.00, 0.07)) }
     static var keycapFill: Color { Adaptive.color(light: Adaptive.white(0.00, 0.060), dark: Adaptive.white(1.00, 0.08)) }
@@ -140,6 +135,46 @@ enum Theme {
     static let accessory = Animation.spring(response: 0.28, dampingFraction: 0.82)
     static let dismissDuration = 0.16
     static let selectionDebounce: TimeInterval = 0.10
+  }
+}
+
+// MARK: - Standard-window chrome metrics
+
+/// One design system for the standard-window floating controls — the board pill, the tool bar, the
+/// action pill, and the rail all share this control height, inner padding, and corner radius so they
+/// read as siblings instead of four bespoke shapes.
+enum WindowChrome {
+  static let controlHeight: CGFloat = 34
+  static let padH: CGFloat = 6
+  static let padV: CGFloat = 5
+  static let radius: CGFloat = Theme.Radius.menu
+  /// Uniform distance every floating control keeps from the window edges (the board pill clears the
+  /// traffic lights instead). One number so nothing sits a different distance from its edge.
+  static let edgeInset: CGFloat = 16
+  /// Left offset for the top-left board pill: the traffic lights (repositioned onto the control
+  /// row's centerline, starting at `edgeInset`) end at 16 + 3×14 + 2×6 = 70; +12 breathing room.
+  static let trafficLightInset: CGFloat = 82
+  /// EVERY chrome glyph: one size, one weight. No inline `.font(.system(size: …))` in chrome views.
+  static let iconSize: CGFloat = 17
+  static var iconFont: Font { .system(size: iconSize, weight: .medium) }
+  /// EVERY chrome text label (board name, zoom %, chip text).
+  static var labelFont: Font { .system(size: 13, weight: .medium) }
+  /// Inner horizontal padding for a text-bearing control inside a pill (icons are square and
+  /// need none).
+  static let labelPadH: CGFloat = 10
+  /// Spacing between sibling controls inside one pill/bar.
+  static let itemSpacing: CGFloat = 4
+}
+
+extension View {
+  /// THE one wrapper for every floating chrome pill and bar: identical padding, radius, and glass.
+  /// Views never add their own surface padding — wrap the control row in this and it is, by
+  /// construction, the same size as every other pill.
+  func chromePill() -> some View {
+    self
+      .padding(.horizontal, WindowChrome.padH)
+      .padding(.vertical, WindowChrome.padV)
+      .composerPopupSurface(radius: WindowChrome.radius)
   }
 }
 
@@ -227,42 +262,18 @@ extension View {
   func composerPopupSurface(radius: CGFloat = Theme.Radius.menu) -> some View {
     floatingGlass(RoundedRectangle(cornerRadius: radius, style: .continuous))
   }
+
+  /// Background for the Agent / Settings panels floating over the canvas — plain Liquid Glass.
+  func dockPanelSurface(radius: CGFloat = Theme.Radius.panel) -> some View {
+    floatingGlass(RoundedRectangle(cornerRadius: radius, style: .continuous))
+  }
 }
 
 // MARK: - Panel backdrop
 
-/// The frosted, rounded, scrimmed card the whole canvas sits on.
+/// The canvas backdrop: a flat, solid, opaque surface — black in dark, paper white in light.
 struct ComposerPanelBackground: View {
-  var radius: CGFloat = Theme.Radius.panel
-  @AppStorage(ComposerPreferences.panelTransparencyKey) private var panelTransparency = ComposerPreferences.defaultPanelTransparency
-
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-    // 0 = Opaque, maxPanelTransparency = Glass. Normalize to 0…1 so the tint sweeps a
-    // wide, obviously-live range as the slider moves.
-    let glass = ComposerPreferences.clampedPanelTransparency(panelTransparency) / ComposerPreferences.maxPanelTransparency
-    let tint = 0.80 - 0.58 * glass
-
-    ZStack {
-      // Genuine frosted glass: `.behindWindow` samples and blurs the desktop behind the
-      // panel (Spotlight / Control Center vibrancy), not just content within the window.
-      VisualEffectBackground(material: .hudWindow, blending: .behindWindow, state: .active)
-
-      // Legibility tint over the blur — recedes toward Glass, deepens toward Opaque.
-      Color.black.opacity(tint)
-
-      // Top sheen → clear → faint floor gives the slab depth.
-      LinearGradient(
-        stops: [
-          .init(color: Theme.Palette.panelTopSheen, location: 0),
-          .init(color: Color.clear, location: 0.34),
-          .init(color: Theme.Palette.panelBottomShade, location: 1)
-        ],
-        startPoint: .top,
-        endPoint: .bottom
-      )
-    }
-    .clipShape(shape)
-    .ignoresSafeArea()
+    Theme.Palette.windowCanvas.ignoresSafeArea()
   }
 }

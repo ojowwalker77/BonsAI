@@ -1,18 +1,43 @@
 import AppKit
 import Foundation
 
+/// The app-wide appearance: follow macOS, or force light / dark. Applied as each window's
+/// `NSAppearance`, so the adaptive `Theme` palette resolves accordingly everywhere at once.
+enum ComposerTheme: String, CaseIterable, Identifiable {
+  case system
+  case light
+  case dark
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .system: "System"
+    case .light: "Light"
+    case .dark: "Dark"
+    }
+  }
+
+  /// nil = inherit the system appearance.
+  var nsAppearance: NSAppearance? {
+    switch self {
+    case .system: nil
+    case .light: NSAppearance(named: .aqua)
+    case .dark: NSAppearance(named: .darkAqua)
+    }
+  }
+}
+
 /// User-tunable appearance controls shared by SwiftUI surfaces and AppKit text views.
 enum ComposerPreferences {
   static let editorFontSizeKey = "composer.editor.fontPointSize"
-  static let panelTransparencyKey = "composer.panel.backgroundTransparency"
-  static let resolveShellAtCopyKey = "composer.copy.resolveShellCommands"
+  /// App-wide theme. Defaults to dark — BonsAI's signature look — so existing installs don't
+  /// change; System/Light are the opt-in.
+  static let themeKey = "composer.appearance.theme"
 
   static let minEditorFontSize: CGFloat = 11
   static let maxEditorFontSize: CGFloat = 28
   static let fontSizeStep: CGFloat = 1
-
-  static let defaultPanelTransparency = 0.18
-  static let maxPanelTransparency = 0.72
 
   private static var defaultEditorFontSize: CGFloat {
     NSFont.preferredFont(forTextStyle: .body).pointSize + 2
@@ -27,10 +52,9 @@ enum ComposerPreferences {
     NSFont.systemFont(ofSize: editorFontSize)
   }
 
-  /// Whether `{{x = cmd}}` variables and `[sh: cmd]` nodes run at copy time. Off by default: running
-  /// shell pulled from board text is opt-in, and even when on, each copy confirms what will execute.
-  static var resolveShellAtCopy: Bool {
-    UserDefaults.standard.bool(forKey: resolveShellAtCopyKey)
+  /// The app-wide theme (see `ComposerTheme`). Defaults to dark, today's look.
+  static var theme: ComposerTheme {
+    ComposerTheme(rawValue: UserDefaults.standard.string(forKey: themeKey) ?? "") ?? .dark
   }
 
   @discardableResult
@@ -64,10 +88,6 @@ enum ComposerPreferences {
       return true
     }
     return false
-  }
-
-  static func clampedPanelTransparency(_ value: Double) -> Double {
-    min(max(value, 0), maxPanelTransparency)
   }
 
   private static func clamp(_ value: CGFloat, _ lower: CGFloat, _ upper: CGFloat) -> CGFloat {

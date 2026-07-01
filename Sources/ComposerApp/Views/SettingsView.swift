@@ -24,10 +24,8 @@ struct SettingsOverlay: View {
     }
     .frame(width: width)
     .frame(maxHeight: .infinity)
-    // Identical glass to the main window and the agent dock — same frosted treatment, tint, and
-    // corner radius — so Settings reads as a second panel beside the card.
-    .background(ComposerPanelBackground(radius: Theme.Radius.panel))
-    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
+    // Liquid Glass floating over the canvas.
+    .dockPanelSurface()
     .onExitCommand(perform: onClose)
     .animation(Theme.Motion.accessory, value: destination)
   }
@@ -59,20 +57,27 @@ struct SettingsOverlay: View {
 
   // MARK: Tabs
 
+  /// Modern chip nav: inline icon + label capsules in a horizontal row. Selection is a filled
+  /// chip; everything else stays quiet until hover.
   private var tabStrip: some View {
-    HStack(spacing: 4) {
-      ForEach(SettingsDestination.allCases) { item in
-        SettingsTab(item: item, selected: destination == item) { destination = item }
+    ScrollView(.horizontal) {
+      HStack(spacing: 5) {
+        ForEach(SettingsDestination.allCases) { item in
+          SettingsTab(item: item, selected: destination == item) {
+            Haptics.tap()
+            destination = item
+          }
+        }
       }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 9)
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 10)
+    .scrollIndicators(.never)
   }
 }
 
-/// One segment of the settings nav. Quiet by default, lights up on hover, and marks the selection
-/// with an accent-tinted glyph over a neutral fill — the same "tint is the signal, no colored box"
-/// rule the canvas rails follow.
+/// One chip of the settings nav — icon + label inline in a capsule. The selected chip carries a
+/// quiet filled background with accent-tinted content; the rest light up on hover.
 private struct SettingsTab: View {
   let item: SettingsDestination
   let selected: Bool
@@ -81,18 +86,17 @@ private struct SettingsTab: View {
 
   var body: some View {
     Button(action: action) {
-      VStack(spacing: 5) {
-        Image(systemName: item.symbol).font(.system(size: 15, weight: .medium))
-        Text(item.title).font(.system(size: 10.5, weight: .medium))
+      HStack(spacing: 5) {
+        Image(systemName: item.symbol).font(.system(size: 11.5, weight: .medium))
+        Text(item.title).font(.system(size: 11.5, weight: .medium)).fixedSize()
       }
-      .frame(maxWidth: .infinity)
-      .frame(height: 46)
       .foregroundStyle(foreground)
+      .padding(.horizontal, 10)
+      .frame(height: 26)
       .background(
-        RoundedRectangle(cornerRadius: 9, style: .continuous)
-          .fill(selected ? Color.white.opacity(0.08) : (hovering ? Color.white.opacity(0.045) : Color.clear))
+        Capsule().fill(selected ? Theme.Palette.keycapFill : (hovering ? Theme.Palette.rowFill : Color.clear))
       )
-      .contentShape(Rectangle())
+      .contentShape(Capsule())
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
@@ -144,7 +148,6 @@ private struct SettingsContent: View {
     ("Select all · duplicate", "⌘A  ⌘D"),
     ("Group · ungroup", "⌘G  ⇧⌘G"),
     ("Lock · unlock", "⌘L  ⇧⌘L"),
-    ("Copy self-contained", "⇧⌘C"),
   ]
 
   @StateObject private var appIcons = AppIconStore()
@@ -155,9 +158,7 @@ private struct SettingsContent: View {
   // Both keys are shared with their in-canvas pickers (the Agent dock for chat), so the controls
   // mirror each other live. See [[ModelPreferences]].
   @AppStorage(ModelPreferences.chatModelKey) private var chatModel: ClaudeModel = ModelPreferences.defaultChatModel
-  @AppStorage(ModelPreferences.describeModelKey) private var describeModel: ClaudeModel = ModelPreferences.defaultDescribeModel
-  @AppStorage(ComposerPreferences.panelTransparencyKey) private var panelTransparency = ComposerPreferences.defaultPanelTransparency
-  @AppStorage(ComposerPreferences.resolveShellAtCopyKey) private var resolveShellAtCopy = false
+  @AppStorage(ComposerPreferences.themeKey) private var themeRaw = ComposerTheme.dark.rawValue
   /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
   /// visibility. Refreshed in `onAppear`; flipped false the moment the user resets.
   @State private var agentHasGrants = false
@@ -292,38 +293,16 @@ private struct SettingsContent: View {
     .onAppear { agentHasGrants = AgentPermissionBroker.hasRememberedGrants }
   }
 
-  /// Per-surface model choice. Chat mirrors the Agent dock's picker (same key); Describe is the only
-  /// place to set the model the board-description copy runs on. Refine/Compile aren't listed — they
-  /// stay on the CLI default deliberately.
+  /// The agent chat's model. Mirrors the Agent panel's picker (same key). Refine/Compile aren't
+  /// listed — they stay on the CLI default deliberately.
   private var modelsCard: some View {
-    // These pickers set a `claude --model` alias, so they only bite when Claude actually runs the
-    // surface. Chat is always Claude (the dock agent is hardwired to it); Describe runs on whichever
-    // engine `preferredEngine()` picks — Claude first, else Codex — and Codex ignores the alias. Gate
-    // the Describe picker on Claude being the engine that will run it so it never silently no-ops.
-    let claudeReady = claudeEnabled && capabilities.isAvailable(.claude)
-    let codexReady = codexEnabled && capabilities.isAvailable(.codex)
-    let describeEngine: HeadlessEngine? = claudeReady ? .claude : (codexReady ? .codex : nil)
-    let describeNote: String? = {
-      switch describeEngine {
-      case .claude: return nil
-      case .codex: return "Describe currently runs on Codex, which ignores this Claude model. Enable Claude to use it."
-      case nil: return "No engine is available to run Describe. Enable Claude or Codex in Runtime above."
-      }
-    }()
-    return VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 8) {
       Text("MODELS").sectionLabel()
       VStack(spacing: 0) {
         modelRow(
           title: "Agent chat",
           subtitle: "The in-canvas agent you talk to. Mirrors the picker in the Agent panel.",
           selection: $chatModel)
-        Divider().overlay(Theme.Palette.separator)
-        modelRow(
-          title: "Describe board",
-          subtitle: "The toolbar copy that summarizes the whole board into a paste-ready brief.",
-          selection: $describeModel,
-          active: describeEngine == .claude,
-          inactiveNote: describeNote)
       }
       .padding(.horizontal, 13)
       .settingsCard()
@@ -393,7 +372,7 @@ private struct SettingsContent: View {
         .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Theme.Palette.tagFill))
         .overlay(
           RoundedRectangle(cornerRadius: 11, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+            .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1)
         )
         .opacity(available ? 1 : 0.4)
         .saturation(available ? 1 : 0.2)
@@ -478,62 +457,30 @@ private struct SettingsContent: View {
   // MARK: Appearance
 
   private var appearancePage: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      pageHeader("Panel glass",
-                 "Let more of the desktop through without losing the contrast that keeps long drafts readable.")
+    VStack(alignment: .leading, spacing: 20) {
+      themeCard
+    }
+  }
 
-      VStack(alignment: .leading, spacing: 12) {
-        // A live preview of the panel at the chosen transparency.
-        glassPreview
-          .frame(height: 64)
-          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-        VStack(spacing: 12) {
-          HStack(alignment: .firstTextBaseline) {
-            Text("Background transparency").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-            Spacer(minLength: 12)
-            Text("\(transparencyPercent)%")
-              .font(.callout.monospacedDigit().weight(.semibold))
-              .foregroundStyle(Theme.Palette.body)
-          }
-          Slider(value: $panelTransparency, in: 0...ComposerPreferences.maxPanelTransparency)
-            .tint(Color.accentColor)
-          HStack {
-            Text("Opaque")
-            Spacer()
-            Text("Glass")
-          }
-          .font(.caption2)
-          .foregroundStyle(Theme.Palette.count)
+  /// App-wide System / Light / Dark. Applied as the window's `NSAppearance`, so the whole adaptive
+  /// palette flips in place the moment a segment is picked — no rebuild, no relaunch.
+  private var themeCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Theme",
+                 "Follow macOS, or force light or dark across the board and panels.")
+      Picker("", selection: $themeRaw) {
+        ForEach(ComposerTheme.allCases) { theme in
+          Text(theme.title).tag(theme.rawValue)
         }
-        .padding(14)
-        .settingsCard()
       }
+      .labelsHidden()
+      .pickerStyle(.segmented)
+      .padding(14)
+      .settingsCard()
     }
-  }
-
-  private var glassPreview: some View {
-    let glass = ComposerPreferences.clampedPanelTransparency(panelTransparency) / ComposerPreferences.maxPanelTransparency
-    let tint = 0.80 - 0.58 * glass
-    return ZStack {
-      VisualEffectBackground(material: .hudWindow, blending: .behindWindow, state: .active)
-      Color.black.opacity(tint)
-      HStack {
-        Text("The quick brown fox")
-          .font(.callout.weight(.medium))
-          .foregroundStyle(.white.opacity(0.92))
-        Spacer()
-      }
-      .padding(.horizontal, 14)
+    .onChange(of: themeRaw) { _, _ in
+      NotificationCenter.default.post(name: .composerThemeChanged, object: nil)
     }
-    .overlay(
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
-        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-    )
-  }
-
-  private var transparencyPercent: Int {
-    Int((ComposerPreferences.clampedPanelTransparency(panelTransparency) / ComposerPreferences.maxPanelTransparency) * 100)
   }
 
   // MARK: Connectors
@@ -544,8 +491,6 @@ private struct SettingsContent: View {
                  "Type @ in a card to attach live context. Copied drafts become self-contained text — the source is resolved at copy time.")
 
       agentSkillsCard
-
-      shellResolutionCard
 
       ForEach(MentionCatalog.appsByCategory, id: \.category) { group in
         VStack(alignment: .leading, spacing: 8) {
@@ -618,32 +563,6 @@ private struct SettingsContent: View {
       agentSkillsError = "\(target.displayName): \(error.localizedDescription)"
     }
     agentSkillsRevision += 1
-  }
-
-  /// Opt-in for copy-time shell. Off by default; even on, every copy confirms what will run.
-  private var shellResolutionCard: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text("COPY-TIME SHELL").sectionLabel()
-      HStack(spacing: 11) {
-        Image(systemName: "terminal")
-          .font(.system(size: 15, weight: .medium))
-          .foregroundStyle(Theme.Palette.body)
-          .frame(width: 24, height: 24)
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Resolve shell at copy time")
-            .font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
-          Text("Run $(command) blocks and name=(value) variables when you copy, pasting their output. Each copy confirms what will run.")
-            .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        Spacer(minLength: 8)
-        Toggle("", isOn: $resolveShellAtCopy)
-          .labelsHidden().toggleStyle(.switch).controlSize(.small)
-      }
-      .padding(.horizontal, 13)
-      .padding(.vertical, 11)
-      .settingsCard()
-    }
   }
 
   private func connectorRow(_ app: MentionItem) -> some View {
@@ -743,7 +662,7 @@ private struct SettingsContent: View {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                   .fill(Theme.Palette.keycapFill)
                   .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+                    .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1))
               )
           }
           .padding(.horizontal, 13)
@@ -889,9 +808,9 @@ private struct SettingsPillButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .background(
-        Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.14 : 0.08))
+        Capsule().fill(configuration.isPressed ? Theme.Palette.buttonHover : Theme.Palette.keycapFill)
       )
-      .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+      .overlay(Capsule().strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
       .scaleEffect(configuration.isPressed ? 0.97 : 1)
       .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
   }
@@ -904,7 +823,7 @@ private extension View {
       RoundedRectangle(cornerRadius: radius, style: .continuous)
         .fill(Theme.Palette.rowFill)
         .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
-          .strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+          .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1))
     }
   }
 

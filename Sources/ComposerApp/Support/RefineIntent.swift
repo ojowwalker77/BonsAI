@@ -87,31 +87,6 @@ enum BoardCompile {
   """
 }
 
-// MARK: - Board describe
-
-/// The board-level "Copy as description" action: hands the engine the whole board graph (the same
-/// snapshot the canvas MCP `get_canvas` exposes) and asks for one self-contained, paste-ready
-/// description of EVERYTHING on the board — text cards, shapes, diagrams, and how they connect —
-/// not just the card prose `BoardCompile` merges.
-enum BoardDescribe {
-  static let instruction = """
-  You are given the full state of a visual thinking board as a JSON graph. `nodes` are the text \
-  cards and shapes (each with an id, kind, text, position, size, and `whoWrote`: 1 = the human \
-  wrote or edited it, 2 = an agent drew it, 0 = unknown). `edges` are the arrows/lines that bind \
-  one node to another. `readingOrder` lists node ids top-to-bottom, then left-to-right. \
-  An `image` node's `text` is the absolute file path to a picture on this Mac. Include that path \
-  as the image reference; do not claim to have inspected the picture unless the graph text itself \
-  includes that detail. \
-  Read the whole graph and write ONE self-contained description of everything the board holds, so \
-  someone who cannot see it understands it completely. Walk the cards in reading order; describe \
-  the shapes and what the arrows connect and imply; surface the structure and relationships, not \
-  just a flat list. Spell out enough context that the description stands on its own. \
-  Keep every @mention token (for example @context7, @github, @finder, @browser, and any with \
-  trailing ids) EXACTLY as written — never rephrase them, fold them into prose, or drop them. \
-  Do not add commentary, preamble, quotes, or markdown fences. Return ONLY the description.
-  """
-}
-
 // MARK: - Refine UI state
 
 /// Drives the whole-draft refine affordances: the intent menu and the post-refine

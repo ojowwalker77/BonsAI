@@ -43,20 +43,6 @@ struct HeadlessPromptService {
     return try await run(prompt: prompt, engine: engine)
   }
 
-  /// Describe the WHOLE board — text cards, shapes, diagrams, and how they connect — as one
-  /// self-contained, paste-ready brief. `state` is the board graph JSON (the same snapshot the
-  /// canvas MCP `get_canvas` exposes); unlike `compileBoard` (which merges card prose) this reads
-  /// the full graph, so the description covers everything the board holds.
-  func describeBoard(state: String, engine: HeadlessEngine, model: ClaudeModel) async throws -> String {
-    let prompt = """
-    \(BoardDescribe.instruction)
-
-    ===== BOARD STATE (JSON graph: nodes, edges, reading order) =====
-    \(state)
-    """
-    return try await run(prompt: prompt, engine: engine, model: model)
-  }
-
   /// `model` is optional: when nil the CLI picks its own default (used by Refine / Compile);
   /// Describe passes the user's chosen `ClaudeModel` so it can run on a different tier.
   private func run(prompt: String, engine: HeadlessEngine, model: ClaudeModel? = nil) async throws -> String {
