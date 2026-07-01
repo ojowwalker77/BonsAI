@@ -234,14 +234,20 @@ struct BoardCardView: View {
     // select to move or resize. Shapes keep their ring while editing.
     if (isSelected || isEditing) && !isEmptyText {
       let showRing = !isTextElement || (isSelected && !isEditing)
+      // Image cards draw their own rounded border, so a ring sitting `selectionGap` px outside reads
+      // as an ugly double border with a gap. Hug the image's own edge instead — a single clean
+      // accent outline. Other elements (text, shapes, lines) keep the offset ring.
+      let hugsContent = card.elementKind == .image
+      let ringGap: CGFloat = hugsContent ? 1 : selectionGap
+      let ringRadius: CGFloat = hugsContent ? radius : radius + selectionGap
       // Handles only grab in the select tool — in a drawing tool a corner drag should draw, not resize.
       let showHandles = isSelected && !isEditing && !card.locked && selectable
       GeometryReader { geo in
         ZStack {
           if showRing {
-            RoundedRectangle(cornerRadius: radius + selectionGap, style: .continuous)
-              .strokeBorder(Color.accentColor.opacity(isEditing ? 0.9 : 0.7), lineWidth: 1)
-              .frame(width: geo.size.width + selectionGap * 2, height: geo.size.height + selectionGap * 2)
+            RoundedRectangle(cornerRadius: ringRadius, style: .continuous)
+              .strokeBorder(Color.accentColor.opacity(isEditing ? 0.9 : 0.7), lineWidth: hugsContent ? 1.5 : 1)
+              .frame(width: geo.size.width + ringGap * 2, height: geo.size.height + ringGap * 2)
               .position(x: geo.size.width / 2, y: geo.size.height / 2)
               .allowsHitTesting(false)
           }

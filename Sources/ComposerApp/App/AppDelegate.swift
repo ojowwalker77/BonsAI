@@ -5,6 +5,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   let panelController = PanelController()
   private let hotKeyManager = HotKeyManager()
   private let menuBarController = MenuBarController()
+  /// Held strongly so it keeps firing — a `DispatchSourceSignal` is cancelled on dealloc.
+  private var sigtermSource: DispatchSourceSignal?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
@@ -16,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     MentionStyleCache.shared.preload()
     CanvasServer.shared.start()
     promptForAgentSkillsIfNeeded()
+    installSigtermHandler()
 
     NSApp.servicesProvider = self
 
@@ -30,6 +33,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       name: .composerCaptureToBoard, object: nil)
 
     panelController.show()
+  }
+
+  /// The board autosaves on a ~400ms debounce; without this, an edit made just before quit
+  /// (e.g. a `delete`/`add_text` op from an external agent over the canvas API) is silently
+  /// lost because the pending save's timer never gets to fire.
+  func applicationWillTerminate(_ notification: Notification) {
+    CanvasBridge.shared.flush()
   }
 
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
@@ -89,6 +99,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     failure.messageText = "Couldn't install for everyone"
     failure.informativeText = failures.map { "\($0.key.displayName): \($0.value.localizedDescription)" }.joined(separator: "\n")
     failure.runModal()
+  }
+
+  /// A bare `SIGTERM` (e.g. `pkill`, used by the dev-loop relaunch script) bypasses AppKit's
+  /// termination delegate entirely by default, so `applicationWillTerminate` would never run and
+  /// a pending autosave would never flush. Disarm the default disposition and re-route the signal
+  /// through the normal `NSApp.terminate` path so it does.
+  private func installSigtermHandler() {
+    signal(SIGTERM, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    source.setEventHandler { NSApp.terminate(nil) }
+    source.resume()
+    sigtermSource = source
   }
 
   /// Summon the board (if hidden) and open its companion Settings window.

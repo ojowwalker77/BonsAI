@@ -11,6 +11,11 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Fixed
+- **Image selection ring no longer double-borders.** An image card draws its own rounded border, so
+  the accent selection ring — which sat a few pixels outside — read as a second, gapped border. The
+  ring now hugs the image's own edge as a single clean outline. Other elements are unchanged.
+
 ### Added
 - **Agent skills for any coding agent.** BonsAI's canvas API (`127.0.0.1:7337`) now ships a portable
   skill doc, not just a Claude Code skill. On first launch, if Claude Code, Codex CLI, and/or Cursor
