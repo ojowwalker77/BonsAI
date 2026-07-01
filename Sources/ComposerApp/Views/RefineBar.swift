@@ -29,7 +29,7 @@ private struct RefineMenuRow: View {
         Image(systemName: intent.symbol)
           .font(.body)
           .frame(width: 18)
-          .foregroundStyle(hovering ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Theme.Palette.menuDesc))
+          .foregroundStyle(hovering ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.menuDesc))
         VStack(alignment: .leading, spacing: 1) {
           Text(intent.label).font(.body.weight(.medium)).foregroundStyle(Theme.Palette.body)
           Text(intent.detail).font(.caption).foregroundStyle(Theme.Palette.menuDesc).lineLimit(1)
@@ -60,7 +60,7 @@ struct RefineConfirmBar: View {
 
   var body: some View {
     HStack(spacing: 9) {
-      Image(systemName: intent.symbol).font(.caption).foregroundStyle(Color.accentColor)
+      Image(systemName: intent.symbol).font(.caption).foregroundStyle(Theme.Palette.accent)
       Text("Refined · \(intent.label)")
         .font(Theme.Typography.actionLabel)
         .foregroundStyle(Theme.Palette.body)
@@ -85,7 +85,7 @@ private struct RefineBarButton: View {
     Button(action: action) {
       Text(title)
         .font(Theme.Typography.actionLabel)
-        .foregroundStyle(prominent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Theme.Palette.body))
+        .foregroundStyle(prominent ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.body))
         .padding(.horizontal, 11)
         .frame(height: Theme.Size.actionBarItemHeight)
         .background(

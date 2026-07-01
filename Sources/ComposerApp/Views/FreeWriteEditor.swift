@@ -140,7 +140,7 @@ struct FreeWriteEditor: NSViewRepresentable {
     tv.isAutomaticSpellingCorrectionEnabled = false
     tv.smartInsertDeleteEnabled = false
     tv.allowsUndo = true
-    tv.insertionPointColor = .controlAccentColor
+    tv.insertionPointColor = Theme.Palette.nsAccent
     tv.isVerticallyResizable = true
     tv.isHorizontallyResizable = false
     tv.autoresizingMask = [.width]

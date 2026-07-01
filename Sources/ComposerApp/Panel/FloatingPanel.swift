@@ -1,57 +1,71 @@
 import AppKit
 
-/// Chromeless, normal-level window for BonsAI's board (and its auxiliary dock / settings siblings).
-/// Borderless windows return false from `canBecomeKey` by default — hence the override below.
+/// BonsAI's board window: a standard titled, resizable macOS window with a full-size content
+/// view. Every control floats over the solid canvas inside; the title bar is transparent and the
+/// traffic lights are re-laid onto the control row's centerline.
 final class FloatingPanel: NSPanel {
-  /// The board is the workspace's primary panel. Agent and Settings are separate sibling panels
-  /// whose Escape action should close only themselves.
-  var isAuxiliaryPanel = false
-  /// MANDATORY: a borderless / non-activating panel returns false by default,
+  /// MANDATORY: panels return false by default in some configurations,
   /// so without this the text canvas never gets an insertion point.
   override var canBecomeKey: Bool { true }
-  /// The board is a normal main window; the auxiliary dock / settings panels are not.
-  override var canBecomeMain: Bool { !isAuxiliaryPanel }
+  override var canBecomeMain: Bool { true }
 
   init(contentRect: NSRect) {
     super.init(
       contentRect: contentRect,
-      styleMask: [.borderless],   // a normal (activating) window, not a floating overlay panel
+      styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
     isFloatingPanel = false
     becomesKeyOnlyIfNeeded = false
     hidesOnDeactivate = false
-    // The canvas owns dragging (pan the board, move cards). Background window-drag would
-    // fight every gesture — drag a card and the whole window would move with it.
-    isMovableByWindowBackground = false
-    isMovable = false
     isReleasedWhenClosed = false
     level = .normal   // a normal Dock-app window, not always-on-top
-    // Summon onto whatever Space the user is on (via the hotkey) rather than yanking them to
-    // another Space; still allowed to appear over a full-screen app.
-    collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
     animationBehavior = .none
+    // Themed at the window level so the adaptive palette resolves app-wide. The default theme is
+    // dark — BonsAI's signature look — with System/Light as the user's opt-in (⚙︎ Appearance).
+    appearance = ComposerPreferences.theme.nsAppearance
 
+    // A real window: the title-bar strip drags it, but the canvas (content view) must not —
+    // it owns background drag for panning. Traffic lights float over a full-size content view.
+    isMovable = true
+    isMovableByWindowBackground = false
+    titleVisibility = .hidden
+    titlebarAppearsTransparent = true
+    title = "BonsAI"
+    collectionBehavior = [.fullScreenPrimary]
+    // Non-opaque with a clear backing: the canvas paints its own surface — solid at the default
+    // 0 transparency, receding over a behind-window blur as the Settings slider comes up.
     isOpaque = false
     backgroundColor = .clear
-    // Let AppKit cast the soft drop shadow that grounds a floating glass panel — it
-    // follows the rounded vibrant content's alpha, which a SwiftUI shadow can't (the
-    // content fills the window, so a SwiftUI shadow has no margin to bleed into).
     hasShadow = true
-
-    // A command panel is dark glass regardless of system appearance — consistent with
-    // the brand-icon color extraction, which already normalizes for a forced-dark panel.
-    appearance = NSAppearance(named: .darkAqua)
   }
 
-  /// Escape dismisses when the panel itself is first responder.
-  override func cancelOperation(_ sender: Any?) {
-    if isAuxiliaryPanel {
-      NotificationCenter.default.post(name: .composerDismissDock, object: nil)
-    } else {
-      (delegate as? PanelController)?.hide()
+  /// Put the traffic lights on the SAME centerline as the floating control row (the Books-style
+  /// strip), instead of AppKit's default top-left corner — that mismatch is what made the top-left
+  /// read as two unrelated rows. Lights start at the shared edge inset, so lights and pills all
+  /// sit on one spacing grid. AppKit resets these frames on resize and key-state changes, so the
+  /// controller re-calls this after each.
+  func layoutWindowChromeButtons() {
+    guard !styleMask.contains(.fullScreen) else { return }
+    let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+    guard let container = standardWindowButton(.closeButton)?.superview else { return }
+    // Center of the floating control row: edge inset + half the pill height.
+    let rowCenterY = WindowChrome.edgeInset + (WindowChrome.controlHeight + WindowChrome.padV * 2) / 2
+    var x = WindowChrome.edgeInset
+    for type in buttons {
+      guard let button = standardWindowButton(type) else { continue }
+      let y = container.isFlipped
+        ? rowCenterY - button.frame.height / 2
+        : container.frame.height - rowCenterY - button.frame.height / 2
+      button.setFrameOrigin(NSPoint(x: x, y: y))
+      x += button.frame.width + 6
     }
+  }
+
+  /// Escape hides the window when it is itself first responder.
+  override func cancelOperation(_ sender: Any?) {
+    (delegate as? PanelController)?.hide()
   }
 
   /// BonsAI has no menu bar, so app-menu shortcuts don't fire. Catch the board's
@@ -60,11 +74,6 @@ final class FloatingPanel: NSPanel {
     let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
     let raw = event.charactersIgnoringModifiers?.lowercased()
     let textIsEditing = firstResponder is NSTextView
-
-    if flags == [.command, .shift], raw == "c" {
-      NotificationCenter.default.post(name: .composerCopy, object: nil)
-      return true
-    }
 
     if !textIsEditing {
       if flags == [.command], raw == "z" {
@@ -135,9 +144,8 @@ final class FloatingPanel: NSPanel {
       NotificationCenter.default.post(name: .composerToggleAgent, object: nil)
       return true
     }
-    // ⌘K summons the command palette. Only the board panel owns it — the auxiliary agent/settings
-    // panels would open it in a window that isn't key, leaving the search field unfocusable.
-    if flags == [.command], raw == "k", !isAuxiliaryPanel {
+    // ⌘K summons the command palette.
+    if flags == [.command], raw == "k" {
       NotificationCenter.default.post(name: .composerTogglePalette, object: nil)
       return true
     }

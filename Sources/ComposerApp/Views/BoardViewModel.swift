@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import AppKit
+import ImageIO
 
 // MARK: - Per-card runtime state
 
@@ -133,9 +134,9 @@ final class BoardViewModel: ObservableObject {
 
   /// Reads the most recent text without creating a runtime/editor bundle for an off-screen card.
   func plainText(for card: CardState) -> String {
-    // A screenshot card has no editable text; it contributes its on-device "understanding" (OCR +
-    // classification) instead, so the image becomes real context for Compile, copy, and the agent.
-    if card.elementKind == .image { return card.imageUnderstanding ?? "" }
+    // An image card contributes its file path so Copy, Compile, and Describe emit a concrete
+    // reference the reader (or a coding agent) can open. An image with no path yet contributes nothing.
+    if card.elementKind == .image { return card.imagePath ?? "" }
     return interactions[card.id]?.plainText ?? card.text
   }
 
@@ -442,7 +443,7 @@ final class BoardViewModel: ObservableObject {
   @discardableResult
   func addImageObject(path: String, at center: CGPoint) -> UUID {
     registerUndo()
-    let size = CardState.shapeSize
+    let size = Self.imageCardSize(forPath: path)
     let card = CardState(
       kind: .image,
       text: "",
@@ -462,6 +463,27 @@ final class BoardViewModel: ObservableObject {
     editingCardID = nil
     scheduleSave()
     return card.id
+  }
+
+  /// A dropped image keeps its own aspect ratio: size the card to the image so its rounded border and
+  /// the selection ring coincide instead of the image overflowing (or letterboxing) a fixed landscape
+  /// default. Reads just the pixel dimensions — no full decode — and fits them into an on-board
+  /// footprint; falls back to the shape default if the file can't be read.
+  private static func imageCardSize(forPath path: String) -> CGSize {
+    guard
+      let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+      let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+      let pixelWidth = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+      let pixelHeight = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
+      pixelWidth > 0, pixelHeight > 0
+    else { return CardState.shapeSize }
+
+    let maxSide: CGFloat = 260
+    let aspect = CGFloat(pixelWidth / pixelHeight)
+    let size = aspect >= 1
+      ? CGSize(width: maxSide, height: maxSide / aspect)
+      : CGSize(width: maxSide * aspect, height: maxSide)
+    return CGSize(width: size.width.rounded(), height: size.height.rounded())
   }
 
   // MARK: Programmatic mutations (canvas API / external agents)

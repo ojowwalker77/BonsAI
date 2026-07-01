@@ -1,7 +1,10 @@
 import SwiftUI
+import AppKit
 
-/// The companion chat window for the canvas. You talk; it edits the board via the canvas MCP while
-/// remaining a distinct, right-docked glass panel.
+/// The agent chat panel floating over the canvas. Modern chat layout: a slim identity header,
+/// the transcript, and one input container that carries the composer plus its context controls
+/// (model, grounding) on a bottom row — like every current chat app, instead of a pill-crowded
+/// header.
 struct AgentDock: View {
   @ObservedObject var agent: CanvasAgent
   /// Sized by the canvas relative to the window so the dock adapts to the display.
@@ -13,9 +16,9 @@ struct AgentDock: View {
   /// always read back the same value (see [[ModelPreferences]]); `CanvasAgent` reads it at send.
   @AppStorage(ModelPreferences.chatModelKey) private var chatModel: ClaudeModel = ModelPreferences.defaultChatModel
 
-  /// Keep the grounding pill compact: at most 8 characters, then an ellipsis.
+  /// Keep the grounding chip compact: at most 12 characters, then an ellipsis.
   static func trimmed(_ name: String) -> String {
-    name.count > 8 ? String(name.prefix(8)) + "\u{2026}" : name
+    name.count > 12 ? String(name.prefix(12)) + "\u{2026}" : name
   }
 
   var body: some View {
@@ -24,72 +27,77 @@ struct AgentDock: View {
       Divider().overlay(Theme.Palette.separator)
       // The message list observes the transcript directly, so a streamed token re-renders only it —
       // not this dock's header/input, and never the canvas (which observes the agent's coarse state).
-      AgentTranscriptView(transcript: agent.transcript, isRunning: agent.isRunning)
-      inputBar
+      AgentTranscriptView(
+        transcript: agent.transcript,
+        isRunning: agent.isRunning,
+        onSuggest: { agent.send($0) }
+      )
+      inputArea
     }
     .frame(width: width)
     .frame(maxHeight: .infinity)
-    // Identical glass to the main window — same frosted treatment, tint, and corner radius — so the
-    // dock reads as a second panel floating beside the card. The panel's own drop shadow grounds it.
-    .background(ComposerPanelBackground(radius: Theme.Radius.panel))
-    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
+    // Liquid Glass floating over the canvas; its own drop shadow grounds it.
+    .dockPanelSurface()
   }
 
-  // MARK: Header
+  // MARK: Header — identity only; context controls live with the composer below.
 
   private var header: some View {
-    HStack(spacing: 10) {
-      AgentEngineIcon(size: 17)
-      Text("Agent").font(.body.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-      if agent.isRunning { ProgressView().controlSize(.small).scaleEffect(0.62) }
+    HStack(spacing: 9) {
+      AgentEngineIcon(size: 16)
+      Text("Agent").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+      if agent.isRunning { ProgressView().controlSize(.small).scaleEffect(0.55) }
       Spacer(minLength: 8)
-      modelControl
-      groundingControl
-      HStack(spacing: 2) {
-        iconButton("arrow.counterclockwise", help: "New conversation") { agent.reset(); draft = "" }
-        iconButton("xmark", help: "Close  ⌘J", action: onClose)
-      }
+      iconButton("arrow.counterclockwise", help: "New conversation") { agent.reset(); draft = "" }
+      iconButton("xmark", help: "Close  ⌘J", action: onClose)
     }
-    .padding(.leading, 16).padding(.trailing, 12).frame(height: 52)
+    .padding(.leading, 14).padding(.trailing, 10).frame(height: 46)
   }
 
-  @ViewBuilder
-  private var groundingControl: some View {
-    if let dir = agent.groundingDirectory {
-      // One capsule, two targets: the name changes the folder; the trailing ✕ un-grounds the
-      // board back to canvas-only. (Before, there was no way to remove a grounding once set.)
-      HStack(spacing: 6) {
-        Button { agent.chooseDirectory() } label: {
-          HStack(spacing: 5) {
-            Image(systemName: "folder.fill").font(.system(size: 10.5))
-            Text(Self.trimmed(dir.lastPathComponent)).font(.caption.weight(.medium)).lineLimit(1).fixedSize()
+  // MARK: Input — one container: composer on top, context chips + send below.
+
+  private var inputArea: some View {
+    VStack(alignment: .leading, spacing: 9) {
+      TextField("Message the agent…", text: $draft, axis: .vertical)
+        .textFieldStyle(.plain)
+        .lineLimit(1...6)
+        .font(.callout)
+        .foregroundStyle(Theme.Palette.body)
+        .focused($inputFocused)
+        // Enter sends; Shift+Enter inserts a newline at the caret — the standard chat convention
+        // (Slack, Discord, Linear). We must handle BOTH keys ourselves. Returning `.ignored` for
+        // Shift+Return (the previous fix) let the event fall through to the field editor, which on a
+        // Return selected all the text instead of breaking the line. So for Shift+Return we insert the
+        // line break directly into the focused field editor — while editing, the key window's first
+        // responder is the NSTextView backing this TextField (the panel relies on the same fact, see
+        // FloatingPanel.performKeyEquivalent). The insert routes through the normal text-change path,
+        // so `draft` updates and the field auto-grows. See https://github.com/ojowwalker77/BonsAI/issues/27.
+        .onKeyPress(.return, phases: .down) { keyPress in
+          guard keyPress.modifiers.contains(.shift) else { submit(); return .handled }
+          if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
+            editor.insertNewlineIgnoringFieldEditor(nil)
+          } else {
+            draft.append("\n")   // fallback: no field editor in reach — append rather than drop the break
           }
-          .foregroundStyle(Theme.Palette.body)
-          .contentShape(Rectangle())
+          return .handled
         }
-        .buttonStyle(.plain)
-        .help("Grounded in \(dir.path) — click to change")
 
-        Button { agent.setGroundingDirectory(nil) } label: {
-          Image(systemName: "xmark")
-            .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(Theme.Palette.title)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Remove grounding — back to canvas-only")
+      HStack(spacing: 6) {
+        modelChip
+        groundingChip
+        Spacer(minLength: 8)
+        sendButton
       }
-      .padding(.horizontal, 9).frame(height: 24)
-      .background(Capsule().fill(Color.white.opacity(0.08)))
-      .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
-    } else {
-      iconButton("folder.badge.plus", help: "Ground the agent in a folder it can read") { agent.chooseDirectory() }
     }
+    .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
+    .background(RoundedRectangle(cornerRadius: WindowChrome.radius, style: .continuous).fill(Theme.Palette.rowFill))
+    .overlay(RoundedRectangle(cornerRadius: WindowChrome.radius, style: .continuous).strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
+    .padding(12)
+    .onAppear { inputFocused = true }
   }
 
-  /// A quiet capsule menu mirroring the grounding pill: tap to switch which Claude model the agent
-  /// runs on. The checkmark menu makes the current pick obvious; the label stays compact.
-  private var modelControl: some View {
+  /// Quiet model selector chip: the current model + a chevron, checkmarked menu on click.
+  private var modelChip: some View {
     Menu {
       Picker("Model", selection: $chatModel) {
         ForEach(ClaudeModel.allCases) { model in
@@ -97,15 +105,13 @@ struct AgentDock: View {
         }
       }
     } label: {
-      HStack(spacing: 5) {
-        Image(systemName: "cpu").font(.system(size: 10.5))
+      HStack(spacing: 4) {
         Text(chatModel.title).font(.caption.weight(.medium)).lineLimit(1).fixedSize()
-        Image(systemName: "chevron.up.chevron.down").font(.system(size: 7, weight: .semibold))
+        Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
       }
-      .foregroundStyle(Theme.Palette.body)
-      .padding(.horizontal, 9).frame(height: 24)
-      .background(Capsule().fill(Color.white.opacity(0.08)))
-      .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+      .foregroundStyle(Theme.Palette.menuDesc)
+      .padding(.horizontal, 9).frame(height: 22)
+      .background(Capsule().fill(Theme.Palette.keycapFill))
       .contentShape(Capsule())
     }
     .menuStyle(.button)
@@ -115,43 +121,79 @@ struct AgentDock: View {
     .help("Model for the agent chat — mirrors Settings ▸ Runtime")
   }
 
-  // MARK: Input
-
-  private var inputBar: some View {
-    HStack(alignment: .bottom, spacing: 8) {
-      TextField("Message the agent…", text: $draft, axis: .vertical)
-        .textFieldStyle(.plain)
-        .lineLimit(1...6)
-        .font(.callout)
-        .foregroundStyle(Theme.Palette.body)
-        .focused($inputFocused)
-        // Enter sends; Shift+Enter inserts a newline — the standard chat convention (Slack, Discord,
-        // Linear). `.onSubmit` fired on every Return, including Shift+Return, so a shifted Return sent
-        // instead of breaking the line. We intercept the key instead: plain Return we consume and
-        // submit; for Shift+Return we return `.ignored` so the field editor inserts the break at the
-        // caret. See https://github.com/ojowwalker77/BonsAI/issues/27.
-        .onKeyPress(.return, phases: .down) { keyPress in
-          if keyPress.modifiers.contains(.shift) { return .ignored }
-          submit()
-          return .handled
+  /// Grounding chip: folder name (click to change) + ✕ to un-ground; a quiet add-chip when unset.
+  @ViewBuilder
+  private var groundingChip: some View {
+    if let dir = agent.groundingDirectory {
+      HStack(spacing: 6) {
+        Button { agent.chooseDirectory() } label: {
+          HStack(spacing: 4) {
+            Image(systemName: "folder.fill").font(.system(size: 9.5))
+            Text(Self.trimmed(dir.lastPathComponent)).font(.caption.weight(.medium)).lineLimit(1).fixedSize()
+          }
+          .foregroundStyle(Theme.Palette.menuDesc)
+          .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .help("Grounded in \(dir.path) — click to change")
+
+        Button { agent.setGroundingDirectory(nil) } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(Theme.Palette.title)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Remove grounding — back to canvas-only")
+      }
+      .padding(.horizontal, 9).frame(height: 22)
+      .background(Capsule().fill(Theme.Palette.keycapFill))
+    } else {
+      Button { agent.chooseDirectory() } label: {
+        HStack(spacing: 4) {
+          Image(systemName: "folder.badge.plus").font(.system(size: 9.5))
+          Text("Ground").font(.caption.weight(.medium))
+        }
+        .foregroundStyle(Theme.Palette.menuDesc)
+        .padding(.horizontal, 9).frame(height: 22)
+        .background(Capsule().fill(Theme.Palette.keycapFill))
+        .contentShape(Capsule())
+      }
+      .buttonStyle(.plain)
+      .help("Ground the agent in a folder it can read")
+    }
+  }
+
+  /// Modern send affordance: an accent-filled circle that reads as THE action; morphs into a
+  /// stop control while the agent runs.
+  private var sendButton: some View {
+    Group {
       if agent.isRunning {
         Button(action: agent.stop) {
-          Image(systemName: "stop.circle.fill").font(.title3).foregroundStyle(Theme.Palette.title)
-        }.buttonStyle(.plain).help("Stop")
+          Image(systemName: "stop.fill")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(Theme.Palette.body)
+            .frame(width: 26, height: 26)
+            .background(Circle().fill(Theme.Palette.keycapFill))
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("Stop")
       } else {
         Button(action: submit) {
-          Image(systemName: "arrow.up.circle.fill")
-            .font(.title3)
-            .foregroundStyle(canSend ? Color.accentColor : Theme.Palette.title.opacity(0.6))
-        }.buttonStyle(.plain).disabled(!canSend)
+          Image(systemName: "arrow.up")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(canSend ? Color.white : Theme.Palette.chromeGlyphDim)
+            .frame(width: 26, height: 26)
+            .background(Circle().fill(canSend ? Theme.Palette.accent : Theme.Palette.keycapFill))
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSend)
+        .help("Send  ·  ⇧↩ for a new line")
       }
     }
-    .padding(.leading, 14).padding(.trailing, 10).padding(.vertical, 9)
-    .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.white.opacity(0.06)))
-    .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(Color.white.opacity(0.09), lineWidth: 1))
-    .padding(12)
-    .onAppear { inputFocused = true }
+    .animation(.easeOut(duration: 0.12), value: canSend)
   }
 
   private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -180,6 +222,8 @@ struct AgentDock: View {
 private struct AgentTranscriptView: View {
   @ObservedObject var transcript: AgentTranscript
   let isRunning: Bool
+  /// Empty-state suggestion chips send their prompt straight to the agent.
+  var onSuggest: (String) -> Void
 
   var body: some View {
     ScrollViewReader { proxy in
@@ -206,12 +250,19 @@ private struct AgentTranscriptView: View {
   }
 
   private var emptyState: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text("Think out loud.").font(.body.weight(.medium)).foregroundStyle(Theme.Palette.body)
-      Text("The agent reads your board and edits it as you talk — adding, sharpening, and connecting cards. Try “read my board and tell me what's missing.”")
-        .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
+    VStack(alignment: .leading, spacing: 14) {
+      VStack(alignment: .leading, spacing: 5) {
+        Text("Think out loud").font(.body.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+        Text("The agent reads your board and edits it as you talk — adding, sharpening, and connecting cards.")
+          .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      VStack(alignment: .leading, spacing: 6) {
+        SuggestionChip(text: "Read my board and tell me what's missing", onSuggest: onSuggest)
+        SuggestionChip(text: "Tidy the board and group related cards", onSuggest: onSuggest)
+        SuggestionChip(text: "Turn my notes into a build plan", onSuggest: onSuggest)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.vertical, 8)
@@ -224,13 +275,13 @@ private struct AgentTranscriptView: View {
       Text(message.text)
         .font(.callout).foregroundStyle(Theme.Palette.body)
         .padding(.horizontal, 11).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.accentColor.opacity(0.20)))
+        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Theme.Palette.accent.opacity(0.20)))
         .frame(maxWidth: .infinity, alignment: .trailing)
     case .assistant:
       Text(Self.markdown(message.text))
         .font(.callout).foregroundStyle(Theme.Palette.body).textSelection(.enabled)
         .lineSpacing(2.5)
-        .tint(Color.accentColor)
+        .tint(Theme.Palette.accent)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
     case .tool:
@@ -243,7 +294,7 @@ private struct AgentTranscriptView: View {
       }
       .foregroundStyle(Theme.Palette.title)
       .padding(.horizontal, 9).padding(.vertical, 5)
-      .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.045)))
+      .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.Palette.rowFill))
       .frame(maxWidth: .infinity, alignment: .leading)
       .help(message.text)
     case .error:
@@ -266,5 +317,30 @@ private struct AgentTranscriptView: View {
     (try? AttributedString(
       markdown: text,
       options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+  }
+}
+
+/// One tappable starter prompt on the empty state.
+private struct SuggestionChip: View {
+  let text: String
+  var onSuggest: (String) -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button { Haptics.tap(); onSuggest(text) } label: {
+      HStack(spacing: 7) {
+        Image(systemName: "arrow.up.right")
+          .font(.system(size: 9, weight: .semibold))
+          .foregroundStyle(Theme.Palette.accent)
+        Text(text).font(.caption).foregroundStyle(Theme.Palette.body).lineLimit(1)
+      }
+      .padding(.horizontal, 10).frame(height: 28)
+      .background(Capsule().fill(hovering ? Theme.Palette.buttonHover : Theme.Palette.rowFill))
+      .overlay(Capsule().strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+    .animation(.easeOut(duration: 0.1), value: hovering)
   }
 }

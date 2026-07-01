@@ -58,23 +58,41 @@ func dominantColor(of image: NSImage) -> NSColor {
   let raw = NSColor(srgbRed: CGFloat(sumR / weightTotal),
                     green: CGFloat(sumG / weightTotal),
                     blue: CGFloat(sumB / weightTotal), alpha: 1.0)
-  return normalizeForDarkPanel(raw)
+  return normalizeForCanvas(raw)
 }
 
-private func legibleNeutral() -> NSColor { NSColor(white: 0.86, alpha: 1.0) }
+/// Grayscale brand marks (the Octocat, Notion's N) get the flavor's ink instead of a washed
+/// average. A dynamic color so it re-resolves at draw time after a theme switch.
+private func legibleNeutral() -> NSColor {
+  NSColor(name: nil) { _ in Theme.flavor.text }
+}
 
-/// Raise a too-dark color while preserving hue; clamp legibility on the dark panel.
-private func normalizeForDarkPanel(_ color: NSColor) -> NSColor {
+/// Clamp a brand color for legibility on the CURRENT canvas, preserving hue: raise too-dark
+/// colors on the dark board, deepen too-bright ones on paper. A dynamic color, so chips stay
+/// legible when the theme flips without re-extracting anything.
+private func normalizeForCanvas(_ color: NSColor) -> NSColor {
   guard let rgb = color.usingColorSpace(.sRGB) else { return legibleNeutral() }
   var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
   rgb.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
   if s < 0.12 { return legibleNeutral() }
   let lum = 0.299 * rgb.redComponent + 0.587 * rgb.greenComponent + 0.114 * rgb.blueComponent
-  if lum < 0.55 {
-    b = min(1.0, max(b, 0.80))
-    s = min(s, 0.85)
+  return NSColor(name: nil) { _ in
+    if Theme.flavor.isDark {
+      var db = b, ds = s
+      if lum < 0.55 {
+        db = min(1.0, max(b, 0.80))
+        ds = min(s, 0.85)
+      }
+      return NSColor(hue: h, saturation: ds, brightness: db, alpha: 1.0)
+    } else {
+      var db = b, ds = s
+      if lum > 0.60 {
+        db = min(b, 0.58)
+        ds = max(s, 0.55)
+      }
+      return NSColor(hue: h, saturation: ds, brightness: db, alpha: 1.0)
+    }
   }
-  return NSColor(hue: h, saturation: s, brightness: b, alpha: 1.0)
 }
 
 // MARK: - Style cache (favicon fetch + cache + preload)
@@ -146,7 +164,7 @@ final class MentionStyleCache {
         loadFavicon(id: item.id, host: host)
       } else {
         images[item.id] = symbolImage(item.symbol)
-        colors[item.id] = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? legibleNeutral()
+        colors[item.id] = NSColor(name: nil) { _ in Theme.flavor.info }
       }
     }
     broadcast()
@@ -198,7 +216,7 @@ final class MentionStyleCache {
       .withSymbolConfiguration(config) ?? NSImage(size: NSSize(width: 14, height: 14))
     let base = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
       .withSymbolConfiguration(config) ?? fallback
-    let tint = NSColor.controlAccentColor
+    let tint = Theme.Palette.nsAccent
     return NSImage(size: base.size, flipped: false) { rect in
       base.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
       tint.set()

@@ -1,26 +1,48 @@
-# Composer implementation guardrails
+# BonsAI implementation guardrails
 
-## CRITICAL: preserve the board + dock composition
+## Architecture: one standard window, floating chrome
 
-**BE SUPER AWARE: DO NOT CHANGE THESE LINES OR FUCK UP THIS COMPOSITION BY “CLEANING UP” THE LAYOUT.**
+BonsAI is a single standard macOS window (`FloatingPanel`, titled/resizable/full-size content)
+whose canvas fills it edge to edge. ALL chrome floats over the canvas as Liquid Glass pills:
 
-The Agent and Settings are deliberately separate AppKit panels, coordinated with the board window.
-They must not be folded into `ComposerCanvas`, rendered as an overlay, or made into an `HStack`
-sidebar.
+- Top-left: `+` pill and the hover board picker (after the repositioned traffic lights).
+- Top-right: AI actions (Describe Board · Copy Board · agent toggle).
+- Bottom-center: ONE command bar — zoom · the eight tools · grounding folder · Settings.
+- Agent and Settings are SwiftUI glass overlays inside the canvas (`dockOverlay`), NOT separate
+  windows. There are no auxiliary panels.
 
-- `PanelController.positionWorkspace()` owns the two-window geometry.
-- The dock's `y: y` and `height: workspaceHeight - cardTopInset` are intentional: they align the
-  dock with the visible board card, which starts below the toolbar, while keeping their bottoms
-  perfectly level.
-- `Theme.Size.railGutter(in:) == 6%` is a deliberately tight gap (tightened from 9% on request) so
-  the rail reads as attached to the board, not marooned at the screen edge. It's the floor before
-  the fixed-width rail starts crowding the card — keep it screen-relative; don't drop it further or
-  the rail will overlap the canvas on narrow/laptop windows.
-- The top toolbar centers on `WorkspaceLayout.toolbarCenterX` from `PanelController`, which is the
-  full board-plus-Agent/Settings composition. Do not center it only within the reduced board card.
-- Keep dock width, gap, rail gutter, and toolbar gutter screen-relative. No fixed width/minimum
-  should be introduced in this outer layout.
+The old floating-panel mode (chromeless glass panel + sibling dock windows) was removed
+deliberately in July 2026. Do not reintroduce it.
 
-If this area is edited, run `./script/build_and_run.sh --verify` and visually open both Settings
-and Agent. Confirm: separate windows, a shrunken board, aligned top/bottom edges, and a tight
-rail-to-canvas gap (rail close to the card, not crowding or overlapping it).
+## CRITICAL: the design system
+
+- **`WindowChrome` (Theme.swift) is law** for floating controls: controlHeight 34, padH 6, padV 5,
+  radius 14, edgeInset 16, trafficLightInset 82, iconFont (17 medium), labelFont (13 medium),
+  labelPadH 10, itemSpacing 4. No inline sizes, paddings, fonts, or corner radii in chrome views.
+- **Every pill/bar is built with `.chromePill()`** (the one wrapper: padding + glass) around
+  `SidebarButton` / `SidebarAgentButton` / `CanvasToolbar` controls. Never hand-assemble a pill
+  with raw `.padding(...)` + `.composerPopupSurface()` — that is how sizes drifted apart before.
+- **Traffic lights are repositioned** onto the control row's centerline
+  (`FloatingPanel.layoutWindowChromeButtons`), re-applied by `PanelController` on
+  resize/move/key-state changes. Don't remove those delegate hooks — AppKit resets the buttons.
+- **Colors are ThemeFlavors** (`Support/ThemeFlavor.swift`): four named themes — Bonsai Dark,
+  Bonsai Light, Catppuccin Mocha, Catppuccin Latte (palette data in `Support/Catppuccin.swift`).
+  Every `Theme.Palette` token maps a semantic role onto the active flavor's slots (text/subtext/
+  overlay/surface/base); views consume ONLY tokens. Never hard-code a hex or
+  `Color.white`/`Color.black` in a view — every literal has broken one theme. The accent is
+  `Theme.Palette.accent`, never `Color.accentColor`. Theme switching REBUILDS the canvas
+  (PanelController.applyTheme) because tokens are plain flavor lookups; the agent is a singleton
+  (`CanvasAgent.shared`) so its conversation survives. Settings shows flavor-painted preview
+  cards (`ThemePreviewCard`) — new themes are a `ThemeFlavor` + enum case, nothing else.
+- **The canvas is solid by default** (`windowCanvas` = the flavor's `base`) painted over a
+  behind-window blur; the Settings ▸ Appearance ▸ Canvas slider (`canvasTransparencyKey`,
+  default 0) recedes it toward desktop glass. The window itself is non-opaque with a clear
+  backing so the blur can sample — don't flip it back to opaque.
+- **Glass is `floatingGlass` / `composerPopupSurface` / `dockPanelSurface`** — one recipe. No
+  custom frosts, no white-fill "frosted" variants (tried, rejected as generic gray).
+- Theming is `ComposerTheme` (System/Light/Dark) applied as the window's `NSAppearance`;
+  `composerThemeChanged` re-applies it live.
+
+If this area is edited, run `./script/build_and_run.sh --verify` and visually confirm: solid
+canvas, one bottom command bar, aligned top pills on the traffic-light centerline, and both
+themes clean (no black ink in light mode).

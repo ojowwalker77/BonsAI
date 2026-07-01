@@ -1,18 +1,52 @@
 import AppKit
 import Foundation
 
+/// The app-wide theme: a named flavor (palette + appearance class). Switching rebuilds the
+/// canvas so every plain-color token re-resolves against the new flavor.
+enum ComposerTheme: String, CaseIterable, Identifiable {
+  case bonsaiDark
+  case bonsaiLight
+  case catppuccinMocha
+  case catppuccinLatte
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .bonsaiDark: "Bonsai Dark"
+    case .bonsaiLight: "Bonsai Light"
+    case .catppuccinMocha: "Catppuccin Mocha"
+    case .catppuccinLatte: "Catppuccin Latte"
+    }
+  }
+
+  var flavor: ThemeFlavor {
+    switch self {
+    case .bonsaiDark: .bonsaiDark
+    case .bonsaiLight: .bonsaiLight
+    case .catppuccinMocha: .catppuccinMocha
+    case .catppuccinLatte: .catppuccinLatte
+    }
+  }
+
+  var nsAppearance: NSAppearance? {
+    NSAppearance(named: flavor.isDark ? .darkAqua : .aqua)
+  }
+}
+
 /// User-tunable appearance controls shared by SwiftUI surfaces and AppKit text views.
 enum ComposerPreferences {
   static let editorFontSizeKey = "composer.editor.fontPointSize"
-  static let panelTransparencyKey = "composer.panel.backgroundTransparency"
-  static let resolveShellAtCopyKey = "composer.copy.resolveShellCommands"
+  /// App-wide theme. Defaults to Bonsai Dark — the signature look.
+  static let themeKey = "composer.appearance.theme"
+  /// Canvas background transparency (0 = solid, default). Sliding it up lets the desktop blur
+  /// through the board surface.
+  static let canvasTransparencyKey = "composer.canvas.backgroundTransparency"
+  static let maxCanvasTransparency = 0.72
 
   static let minEditorFontSize: CGFloat = 11
   static let maxEditorFontSize: CGFloat = 28
   static let fontSizeStep: CGFloat = 1
-
-  static let defaultPanelTransparency = 0.18
-  static let maxPanelTransparency = 0.72
 
   private static var defaultEditorFontSize: CGFloat {
     NSFont.preferredFont(forTextStyle: .body).pointSize + 2
@@ -27,10 +61,9 @@ enum ComposerPreferences {
     NSFont.systemFont(ofSize: editorFontSize)
   }
 
-  /// Whether `{{x = cmd}}` variables and `[sh: cmd]` nodes run at copy time. Off by default: running
-  /// shell pulled from board text is opt-in, and even when on, each copy confirms what will execute.
-  static var resolveShellAtCopy: Bool {
-    UserDefaults.standard.bool(forKey: resolveShellAtCopyKey)
+  /// The app-wide theme (see `ComposerTheme`). Defaults to Bonsai Dark.
+  static var theme: ComposerTheme {
+    ComposerTheme(rawValue: UserDefaults.standard.string(forKey: themeKey) ?? "") ?? .bonsaiDark
   }
 
   @discardableResult
@@ -66,8 +99,8 @@ enum ComposerPreferences {
     return false
   }
 
-  static func clampedPanelTransparency(_ value: Double) -> Double {
-    min(max(value, 0), maxPanelTransparency)
+  static func clampedCanvasTransparency(_ value: Double) -> Double {
+    min(max(value, 0), maxCanvasTransparency)
   }
 
   private static func clamp(_ value: CGFloat, _ lower: CGFloat, _ upper: CGFloat) -> CGFloat {

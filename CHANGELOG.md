@@ -11,12 +11,49 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-06-30
+
 ### Added
+- **Agent skills for any coding agent.** BonsAI's canvas API (`127.0.0.1:7337`) now ships a portable
+  skill doc, not just a Claude Code skill. On first launch, if Claude Code, Codex CLI, and/or Cursor
+  are detected on the Mac, BonsAI offers to install the matching doc into each one's own config
+  location, so any of them can read and write the board over HTTP. Reinstall or add more anytime
+  from **Settings ▸ Connectors ▸ Agent Skills**.
 - **Model pickers for the agent chat and board description.** Choose which Claude model each runs on
   (Opus / Sonnet / Haiku). The chat picker lives in the Agent panel header and mirrors a matching
   control in **Settings ▸ Runtime ▸ Models**; describing the board has its own picker in the same
   place. Chat defaults to **Opus**, describe defaults to **Sonnet**. The choice is passed to
-  `claude --model`; Refine and Compile stay on the CLI default.
+  `claude --model`; Refine and Compile stay on the CLI default. The Describe picker disables itself
+  (with a note) when Codex — not Claude — is the active engine, since Codex ignores the Claude model.
+- **Describe board now preserves image references.** Image cards keep their absolute file paths in
+  the board graph, so the copied description can point at the exact picture without granting the
+  headless prompt broad local-file read access.
+
+### Fixed
+- **Copying a board no longer drops image cards.** An image card now contributes its file path to
+  the copied and compiled prompt, so a coding agent can open it — and a board that holds only an
+  image no longer copies as "Nothing to copy yet".
+- **Board edits made right before quit are no longer lost.** The board autosaves on a ~400ms
+  debounce, so an edit landing just before the app closed — including a `delete`/`add_text` op from
+  an external agent over the canvas API — could be dropped before the pending save fired. BonsAI now
+  flushes the pending save on termination, and a bare `SIGTERM` (e.g. `pkill` from the dev-loop
+  relaunch script) is rerouted through the normal quit path so the flush still runs.
+- **Image selection ring no longer double-borders.** An image card draws its own rounded border, so
+  the accent selection ring — which sat a few pixels outside — read as a second, gapped border. The
+  ring now hugs the image's own edge as a single clean outline. Other elements are unchanged.
+
+## [1.2.1] - 2026-06-30
+
+### Added
+- **Smart paste.** Pasting a GitHub issue/PR URL, an existing file path (`/…`, `~/…`, or `file://…`), or a library name like `next.js` / `vercel/next.js` now becomes the matching connector chip (`@github`, `@finder`, `@context7`) instead of raw text.
+- **Quick capture.** A menu-bar leaf opens a one-line capture field (↩ sends to the current board). macOS **Services → Send to BonsAI** and `bonsai://capture?text=…` use the same path. The loopback API adds `POST /capture`.
+- **Codex engine.** Refine and Compile can run through `codex exec` (read-only sandbox) when Codex CLI is installed — toggle in Settings ▸ Runtime.
+- **Canvas API docs + integrations.** [docs/canvas-api.md](docs/canvas-api.md) formalizes the `127.0.0.1:7337` API; [integrations/raycast](integrations/raycast/README.md) and [integrations/alfred](integrations/alfred/README.md) ship starter scripts.
+- **Agent tool permission prompts.** Agent-run MCP tool calls now ask before running, remember
+  allowed tools, and include a Settings control to reset remembered permissions.
+
+### Fixed
+- **Shift+Enter in the Agent chat inserts a newline instead of sending.** Shift+Enter breaks the line at the caret. ([#27](https://github.com/ojowwalker77/BonsAI/issues/27))
 
 ## [1.2.0] - 2026-06-30
 

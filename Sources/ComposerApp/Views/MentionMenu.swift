@@ -40,7 +40,7 @@ struct MentionMenu: View {
     HStack(spacing: 9) {
       Image(systemName: item.symbol)
         .font(.body)
-        .foregroundStyle(selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Theme.Palette.menuDesc))
+        .foregroundStyle(selected ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.menuDesc))
         .frame(width: 16)
       Text(item.id)
         .font(Theme.Typography.menuName)

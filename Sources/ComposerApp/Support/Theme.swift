@@ -4,15 +4,19 @@ import AppKit
 // MARK: - Design tokens
 
 /// One source of truth for spatial, material, color, and motion tokens.
-/// Colors are adaptive so the panel and popovers follow the system appearance.
+/// Colors resolve through the selected `ThemeFlavor` — no view ever hard-codes a hex; tokens map
+/// semantic roles onto flavor slots. A theme switch rebuilds the canvas (PanelController), so
+/// plain colors are safe here.
 enum Theme {
-  static var nsBodyText: NSColor {
-    Adaptive.ns(light: Adaptive.white(0.04, 0.84), dark: Adaptive.white(1.00, 0.88))
-  }
+  /// The active flavor (Settings ▸ Appearance ▸ Theme).
+  static var flavor: ThemeFlavor { ComposerPreferences.theme.flavor }
 
-  static var nsPlaceholderText: NSColor {
-    Adaptive.ns(light: Adaptive.white(0.02, 0.38), dark: Adaptive.white(1.00, 0.48))
-  }
+  static var nsBodyText: NSColor { flavor.text }
+
+  static var nsPlaceholderText: NSColor { flavor.overlay1 }
+
+  /// The solid canvas — the flavor's `base`.
+  static var nsWindowCanvas: NSColor { flavor.base }
 
   enum Radius {
     static let panel: CGFloat = 22
@@ -28,34 +32,6 @@ enum Theme {
   }
 
   enum Size {
-    /// The whole panel (card + the rail/toolbar gutters) fills this fraction of the screen's
-    /// visible frame, centered — Composer is a near-fullscreen canvas. The card auto-derives
-    /// from the window size minus the gutters in the canvas layout.
-    static let screenFraction: CGFloat = 0.95
-    /// Main-surface measurements are proportions of the current viewport. They deliberately live
-    /// here instead of as point constants: opening the dock must redistribute the *actual* window
-    /// width, whether Composer is on a compact laptop display or a wide external screen.
-    static func railGutter(in windowWidth: CGFloat) -> CGFloat {
-      // This owns the rail itself plus a small gap before the board card begins. Kept tight
-      // (6%) so the rail reads as attached to the board rather than marooned at the screen edge;
-      // it's the floor before the fixed-width rail starts crowding the card.
-      (max(windowWidth, 0) * 0.060).rounded()
-    }
-    static func railInset(in windowWidth: CGFloat) -> CGFloat {
-      (max(windowWidth, 0) * 0.014).rounded()
-    }
-    static func toolbarGutter(in windowHeight: CGFloat) -> CGFloat {
-      (max(windowHeight, 0) * 0.060).rounded()
-    }
-    static func toolbarInset(in windowHeight: CGFloat) -> CGFloat {
-      (max(windowHeight, 0) * 0.012).rounded()
-    }
-    static func dockMargin(in windowWidth: CGFloat) -> CGFloat {
-      (max(windowWidth, 0) * 0.009).rounded()
-    }
-    static func dockWidth(in windowWidth: CGFloat) -> CGFloat {
-      (max(windowWidth, 0) * 0.24).rounded()
-    }
     static let actionBarHeight: CGFloat = 34
     static let actionBarItemHeight: CGFloat = 28
     static let menuWidth: CGFloat = 320
@@ -80,48 +56,71 @@ enum Theme {
     static let actionIcon = SwiftUI.Font.body.weight(.medium)
   }
 
-  /// All foreground and surface colors are adaptive. Avoid hard-coded white/black in views.
+  /// Semantic roles mapped onto the active flavor's slots. Views consume ONLY these tokens.
   enum Palette {
-    static var body: Color { Color(nsColor: Theme.nsBodyText) }
-    static var title: Color { Adaptive.color(light: Adaptive.white(0.02, 0.42), dark: Adaptive.white(1.00, 0.36)) }
-    static var count: Color { Adaptive.color(light: Adaptive.white(0.02, 0.30), dark: Adaptive.white(1.00, 0.22)) }
-    static var placeholder: Color { Color(nsColor: Theme.nsPlaceholderText) }
-    static var menuDesc: Color { Adaptive.color(light: Adaptive.white(0.02, 0.58), dark: Adaptive.white(1.00, 0.58)) }
-
-    static var accentFill: Color { Color.accentColor.opacity(0.20) }
-    static var rowFill: Color { Adaptive.color(light: Adaptive.white(0.00, 0.045), dark: Adaptive.white(1.00, 0.055)) }
-    static var selectedRowFill: Color { Color.accentColor.opacity(0.24) }
-
-    static var panelBase: Color {
-      Adaptive.color(
-        light: Adaptive.srgb(0.965, 0.960, 0.945),
-        dark: Adaptive.srgb(0.070, 0.078, 0.086)
-      )
+    private static func c(_ ns: NSColor, _ alpha: CGFloat = 1) -> Color {
+      Color(nsColor: alpha == 1 ? ns : ns.withAlphaComponent(alpha))
     }
-    static var panelScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.50), dark: Adaptive.white(0.00, 0.66)) }
-    static var panelBottomShade: Color { Adaptive.color(light: Adaptive.white(0.00, 0.035), dark: Adaptive.white(0.00, 0.10)) }
-    static var panelTopSheen: Color { Adaptive.color(light: Adaptive.white(1.00, 0.46), dark: Adaptive.white(1.00, 0.04)) }
-    static var panelHairline: Color { Adaptive.color(light: Adaptive.white(0.00, 0.10), dark: Adaptive.white(1.00, 0.08)) }
-    static var panelInnerLine: Color { Adaptive.color(light: Adaptive.white(1.00, 0.40), dark: Adaptive.white(1.00, 0.06)) }
 
-    static var popupScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.56), dark: Adaptive.white(0.00, 0.24)) }
-    static var popupSheen: Color { Adaptive.color(light: Adaptive.white(1.00, 0.38), dark: Adaptive.white(1.00, 0.045)) }
-    static var popupHairline: Color { Adaptive.color(light: Adaptive.white(0.00, 0.10), dark: Adaptive.white(1.00, 0.08)) }
+    /// The one accent (mauve on Catppuccin, the system accent on Bonsai themes).
+    static var accent: Color { c(Theme.flavor.accent) }
+    static var nsAccent: NSColor { Theme.flavor.accent }
 
-    /// Uniform legibility tint + edge for the unified Liquid Glass surface (forced-dark panel).
-    static var raisedTint: Color { Color.black.opacity(0.16) }
-    static var raisedRim: Color { Color.white.opacity(0.07) }
+    static var body: Color { c(Theme.flavor.text) }
+    static var title: Color { c(Theme.flavor.overlay1) }
+    static var count: Color { c(Theme.flavor.overlay0) }
+    static var placeholder: Color { c(Theme.flavor.overlay1) }
+    static var menuDesc: Color { c(Theme.flavor.subtext0) }
 
-    static var barScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.60), dark: Adaptive.white(0.00, 0.42)) }
-    static var barHairline: Color { Adaptive.color(light: Adaptive.white(0.00, 0.10), dark: Adaptive.white(1.00, 0.08)) }
-    static var barSheen: Color { Adaptive.color(light: Adaptive.white(1.00, 0.36), dark: Adaptive.white(1.00, 0.055)) }
+    static var accentFill: Color { c(Theme.flavor.accent, 0.20) }
+    static var rowFill: Color { c(Theme.flavor.surface0, 0.45) }
+    static var selectedRowFill: Color { c(Theme.flavor.accent, 0.24) }
 
-    static var separator: Color { Adaptive.color(light: Adaptive.white(0.00, 0.085), dark: Adaptive.white(1.00, 0.07)) }
-    static var keycapFill: Color { Adaptive.color(light: Adaptive.white(0.00, 0.060), dark: Adaptive.white(1.00, 0.08)) }
-    static var segmentedFill: Color { Adaptive.color(light: Adaptive.white(0.00, 0.045), dark: Adaptive.white(1.00, 0.05)) }
-    static var tagFill: Color { Adaptive.color(light: Adaptive.white(0.00, 0.060), dark: Adaptive.white(1.00, 0.075)) }
-    static var buttonHover: Color { Adaptive.color(light: Adaptive.white(0.00, 0.070), dark: Adaptive.white(1.00, 0.12)) }
-    static var toastScrim: Color { Adaptive.color(light: Adaptive.white(1.00, 0.42), dark: Adaptive.white(0.00, 0.35)) }
+    static var panelHairline: Color { c(Theme.flavor.overlay0, 0.35) }
+    static var panelInnerLine: Color { c(Theme.flavor.surface2, 0.30) }
+
+    static var popupScrim: Color { c(Theme.flavor.base, 0.60) }
+
+    /// Uniform legibility tint under the Liquid Glass surface — the flavor's own base, so pills
+    /// read as raised canvas material in every theme.
+    static var raisedTint: Color { c(Theme.flavor.base, 0.45) }
+    static var raisedRim: Color { c(Theme.flavor.overlay0, 0.25) }
+
+    static var windowCanvas: Color { c(Theme.flavor.base) }
+
+    /// Chrome tokens for the floating pills, bars, and their controls.
+    static var chromeGlyph: Color { c(Theme.flavor.subtext1) }
+    static var chromeGlyphHover: Color { c(Theme.flavor.text) }
+    static var chromeGlyphDim: Color { c(Theme.flavor.overlay0) }
+    static var chromeBadge: Color { c(Theme.flavor.overlay1) }
+    static var chromeText: Color { c(Theme.flavor.subtext1) }
+    static var hoverWash: Color { c(Theme.flavor.surface1, 0.55) }
+    static var chromeDivider: Color { c(Theme.flavor.surface2, 0.80) }
+    /// Ink for freehand strokes drawn straight on the board.
+    static var inkStroke: Color { c(Theme.flavor.text, 0.92) }
+    /// Drawn board elements (shapes, lines, arrows).
+    static var elementStroke: Color { c(Theme.flavor.text, 0.85) }
+    /// Shape interiors: unfilled on light themes (outline-only, like a whiteboard); a soft surface
+    /// fill on dark ones, where it grounds the shape against the canvas. The light value is
+    /// near-zero alpha rather than `.clear` so the interior still hit-tests for select.
+    static var elementFill: Color {
+      Theme.flavor.isDark ? c(Theme.flavor.surface0, 0.55) : c(Theme.flavor.text, 0.001)
+    }
+    /// Elements cast a grounding shadow only on dark themes — ink on paper casts none.
+    static var elementShadow: Color {
+      Theme.flavor.isDark ? c(Theme.flavor.crust, 0.55) : Color.clear
+    }
+    /// The shape-label chip: solid fills (a translucent fill lets the chip's own shadow bleed
+    /// through and muddy it — the "gray smear" bug).
+    static var labelChipFill: Color {
+      Theme.flavor.isDark ? c(Theme.flavor.surface0) : c(Theme.flavor.mantle)
+    }
+
+    static var separator: Color { c(Theme.flavor.surface2, 0.60) }
+    static var keycapFill: Color { c(Theme.flavor.surface0, 0.70) }
+    static var segmentedFill: Color { c(Theme.flavor.surface0, 0.55) }
+    static var tagFill: Color { c(Theme.flavor.surface0, 0.60) }
+    static var buttonHover: Color { c(Theme.flavor.surface1, 0.80) }
   }
 
   enum Shadow {
@@ -140,6 +139,46 @@ enum Theme {
     static let accessory = Animation.spring(response: 0.28, dampingFraction: 0.82)
     static let dismissDuration = 0.16
     static let selectionDebounce: TimeInterval = 0.10
+  }
+}
+
+// MARK: - Standard-window chrome metrics
+
+/// One design system for the standard-window floating controls — the board pill, the tool bar, the
+/// action pill, and the rail all share this control height, inner padding, and corner radius so they
+/// read as siblings instead of four bespoke shapes.
+enum WindowChrome {
+  static let controlHeight: CGFloat = 34
+  static let padH: CGFloat = 6
+  static let padV: CGFloat = 5
+  static let radius: CGFloat = Theme.Radius.menu
+  /// Uniform distance every floating control keeps from the window edges (the board pill clears the
+  /// traffic lights instead). One number so nothing sits a different distance from its edge.
+  static let edgeInset: CGFloat = 16
+  /// Left offset for the top-left board pill: the traffic lights (repositioned onto the control
+  /// row's centerline, starting at `edgeInset`) end at 16 + 3×14 + 2×6 = 70; +12 breathing room.
+  static let trafficLightInset: CGFloat = 82
+  /// EVERY chrome glyph: one size, one weight. No inline `.font(.system(size: …))` in chrome views.
+  static let iconSize: CGFloat = 17
+  static var iconFont: Font { .system(size: iconSize, weight: .medium) }
+  /// EVERY chrome text label (board name, zoom %, chip text).
+  static var labelFont: Font { .system(size: 13, weight: .medium) }
+  /// Inner horizontal padding for a text-bearing control inside a pill (icons are square and
+  /// need none).
+  static let labelPadH: CGFloat = 10
+  /// Spacing between sibling controls inside one pill/bar.
+  static let itemSpacing: CGFloat = 4
+}
+
+extension View {
+  /// THE one wrapper for every floating chrome pill and bar: identical padding, radius, and glass.
+  /// Views never add their own surface padding — wrap the control row in this and it is, by
+  /// construction, the same size as every other pill.
+  func chromePill() -> some View {
+    self
+      .padding(.horizontal, WindowChrome.padH)
+      .padding(.vertical, WindowChrome.padV)
+      .composerPopupSurface(radius: WindowChrome.radius)
   }
 }
 
@@ -227,42 +266,28 @@ extension View {
   func composerPopupSurface(radius: CGFloat = Theme.Radius.menu) -> some View {
     floatingGlass(RoundedRectangle(cornerRadius: radius, style: .continuous))
   }
+
+  /// Background for the Agent / Settings panels floating over the canvas — plain Liquid Glass.
+  func dockPanelSurface(radius: CGFloat = Theme.Radius.panel) -> some View {
+    floatingGlass(RoundedRectangle(cornerRadius: radius, style: .continuous))
+  }
 }
 
 // MARK: - Panel backdrop
 
-/// The frosted, rounded, scrimmed card the whole canvas sits on.
+/// The canvas backdrop: the solid board surface (black in dark, paper white in light) over a
+/// behind-window desktop blur. At the default 0 transparency the surface is fully opaque —
+/// indistinguishable from solid; sliding up recedes it so the frosted desktop shows through.
 struct ComposerPanelBackground: View {
-  var radius: CGFloat = Theme.Radius.panel
-  @AppStorage(ComposerPreferences.panelTransparencyKey) private var panelTransparency = ComposerPreferences.defaultPanelTransparency
+  @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
 
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-    // 0 = Opaque, maxPanelTransparency = Glass. Normalize to 0…1 so the tint sweeps a
-    // wide, obviously-live range as the slider moves.
-    let glass = ComposerPreferences.clampedPanelTransparency(panelTransparency) / ComposerPreferences.maxPanelTransparency
-    let tint = 0.80 - 0.58 * glass
-
+    let glass = ComposerPreferences.clampedCanvasTransparency(canvasTransparency)
+      / ComposerPreferences.maxCanvasTransparency
     ZStack {
-      // Genuine frosted glass: `.behindWindow` samples and blurs the desktop behind the
-      // panel (Spotlight / Control Center vibrancy), not just content within the window.
       VisualEffectBackground(material: .hudWindow, blending: .behindWindow, state: .active)
-
-      // Legibility tint over the blur — recedes toward Glass, deepens toward Opaque.
-      Color.black.opacity(tint)
-
-      // Top sheen → clear → faint floor gives the slab depth.
-      LinearGradient(
-        stops: [
-          .init(color: Theme.Palette.panelTopSheen, location: 0),
-          .init(color: Color.clear, location: 0.34),
-          .init(color: Theme.Palette.panelBottomShade, location: 1)
-        ],
-        startPoint: .top,
-        endPoint: .bottom
-      )
+      Theme.Palette.windowCanvas.opacity(1.0 - 0.65 * glass)
     }
-    .clipShape(shape)
     .ignoresSafeArea()
   }
 }

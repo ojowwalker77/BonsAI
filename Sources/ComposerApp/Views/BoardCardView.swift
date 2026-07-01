@@ -34,7 +34,7 @@ struct BoardCardView: View {
   private var radius: CGFloat {
     switch card.elementKind {
     case .text: 12
-    case .image: 10
+    case .image: 8
     case .rectangle: 8
     default: 6
     }
@@ -165,10 +165,12 @@ struct BoardCardView: View {
       .padding(.vertical, 7)
       .frame(width: min(max(liveFrame.width - 20, 120), 220))
       .background(
+        // Same solid adaptive chip as the rendered label, so entering/leaving edit doesn't flash
+        // between a dark editor and a themed chip.
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(Color.black.opacity(0.36))
+          .fill(Theme.Palette.labelChipFill)
           .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+            .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
       )
       .focused($labelFocused)
       .onSubmit { board.endEditing(card.id) }
@@ -234,14 +236,20 @@ struct BoardCardView: View {
     // select to move or resize. Shapes keep their ring while editing.
     if (isSelected || isEditing) && !isEmptyText {
       let showRing = !isTextElement || (isSelected && !isEditing)
+      // Image cards draw their own rounded border, so a ring sitting `selectionGap` px outside reads
+      // as an ugly double border with a gap. Hug the image's own edge instead — a single clean
+      // accent outline. Other elements (text, shapes, lines) keep the offset ring.
+      let hugsContent = card.elementKind == .image
+      let ringGap: CGFloat = hugsContent ? 1 : selectionGap
+      let ringRadius: CGFloat = hugsContent ? radius : radius + selectionGap
       // Handles only grab in the select tool — in a drawing tool a corner drag should draw, not resize.
       let showHandles = isSelected && !isEditing && !card.locked && selectable
       GeometryReader { geo in
         ZStack {
           if showRing {
-            RoundedRectangle(cornerRadius: radius + selectionGap, style: .continuous)
-              .strokeBorder(Color.accentColor.opacity(isEditing ? 0.9 : 0.7), lineWidth: 1)
-              .frame(width: geo.size.width + selectionGap * 2, height: geo.size.height + selectionGap * 2)
+            RoundedRectangle(cornerRadius: ringRadius, style: .continuous)
+              .strokeBorder(Theme.Palette.accent.opacity(isEditing ? 0.9 : 0.7), lineWidth: hugsContent ? 1.5 : 1)
+              .frame(width: geo.size.width + ringGap * 2, height: geo.size.height + ringGap * 2)
               .position(x: geo.size.width / 2, y: geo.size.height / 2)
               .allowsHitTesting(false)
           }
@@ -272,7 +280,7 @@ struct BoardCardView: View {
     RoundedRectangle(cornerRadius: 2.5, style: .continuous)
       .fill(Color.white)
       .frame(width: 8, height: 8)
-      .overlay(RoundedRectangle(cornerRadius: 2.5, style: .continuous).strokeBorder(Color.accentColor.opacity(0.9), lineWidth: 1))
+      .overlay(RoundedRectangle(cornerRadius: 2.5, style: .continuous).strokeBorder(Theme.Palette.accent.opacity(0.9), lineWidth: 1))
       .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
       .padding(9)
       .contentShape(Rectangle())
@@ -433,8 +441,9 @@ private struct NodeLabel: View {
       .multilineTextAlignment(.center)
       .lineLimit(5)
       .minimumScaleFactor(0.82)
-      .foregroundStyle(Color.white.opacity(0.95))
-      .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+      // Board ink, not white — and ink on paper casts no shadow (elementShadow is clear in light).
+      .foregroundStyle(Theme.Palette.body)
+      .shadow(color: Theme.Palette.elementShadow, radius: 3, y: 1)
       .padding(.horizontal, 12 * zoom)
       .padding(.vertical, 8 * zoom)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -541,7 +550,7 @@ private struct ComposerChipText: View {
     let isApp = item?.kind == .app
     let label = isApp ? AppToken.label(appID: appID, selection: parsed?.selection) : (item?.label ?? raw)
     let cache = MentionStyleCache.shared
-    let color = Color(nsColor: cache.color(for: appID) ?? .controlAccentColor)
+    let color = Color(nsColor: cache.color(for: appID) ?? Theme.Palette.nsAccent)
 
     var chip = Text(verbatim: "")
     // Build the inline icon at the zoomed size so the brand mark stays crisp alongside the text.
@@ -563,16 +572,17 @@ private struct CanvasLabel: View {
       .font(.system(size: 14 * zoom, weight: .semibold))
       .lineLimit(2)
       .multilineTextAlignment(.center)
-      .foregroundStyle(Color.white.opacity(0.90))
+      .foregroundStyle(Theme.Palette.body)
       .padding(.horizontal, 9 * zoom)
       .padding(.vertical, 5 * zoom)
       .background(
+        // Solid fill — a translucent chip lets its own drop shadow bleed through and muddies it.
         RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .fill(Color.black.opacity(0.34))
+          .fill(Theme.Palette.labelChipFill)
           .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+            .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
       )
-      .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+      .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
       .padding(8)
       .allowsHitTesting(false)
   }
@@ -583,9 +593,9 @@ private struct ShapeBox: View {
 
   var body: some View {
     BoxShape(kind: kind)
-      .fill(Color.black.opacity(0.22))
-      .overlay(BoxShape(kind: kind).stroke(Color.white.opacity(0.72), lineWidth: 2))
-      .shadow(color: .black.opacity(0.22), radius: 10, y: 4)
+      .fill(Theme.Palette.elementFill)
+      .overlay(BoxShape(kind: kind).stroke(Theme.Palette.elementStroke, lineWidth: 2))
+      .shadow(color: Theme.Palette.elementShadow, radius: 10, y: 4)
       .padding(2)
   }
 }
@@ -643,8 +653,8 @@ private struct LineShape: View {
           }
         }
       }
-      .stroke(Color.white.opacity(0.78), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-      .shadow(color: .black.opacity(0.20), radius: 6, y: 3)
+      .stroke(Theme.Palette.elementStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
     }
   }
 }
@@ -660,8 +670,8 @@ private struct FreehandShape: View {
         path.move(to: first)
         for point in mapped.dropFirst() { path.addLine(to: point) }
       }
-      .stroke(Color.white.opacity(0.78), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-      .shadow(color: .black.opacity(0.20), radius: 6, y: 3)
+      .stroke(Theme.Palette.elementStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
     }
   }
 }
@@ -676,13 +686,16 @@ private struct ImageObjectPlaceholder: View {
       Image(nsImage: image)
         .resizable()
         .scaledToFill()
+        // Clamp to the card frame so `scaledToFill` fills-and-crops within the card instead of
+        // overflowing it — the image's rounded border (and the selection ring) then hug the frame.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+          .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
         .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
       } else {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(Color.black.opacity(0.16))
+          .fill(Theme.Palette.elementFill)
           .overlay {
             VStack(spacing: 8) {
               Image(systemName: "photo")
@@ -691,11 +704,11 @@ private struct ImageObjectPlaceholder: View {
                 .font(.caption.weight(.medium))
                 .lineLimit(1)
             }
-            .foregroundStyle(Color.white.opacity(0.72))
+            .foregroundStyle(Theme.Palette.chromeText)
             .padding(10)
           }
           .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.26), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
+            .strokeBorder(Theme.Palette.chromeDivider, style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
           .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
       }
     }

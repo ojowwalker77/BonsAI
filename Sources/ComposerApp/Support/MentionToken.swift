@@ -97,10 +97,10 @@ enum MentionToken {
   static func attributed(token: String, label: String, font: NSFont, showDisclosure: Bool) -> NSAttributedString {
     let chip = NSMutableAttributedString(string: label, attributes: [
       .font: font,
-      .foregroundColor: NSColor.controlAccentColor,
-      .backgroundColor: NSColor.controlAccentColor.withAlphaComponent(0.14),
+      .foregroundColor: Theme.Palette.nsAccent,
+      .backgroundColor: Theme.Palette.nsAccent.withAlphaComponent(0.14),
     ])
-    if showDisclosure { chip.append(MentionChip.disclosure(font: font, color: NSColor.controlAccentColor.withAlphaComponent(0.42))) }
+    if showDisclosure { chip.append(MentionChip.disclosure(font: font, color: Theme.Palette.nsAccent.withAlphaComponent(0.42))) }
     chip.addAttribute(.mentionToken, value: token, range: NSRange(location: 0, length: chip.length))
     return chip
   }

@@ -37,25 +37,10 @@ enum CanvasTool: Equatable {
   }
 }
 
-/// The floating top tool cluster — the canvas's analog of the left `Sidebar`, using the same
-/// `railSurface()` recipe so it reads as a sibling rail floating above the card. Holds the
-/// canvas tools + zoom + the board Copy. (The agent and its grounding folder live on the left
-/// `Sidebar`, grouped with the other board-session actions.)
+/// The canvas tool cluster — the eight placement/selection tools, rendered bare so the bottom
+/// command bar can lay it alongside zoom and session utilities under one shared glass surface.
 struct CanvasToolbar: View {
   @Binding var tool: CanvasTool
-  let zoomPercent: Int
-  /// Describe Board — Claude reads the whole board and writes a self-contained description.
-  var onCopy: () -> Void
-  /// Copy Board — deterministic self-contained render (expands @connectors and copy-time shell).
-  var onCopyBoard: () -> Void
-  /// True while Describe Board's `claude -p` call is in flight — its button shows a spinner.
-  var isCopying: Bool
-  /// True while Copy Board's shell expansion runs — its button shows a spinner and is inert.
-  var isCopyingBoard: Bool = false
-  var onZoomOut: () -> Void
-  var onZoomIn: () -> Void
-  var onZoomReset: () -> Void
-  var onFit: () -> Void
 
   var body: some View {
     HStack(spacing: 5) {
@@ -75,46 +60,14 @@ struct CanvasToolbar: View {
                  active: tool == .arrow, shortcut: 7) { tool = .arrow }
       ToolButton(symbol: "scribble.variable", help: "Freehand stroke  ·  drag to draw  ⌘8",
                  active: tool == .freehand, shortcut: 8) { tool = .freehand }
-
-      divider
-
-      ToolButton(symbol: "minus.magnifyingglass", help: "Zoom out", action: onZoomOut)
-      Button(action: onZoomReset) {
-        Text("\(zoomPercent)%")
-          .font(.caption.monospacedDigit().weight(.medium))
-          .foregroundStyle(Color.white.opacity(0.82))
-          .frame(width: 44, height: 30)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .help("Reset to 100%")
-      ToolButton(symbol: "plus.magnifyingglass", help: "Zoom in", action: onZoomIn)
-      ToolButton(symbol: "arrow.up.left.and.down.right.magnifyingglass", help: "Fit board", action: onFit)
-
-      divider
-
-      TextToolButton(title: "Describe Board",
-                     help: "Claude reads the whole board and writes a self-contained description",
-                     busy: isCopying, action: onCopy)
-      TextToolButton(title: "Copy Board",
-                     help: "Copy self-contained text  ·  expands @connectors and copy-time $(shell)",
-                     busy: isCopyingBoard, action: onCopyBoard)
     }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 5)
-    .railSurface()
-  }
-
-  private var divider: some View {
-    Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 20).padding(.horizontal, 2)
   }
 }
 
-/// Square dimensions for a toolbar control — the glyph is sized to match the left `Sidebar`'s
-/// 17pt icons so the two rails read as siblings.
+/// Tool buttons share the chrome grid — same square, same glyph size as every other control.
 private enum ToolMetrics {
-  static let side: CGFloat = 34
-  static let icon: CGFloat = 17
+  static let side: CGFloat = WindowChrome.controlHeight
+  static let icon: CGFloat = WindowChrome.iconSize
 }
 
 private struct ToolButton: View {
@@ -131,15 +84,15 @@ private struct ToolButton: View {
   @State private var hovering = false
 
   var body: some View {
-    Button(action: action) {
+    Button(action: { Haptics.tap(); action() }) {
       Group {
         if busy {
           ProgressView()
             .controlSize(.small)
-            .tint(Color.white.opacity(0.9))
+            .tint(Theme.Palette.chromeGlyphHover)
         } else {
           Image(systemName: symbol)
-            .font(.system(size: ToolMetrics.icon, weight: .medium))
+            .font(WindowChrome.iconFont)
             .foregroundStyle(foreground)
         }
       }
@@ -148,13 +101,13 @@ private struct ToolButton: View {
       // background is a neutral hover wash.
       .background(
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(hovering && !disabled && !busy ? Color.white.opacity(0.12) : Color.clear)
+          .fill(hovering && !disabled && !busy ? Theme.Palette.hoverWash : Color.clear)
       )
       .overlay(alignment: .bottomTrailing) {
         if let shortcut, !busy {
           Text("\(shortcut)")
             .font(.system(size: 8, weight: .bold))
-            .foregroundStyle(active ? Color.accentColor : Color.white.opacity(hovering ? 0.6 : 0.34))
+            .foregroundStyle(active ? Theme.Palette.accent : (hovering ? Theme.Palette.chromeGlyph : Theme.Palette.chromeBadge))
             .padding(.trailing, 3).padding(.bottom, 2)
         }
       }
@@ -168,48 +121,8 @@ private struct ToolButton: View {
   }
 
   private var foreground: AnyShapeStyle {
-    if disabled { return AnyShapeStyle(Color.white.opacity(0.26)) }
-    if active { return AnyShapeStyle(Color.accentColor) }
-    return AnyShapeStyle(Color.white.opacity(hovering ? 0.95 : 0.62))
-  }
-}
-
-/// A labelled board action (Describe Board, Copy Board) — same hover wash and busy-spinner recipe
-/// as `ToolButton`, but reads in plain English instead of a glyph. Sized to the rail's height so it
-/// sits flush with the tool icons.
-private struct TextToolButton: View {
-  let title: String
-  let help: String
-  var busy = false
-  var action: () -> Void
-  @State private var hovering = false
-
-  var body: some View {
-    Button(action: action) {
-      Group {
-        if busy {
-          ProgressView()
-            .controlSize(.small)
-            .tint(Color.white.opacity(0.9))
-        } else {
-          Text(title)
-            .font(.caption.weight(.bold))
-            .foregroundStyle(Color.white.opacity(hovering ? 0.98 : 0.78))
-            .fixedSize()
-        }
-      }
-      .frame(height: ToolMetrics.side)
-      .padding(.horizontal, 11)
-      .background(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(hovering && !busy ? Color.white.opacity(0.12) : Color.clear)
-      )
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .disabled(busy)
-    .onHover { hovering = $0 }
-    .help(help)
-    .animation(.easeOut(duration: 0.12), value: hovering)
+    if disabled { return AnyShapeStyle(Theme.Palette.chromeGlyphDim) }
+    if active { return AnyShapeStyle(Theme.Palette.accent) }
+    return AnyShapeStyle(hovering ? Theme.Palette.chromeGlyphHover : Theme.Palette.chromeGlyph)
   }
 }

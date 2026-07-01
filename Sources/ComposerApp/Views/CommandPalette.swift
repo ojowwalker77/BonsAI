@@ -198,7 +198,7 @@ struct CommandPalette: View {
   private func boardRow(_ dump: Dump, selected: Bool) -> some View {
     HStack(spacing: 10) {
       Circle()
-        .fill(dump.persistentModelID == store.currentID ? Color.accentColor : Color.clear)
+        .fill(dump.persistentModelID == store.currentID ? Theme.Palette.accent : Color.clear)
         .frame(width: 6, height: 6)
       Text(dump.title.isEmpty ? "Empty draft" : dump.title)
         .font(Theme.Typography.menuName)
@@ -219,7 +219,7 @@ struct CommandPalette: View {
     HStack(spacing: 10) {
       Image(systemName: command.symbol)
         .font(.body)
-        .foregroundStyle(selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Theme.Palette.menuDesc))
+        .foregroundStyle(selected ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.menuDesc))
         .frame(width: 18)
       Text(command.title)
         .font(Theme.Typography.menuName)

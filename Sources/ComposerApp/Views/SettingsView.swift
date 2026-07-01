@@ -24,10 +24,8 @@ struct SettingsOverlay: View {
     }
     .frame(width: width)
     .frame(maxHeight: .infinity)
-    // Identical glass to the main window and the agent dock — same frosted treatment, tint, and
-    // corner radius — so Settings reads as a second panel beside the card.
-    .background(ComposerPanelBackground(radius: Theme.Radius.panel))
-    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
+    // Liquid Glass floating over the canvas.
+    .dockPanelSurface()
     .onExitCommand(perform: onClose)
     .animation(Theme.Motion.accessory, value: destination)
   }
@@ -59,20 +57,27 @@ struct SettingsOverlay: View {
 
   // MARK: Tabs
 
+  /// Modern chip nav: inline icon + label capsules in a horizontal row. Selection is a filled
+  /// chip; everything else stays quiet until hover.
   private var tabStrip: some View {
-    HStack(spacing: 4) {
-      ForEach(SettingsDestination.allCases) { item in
-        SettingsTab(item: item, selected: destination == item) { destination = item }
+    ScrollView(.horizontal) {
+      HStack(spacing: 5) {
+        ForEach(SettingsDestination.allCases) { item in
+          SettingsTab(item: item, selected: destination == item) {
+            Haptics.tap()
+            destination = item
+          }
+        }
       }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 9)
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 10)
+    .scrollIndicators(.never)
   }
 }
 
-/// One segment of the settings nav. Quiet by default, lights up on hover, and marks the selection
-/// with an accent-tinted glyph over a neutral fill — the same "tint is the signal, no colored box"
-/// rule the canvas rails follow.
+/// One chip of the settings nav — icon + label inline in a capsule. The selected chip carries a
+/// quiet filled background with accent-tinted content; the rest light up on hover.
 private struct SettingsTab: View {
   let item: SettingsDestination
   let selected: Bool
@@ -81,18 +86,17 @@ private struct SettingsTab: View {
 
   var body: some View {
     Button(action: action) {
-      VStack(spacing: 5) {
-        Image(systemName: item.symbol).font(.system(size: 15, weight: .medium))
-        Text(item.title).font(.system(size: 10.5, weight: .medium))
+      HStack(spacing: 5) {
+        Image(systemName: item.symbol).font(.system(size: 11.5, weight: .medium))
+        Text(item.title).font(.system(size: 11.5, weight: .medium)).fixedSize()
       }
-      .frame(maxWidth: .infinity)
-      .frame(height: 46)
       .foregroundStyle(foreground)
+      .padding(.horizontal, 10)
+      .frame(height: 26)
       .background(
-        RoundedRectangle(cornerRadius: 9, style: .continuous)
-          .fill(selected ? Color.white.opacity(0.08) : (hovering ? Color.white.opacity(0.045) : Color.clear))
+        Capsule().fill(selected ? Theme.Palette.keycapFill : (hovering ? Theme.Palette.rowFill : Color.clear))
       )
-      .contentShape(Rectangle())
+      .contentShape(Capsule())
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
@@ -101,7 +105,7 @@ private struct SettingsTab: View {
   }
 
   private var foreground: AnyShapeStyle {
-    if selected { return AnyShapeStyle(Color.accentColor) }
+    if selected { return AnyShapeStyle(Theme.Palette.accent) }
     return AnyShapeStyle(hovering ? Theme.Palette.body : Theme.Palette.menuDesc)
   }
 }
@@ -144,7 +148,6 @@ private struct SettingsContent: View {
     ("Select all · duplicate", "⌘A  ⌘D"),
     ("Group · ungroup", "⌘G  ⇧⌘G"),
     ("Lock · unlock", "⌘L  ⇧⌘L"),
-    ("Copy self-contained", "⇧⌘C"),
   ]
 
   @StateObject private var appIcons = AppIconStore()
@@ -155,12 +158,15 @@ private struct SettingsContent: View {
   // Both keys are shared with their in-canvas pickers (the Agent dock for chat), so the controls
   // mirror each other live. See [[ModelPreferences]].
   @AppStorage(ModelPreferences.chatModelKey) private var chatModel: ClaudeModel = ModelPreferences.defaultChatModel
-  @AppStorage(ModelPreferences.describeModelKey) private var describeModel: ClaudeModel = ModelPreferences.defaultDescribeModel
-  @AppStorage(ComposerPreferences.panelTransparencyKey) private var panelTransparency = ComposerPreferences.defaultPanelTransparency
-  @AppStorage(ComposerPreferences.resolveShellAtCopyKey) private var resolveShellAtCopy = false
+  @AppStorage(ComposerPreferences.themeKey) private var themeRaw = ComposerTheme.bonsaiDark.rawValue
+  @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
   /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
   /// visibility. Refreshed in `onAppear`; flipped false the moment the user resets.
   @State private var agentHasGrants = false
+  /// Bumped after an agent-skills install so `AgentSkillTarget.isInstalled` (a filesystem check,
+  /// not a published property) re-reads and the row badges refresh.
+  @State private var agentSkillsRevision = 0
+  @State private var agentSkillsError: String?
 
   var body: some View {
     ScrollView {
@@ -288,9 +294,8 @@ private struct SettingsContent: View {
     .onAppear { agentHasGrants = AgentPermissionBroker.hasRememberedGrants }
   }
 
-  /// Per-surface model choice. Chat mirrors the Agent dock's picker (same key); Describe is the only
-  /// place to set the model the board-description copy runs on. Refine/Compile aren't listed — they
-  /// stay on the CLI default deliberately.
+  /// The agent chat's model. Mirrors the Agent panel's picker (same key). Refine/Compile aren't
+  /// listed — they stay on the CLI default deliberately.
   private var modelsCard: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("MODELS").sectionLabel()
@@ -299,24 +304,27 @@ private struct SettingsContent: View {
           title: "Agent chat",
           subtitle: "The in-canvas agent you talk to. Mirrors the picker in the Agent panel.",
           selection: $chatModel)
-        Divider().overlay(Theme.Palette.separator)
-        modelRow(
-          title: "Describe board",
-          subtitle: "The toolbar copy that summarizes the whole board into a paste-ready brief.",
-          selection: $describeModel)
       }
       .padding(.horizontal, 13)
       .settingsCard()
     }
   }
 
-  private func modelRow(title: String, subtitle: String, selection: Binding<ClaudeModel>) -> some View {
+  private func modelRow(
+    title: String, subtitle: String, selection: Binding<ClaudeModel>,
+    active: Bool = true, inactiveNote: String? = nil
+  ) -> some View {
     HStack(spacing: 11) {
       VStack(alignment: .leading, spacing: 2) {
         Text(title).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
         Text(subtitle)
           .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
           .fixedSize(horizontal: false, vertical: true)
+        if !active, let inactiveNote {
+          Text(inactiveNote)
+            .font(.caption).foregroundStyle(Color.orange)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
       Spacer(minLength: 8)
       Picker("", selection: selection) {
@@ -328,6 +336,8 @@ private struct SettingsContent: View {
       .pickerStyle(.menu)
       .fixedSize()
       .tint(Theme.Palette.body)
+      .disabled(!active)
+      .opacity(active ? 1 : 0.5)
     }
     .padding(.vertical, 11)
   }
@@ -363,7 +373,7 @@ private struct SettingsContent: View {
         .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Theme.Palette.tagFill))
         .overlay(
           RoundedRectangle(cornerRadius: 11, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+            .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1)
         )
         .opacity(available ? 1 : 0.4)
         .saturation(available ? 1 : 0.2)
@@ -448,62 +458,62 @@ private struct SettingsContent: View {
   // MARK: Appearance
 
   private var appearancePage: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      pageHeader("Panel glass",
-                 "Let more of the desktop through without losing the contrast that keeps long drafts readable.")
+    VStack(alignment: .leading, spacing: 20) {
+      themeCard
+      canvasGlassCard
+    }
+  }
 
-      VStack(alignment: .leading, spacing: 12) {
-        // A live preview of the panel at the chosen transparency.
-        glassPreview
-          .frame(height: 64)
-          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-        VStack(spacing: 12) {
-          HStack(alignment: .firstTextBaseline) {
-            Text("Background transparency").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-            Spacer(minLength: 12)
-            Text("\(transparencyPercent)%")
-              .font(.callout.monospacedDigit().weight(.semibold))
-              .foregroundStyle(Theme.Palette.body)
-          }
-          Slider(value: $panelTransparency, in: 0...ComposerPreferences.maxPanelTransparency)
-            .tint(Color.accentColor)
-          HStack {
-            Text("Opaque")
-            Spacer()
-            Text("Glass")
-          }
-          .font(.caption2)
-          .foregroundStyle(Theme.Palette.count)
+  /// Canvas background transparency — solid by default; the board behind this panel updates live
+  /// as the slider moves, so it is its own preview.
+  private var canvasGlassCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Canvas",
+                 "Let the desktop blur through the board surface. Solid keeps the flat canvas.")
+      VStack(spacing: 12) {
+        HStack(alignment: .firstTextBaseline) {
+          Text("Background transparency").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+          Spacer(minLength: 12)
+          Text("\(canvasTransparencyPercent)%")
+            .font(.callout.monospacedDigit().weight(.semibold))
+            .foregroundStyle(Theme.Palette.body)
         }
-        .padding(14)
-        .settingsCard()
+        Slider(value: $canvasTransparency, in: 0...ComposerPreferences.maxCanvasTransparency)
+          .tint(Theme.Palette.accent)
+        HStack {
+          Text("Solid")
+          Spacer()
+          Text("Glass")
+        }
+        .font(.caption2)
+        .foregroundStyle(Theme.Palette.count)
       }
+      .padding(14)
+      .settingsCard()
     }
   }
 
-  private var glassPreview: some View {
-    let glass = ComposerPreferences.clampedPanelTransparency(panelTransparency) / ComposerPreferences.maxPanelTransparency
-    let tint = 0.80 - 0.58 * glass
-    return ZStack {
-      VisualEffectBackground(material: .hudWindow, blending: .behindWindow, state: .active)
-      Color.black.opacity(tint)
-      HStack {
-        Text("The quick brown fox")
-          .font(.callout.weight(.medium))
-          .foregroundStyle(.white.opacity(0.92))
-        Spacer()
-      }
-      .padding(.horizontal, 14)
-    }
-    .overlay(
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
-        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-    )
+  private var canvasTransparencyPercent: Int {
+    Int((ComposerPreferences.clampedCanvasTransparency(canvasTransparency) / ComposerPreferences.maxCanvasTransparency) * 100)
   }
 
-  private var transparencyPercent: Int {
-    Int((ComposerPreferences.clampedPanelTransparency(panelTransparency) / ComposerPreferences.maxPanelTransparency) * 100)
+  /// The theme gallery: one live-preview card per flavor, painted from that flavor's own palette
+  /// (not the current one), so every option shows exactly what it looks like before you commit.
+  private var themeCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Theme", "Pick the palette for the whole app.")
+      LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+        ForEach(ComposerTheme.allCases) { theme in
+          ThemePreviewCard(theme: theme, selected: themeRaw == theme.rawValue) {
+            Haptics.level()
+            themeRaw = theme.rawValue
+          }
+        }
+      }
+    }
+    .onChange(of: themeRaw) { _, _ in
+      NotificationCenter.default.post(name: .composerThemeChanged, object: nil)
+    }
   }
 
   // MARK: Connectors
@@ -513,7 +523,7 @@ private struct SettingsContent: View {
       pageHeader("Connectors",
                  "Type @ in a card to attach live context. Copied drafts become self-contained text — the source is resolved at copy time.")
 
-      shellResolutionCard
+      agentSkillsCard
 
       ForEach(MentionCatalog.appsByCategory, id: \.category) { group in
         VStack(alignment: .leading, spacing: 8) {
@@ -531,30 +541,61 @@ private struct SettingsContent: View {
     }
   }
 
-  /// Opt-in for copy-time shell. Off by default; even on, every copy confirms what will run.
-  private var shellResolutionCard: some View {
+  /// Lets coding agents (Claude Code, Codex CLI, Cursor) drive the board over the local canvas API.
+  /// Each row reflects a live filesystem check, not a stored preference — `agentSkillsRevision`
+  /// forces a re-read after install since SwiftUI has no other reason to invalidate this view.
+  private var agentSkillsCard: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("COPY-TIME SHELL").sectionLabel()
-      HStack(spacing: 11) {
-        Image(systemName: "terminal")
-          .font(.system(size: 15, weight: .medium))
-          .foregroundStyle(Theme.Palette.body)
-          .frame(width: 24, height: 24)
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Resolve shell at copy time")
-            .font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
-          Text("Run $(command) blocks and name=(value) variables when you copy, pasting their output. Each copy confirms what will run.")
-            .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
-            .fixedSize(horizontal: false, vertical: true)
+      Text("AGENT SKILLS").sectionLabel()
+      VStack(spacing: 0) {
+        ForEach(Array(AgentSkillTarget.allCases.enumerated()), id: \.element.id) { index, target in
+          if index > 0 { Divider().overlay(Theme.Palette.separator) }
+          agentSkillRow(target)
         }
-        Spacer(minLength: 8)
-        Toggle("", isOn: $resolveShellAtCopy)
-          .labelsHidden().toggleStyle(.switch).controlSize(.small)
       }
       .padding(.horizontal, 13)
-      .padding(.vertical, 11)
       .settingsCard()
+      if let agentSkillsError {
+        Text(agentSkillsError)
+          .font(.caption)
+          .foregroundStyle(.orange)
+      }
     }
+  }
+
+  private func agentSkillRow(_ target: AgentSkillTarget) -> some View {
+    let installed = { _ = agentSkillsRevision; return target.isInstalled }()
+    return HStack(spacing: 11) {
+      Image(systemName: target.symbol)
+        .font(.system(size: 15, weight: .medium))
+        .foregroundStyle(Theme.Palette.body)
+        .frame(width: 24, height: 24)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(target.displayName).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
+        Text(target.isDetected ? (installed ? "Skill installed" : "Detected on this Mac") : "Not detected")
+          .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
+      }
+      Spacer(minLength: 8)
+      Button(action: { installAgentSkill(target) }) {
+        Text(installed ? "Reinstall" : "Install")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(Theme.Palette.body)
+          .padding(.horizontal, 11)
+          .frame(height: 26)
+      }
+      .buttonStyle(SettingsPillButtonStyle())
+    }
+    .padding(.vertical, 11)
+  }
+
+  private func installAgentSkill(_ target: AgentSkillTarget) {
+    do {
+      try AgentSkillsInstaller.install(target)
+      agentSkillsError = nil
+    } catch {
+      agentSkillsError = "\(target.displayName): \(error.localizedDescription)"
+    }
+    agentSkillsRevision += 1
   }
 
   private func connectorRow(_ app: MentionItem) -> some View {
@@ -654,7 +695,7 @@ private struct SettingsContent: View {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                   .fill(Theme.Palette.keycapFill)
                   .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+                    .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1))
               )
           }
           .padding(.horizontal, 13)
@@ -749,7 +790,7 @@ private struct ConnectorTokenField: View {
         Button("Save", action: save)
           .buttonStyle(.plain)
           .font(.caption.weight(.semibold))
-          .foregroundStyle(draft.trimmed.isEmpty ? Theme.Palette.menuDesc : Color.accentColor)
+          .foregroundStyle(draft.trimmed.isEmpty ? Theme.Palette.menuDesc : Theme.Palette.accent)
           .disabled(draft.trimmed.isEmpty)
         if connected {
           Button("Clear", action: clear)
@@ -769,7 +810,7 @@ private struct ConnectorTokenField: View {
           Spacer(minLength: 8)
           Link("Get a token ↗", destination: url)
             .font(.caption2.weight(.medium))
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(Theme.Palette.accent)
         }
       }
     }
@@ -792,6 +833,76 @@ private struct ConnectorTokenField: View {
   }
 }
 
+// MARK: - Theme preview
+
+/// A miniature of the app painted from a flavor's own palette: canvas, a floating pill with an
+/// accent dot, and ink lines at three strengths. Selection rings in the flavor's accent.
+private struct ThemePreviewCard: View {
+  let theme: ComposerTheme
+  let selected: Bool
+  var action: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    let flavor = theme.flavor
+    Button(action: action) {
+      VStack(spacing: 0) {
+        ZStack(alignment: .topLeading) {
+          Color(nsColor: flavor.base)
+          VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+              Circle().fill(Color(nsColor: flavor.accent)).frame(width: 6, height: 6)
+              Capsule().fill(Color(nsColor: flavor.surface1)).frame(width: 30, height: 7)
+            }
+            .padding(.horizontal, 7).padding(.vertical, 5)
+            .background(Capsule().fill(Color(nsColor: flavor.mantle)))
+            .overlay(Capsule().strokeBorder(Color(nsColor: flavor.surface2).opacity(0.6), lineWidth: 0.5))
+
+            VStack(alignment: .leading, spacing: 4) {
+              RoundedRectangle(cornerRadius: 2).fill(Color(nsColor: flavor.text)).frame(width: 56, height: 5)
+              RoundedRectangle(cornerRadius: 2).fill(Color(nsColor: flavor.subtext0)).frame(width: 40, height: 5)
+              RoundedRectangle(cornerRadius: 2).fill(Color(nsColor: flavor.overlay0)).frame(width: 47, height: 5)
+            }
+            .padding(.leading, 3)
+          }
+          .padding(9)
+        }
+        .frame(height: 82)
+
+        HStack(spacing: 6) {
+          Text(theme.title)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(Theme.Palette.body)
+            .lineLimit(1)
+          Spacer(minLength: 0)
+          if selected {
+            Image(systemName: "checkmark.circle.fill")
+              .font(.system(size: 12))
+              .foregroundStyle(Theme.Palette.accent)
+          }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(Theme.Palette.rowFill)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .strokeBorder(
+            selected ? Theme.Palette.accent : (hovering ? Theme.Palette.panelInnerLine : Theme.Palette.panelHairline),
+            lineWidth: selected ? 2 : 1
+          )
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+    .help(theme.title)
+    .animation(.easeOut(duration: 0.12), value: hovering)
+    .animation(.easeOut(duration: 0.12), value: selected)
+  }
+}
+
 // MARK: - Styling helpers
 
 /// A quiet neutral pill — the rail/dock idiom (white-on-glass wash, hairline rim), not an accent
@@ -800,9 +911,9 @@ private struct SettingsPillButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .background(
-        Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.14 : 0.08))
+        Capsule().fill(configuration.isPressed ? Theme.Palette.buttonHover : Theme.Palette.keycapFill)
       )
-      .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+      .overlay(Capsule().strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
       .scaleEffect(configuration.isPressed ? 0.97 : 1)
       .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
   }
@@ -815,7 +926,7 @@ private extension View {
       RoundedRectangle(cornerRadius: radius, style: .continuous)
         .fill(Theme.Palette.rowFill)
         .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
-          .strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+          .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1))
     }
   }
 

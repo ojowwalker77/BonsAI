@@ -10,16 +10,10 @@ struct ComposerCanvas: View {
   @StateObject private var store = DumpStore.shared
   @StateObject private var board = BoardViewModel()
   @ObservedObject private var engineCapabilities = EngineCapabilityStore.shared
-  @ObservedObject private var workspaceLayout = WorkspaceLayout.shared
   @ObservedObject private var userFacingErrors = UserFacingErrorStore.shared
 
   @State private var tool: CanvasTool = .select
   @State private var isWorking = false
-  /// Scoped to the toolbar Copy button so only it shows a spinner while its `claude -p` describe
-  /// runs (`isWorking` also covers compile/refine, which shouldn't spin the Copy glyph).
-  @State private var isDescribing = false
-  /// True while Copy Board's shell expansion is in flight — disables the button and shows a spinner.
-  @State private var isCopyingBoard = false
   @State private var toast: Toast?
   @State private var lastViewportSize: CGSize = .zero
   @State private var selectionRect: CGRect?
@@ -30,10 +24,16 @@ struct ComposerCanvas: View {
   /// Observed for the agent's *coarse* state (isRunning / grounding) so the toolbar and ⌘K palette
   /// stay in sync. The streaming transcript lives on `agent.transcript`, which the canvas does NOT
   /// observe, so per-token updates re-render only the dock — never the board.
-  @StateObject private var agent = CanvasAgent()
+  @ObservedObject private var agent = CanvasAgent.shared
   @State private var showAgent = false
   /// The ⌘K command palette (board switcher + buried board-level actions) is showing.
   @State private var showPalette = false
+  /// The board picker opens on hover; a short grace timer stops it flickering while the pointer
+  /// crosses the gap between the pill and the list. While a row is renaming or confirming a
+  /// delete, the panel is pinned open regardless of hover.
+  @State private var boardPickerOpen = false
+  @State private var boardPickerPinned = false
+  @State private var boardPickerCloseWork: DispatchWorkItem?
   /// The card that held the caret when the palette was summoned, captured before the palette's
   /// search field steals first responder — so a cancel can hand editing back to it.
   @State private var paletteReturnCardID: UUID?
@@ -68,11 +68,7 @@ struct ComposerCanvas: View {
 
   @ViewBuilder
   private func canvasRoot(proxy: GeometryProxy) -> some View {
-    let layout = CanvasSurfaceLayout(windowSize: proxy.size)
-    let inner = layout.cardSize
-    let toolbarCenterX = workspaceLayout.toolbarCenterX > 0
-      ? workspaceLayout.toolbarCenterX
-      : proxy.size.width / 2
+    let inner = proxy.size
     ZStack(alignment: .topLeading) {
       ZStack(alignment: .topLeading) {
         ComposerPanelBackground()
@@ -80,9 +76,7 @@ struct ComposerCanvas: View {
         compiledOverlay
         toastView
       }
-      .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
-      .frame(width: layout.cardSize.width, height: layout.cardSize.height, alignment: .topLeading)
-      .offset(x: layout.cardOrigin.x, y: layout.cardOrigin.y)
+      .frame(width: inner.width, height: inner.height, alignment: .topLeading)
 
       // Active-card overlays resolve through screen → window space, so they live in
       // full-window coordinates and keep working while the board itself is transformed.
@@ -92,22 +86,18 @@ struct ComposerCanvas: View {
           size: proxy.size,
           isWorking: isWorking,
           onRefine: { refineSelection($0, card: editing) },
-          onCopy: { copyBoard() },
           onApplyFix: { editing.controller.applyLintFix(range: $0.range, expecting: $0.phrase, with: $1) },
           onAskClaude: { askClaude(about: $0, card: editing) }
         )
         .id(editing.id)
       }
 
-      // Rails float in the gutters; the history list opens over the card.
-      historyListOverlay(in: proxy.size)
-      sidebar(in: proxy.size)
-      toolbar(
-        fit: inner,
-        windowSize: proxy.size,
-        cardSize: layout.cardSize,
-        workspaceCenterX: toolbarCenterX
-      )
+      // Floating chrome: board identity top-left (the pill IS the board manager), agent top-right,
+      // everything hands-on (tools, zoom, folder, settings) in one bottom command bar.
+      boardSwitcherPill(in: proxy.size)
+      boardActionsPill(in: proxy.size)
+      bottomCommandBar(fit: inner)
+      dockOverlay(in: proxy.size)
       commandPaletteOverlay(in: proxy.size)
       commandBridge
     }
@@ -142,7 +132,6 @@ struct ComposerCanvas: View {
 
   private var navigationCommandBridge: some View {
     commandAnchor
-      .onReceive(NotificationCenter.default.publisher(for: .composerCopy)) { _ in copyBoard() }
       .onReceive(NotificationCenter.default.publisher(for: .composerCompileBoard)) { _ in runCompile() }
       .onReceive(NotificationCenter.default.publisher(for: .composerShowSettings)) { _ in openSettings() }
       .onReceive(NotificationCenter.default.publisher(for: .composerCaptureCompleted)) { note in
@@ -152,14 +141,6 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerPrevDump)) { _ in handlePrevDump() }
       .onReceive(NotificationCenter.default.publisher(for: .composerNextDump)) { _ in handleNextDump() }
       .onReceive(NotificationCenter.default.publisher(for: .composerNewDump)) { _ in handleNewDump() }
-      .onReceive(NotificationCenter.default.publisher(for: .composerDockDismissed)) { note in
-        guard let rawKind = note.userInfo?["kind"] as? String,
-              let kind = ComposerDockKind(rawValue: rawKind) else { return }
-        switch kind {
-        case .agent: showAgent = false
-        case .settings: store.isSettingsOpen = false
-        }
-      }
   }
 
   private var boardEditCommandBridge: some View {
@@ -224,19 +205,16 @@ struct ComposerCanvas: View {
     show(Toast(text: "Captured on board", symbol: "leaf.fill", tint: .accentColor))
   }
 
-  /// The agent and Settings share the single auxiliary-panel slot.
+  /// The agent and Settings share the single overlay slot, driven by `showAgent` /
+  /// `store.isSettingsOpen` — they float over the canvas as glass panels.
   private func toggleAgent() {
-    if showAgent {
-      showAgent = false
-      NotificationCenter.default.post(name: .composerDismissDock, object: nil)
-    } else {
-      showAgent = true
-      store.isSettingsOpen = false
-      NotificationCenter.default.post(
-        name: .composerPresentDock,
-        object: agent,
-        userInfo: ["kind": ComposerDockKind.agent.rawValue]
-      )
+    withAnimation(Theme.Motion.accessory) {
+      if showAgent {
+        showAgent = false
+      } else {
+        showAgent = true
+        store.isSettingsOpen = false
+      }
     }
   }
 
@@ -320,9 +298,9 @@ struct ComposerCanvas: View {
   private var selectionRectView: some View {
     if let rect = selectionRect, rect.width > 1, rect.height > 1 {
       RoundedRectangle(cornerRadius: 2, style: .continuous)
-        .fill(Color.accentColor.opacity(0.10))
+        .fill(Theme.Palette.accent.opacity(0.10))
         .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous)
-          .strokeBorder(Color.accentColor.opacity(0.72), lineWidth: 1))
+          .strokeBorder(Theme.Palette.accent.opacity(0.72), lineWidth: 1))
         .frame(width: rect.width, height: rect.height)
         .position(x: rect.midX, y: rect.midY)
         .allowsHitTesting(false)
@@ -337,7 +315,7 @@ struct ComposerCanvas: View {
         path.move(to: first)
         for point in points.dropFirst() { path.addLine(to: point) }
       }
-      .stroke(Color.white.opacity(0.82), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      .stroke(Theme.Palette.inkStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
       .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
       .allowsHitTesting(false)
     }
@@ -427,70 +405,204 @@ struct ComposerCanvas: View {
     )
   }
 
-  // MARK: Rails + overlays
+  // MARK: Floating chrome
 
-  private func sidebar(in windowSize: CGSize) -> some View {
-    Sidebar(
-      store: store,
-      groundedFolder: groundingPath.isEmpty ? nil : URL(fileURLWithPath: groundingPath).lastPathComponent,
-      agentOpen: showAgent,
-      onNew: { newBoard() },
-      onHistory: {
-        store.isHistoryOpen.toggle()
-        if store.isHistoryOpen { closeAuxiliaryPanel() }
-      },
-      onAgent: { toggleAgent() },
-      onFolder: { agent.chooseDirectory() },
-      onClearFolder: { agent.setGroundingDirectory(nil) },
-      onSettings: { toggleSettings() }
-    )
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-    .padding(.leading, Theme.Size.railInset(in: windowSize.width))
+  /// The current board's display name for the standard-window pill (never empty, capped so the
+  /// pill hugs its content instead of stretching).
+  private var currentBoardName: String {
+    let name = store.current?.title.trimmed ?? ""
+    guard !name.isEmpty else { return "Untitled" }
+    return name.count > 32 ? String(name.prefix(32)) + "\u{2026}" : name
   }
 
-  private func toolbar(
-    fit innerSize: CGSize,
-    windowSize: CGSize,
-    cardSize: CGSize,
-    workspaceCenterX: CGFloat
-  ) -> some View {
-    CanvasToolbar(
-      tool: $tool,
-      zoomPercent: Int((effectiveScale * 100).rounded()),
-      onCopy: { describeBoard() },
-      onCopyBoard: { copyBoard() },
-      isCopying: isDescribing,
-      isCopyingBoard: isCopyingBoard,
-      onZoomOut: { zoom(0.8, anchoredAt: zoomAnchor) },
-      onZoomIn: { zoom(1.25, anchoredAt: zoomAnchor) },
-      onZoomReset: { withAnimation(Theme.Motion.accessory) { scale = 1 } },
-      onFit: { withAnimation(Theme.Motion.accessory) { fitBoard(in: innerSize) } }
-    )
-    // The board's host window narrows for Agent/Settings, but the toolbar belongs to the complete
-    // composed workspace. `workspaceCenterX` is supplied by the AppKit controller in board-window
-    // coordinates, so the controls remain centered across both panels.
-    .frame(width: cardSize.width, alignment: .top)
-    .frame(maxHeight: .infinity, alignment: .top)
-    .offset(x: workspaceCenterX - cardSize.width / 2)
-    .padding(.top, Theme.Size.toolbarInset(in: windowSize.height))
+  /// The board pill floats top-left after the traffic lights. At rest it is just the current
+  /// board's name; hovering grows it into the board manager — every board with rename/delete,
+  /// plus a New board row.
+  private func boardSwitcherPill(in size: CGSize) -> some View {
+    boardPickerMenu
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .padding(.top, WindowChrome.edgeInset)
+      .padding(.leading, WindowChrome.trafficLightInset)
+      .zIndex(60)
   }
 
-  @ViewBuilder
-  private func historyListOverlay(in size: CGSize) -> some View {
-    if store.isHistoryOpen {
-      ZStack {
-        Color.clear.contentShape(Rectangle()).onTapGesture { store.isHistoryOpen = false }
-        HistoryList(
-          store: store,
-          onPick: { pickBoard($0) },
-          onDelete: { deleteBoard($0) },
-          onRename: { renameBoard($0, to: $1) },
-          onNew: { newBoard() }
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .padding(.leading, Theme.Size.railGutter(in: size.width) + size.width * 0.004)
+  /// The board picker is ONE glass container. At rest it is just the current board's name; on
+  /// hover the same surface grows downward into the board manager — every board with
+  /// rename/delete, plus a New board row. No second popover, no gap: the pill itself expands.
+  private var boardPickerMenu: some View {
+    VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+      Text(currentBoardName)
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .lineLimit(1)
+        .padding(.horizontal, WindowChrome.labelPadH)
+        .frame(height: WindowChrome.controlHeight)
+
+      if boardPickerOpen {
+        // The expanded manager keeps a fixed width — it must never inherit the window's.
+        VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+          Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+
+          ScrollView {
+            LazyVStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+              ForEach(store.dumps, id: \.persistentModelID) { dump in
+                BoardPickerRow(
+                  title: dump.title.isEmpty ? "Untitled" : String(dump.title.prefix(40)),
+                  isCurrent: dump.persistentModelID == store.currentID,
+                  onPick: {
+                    Haptics.level()
+                    boardPickerOpen = false
+                    pickBoard(dump.persistentModelID)
+                  },
+                  onRename: { renameBoard(dump.persistentModelID, to: $0) },
+                  // The last board can't be deleted — it can still be renamed.
+                  onDelete: store.dumps.count > 1 ? { deleteBoard(dump.persistentModelID) } : nil,
+                  onManaging: { boardPickerPinned = $0 }
+                )
+              }
+            }
+          }
+          .frame(maxHeight: 320)
+          .fixedSize(horizontal: false, vertical: true)
+
+          Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+          newBoardRow
+        }
+        .frame(width: 248)
       }
-      .transition(.opacity)
+    }
+    .padding(.horizontal, WindowChrome.padH)
+    .padding(.vertical, WindowChrome.padV)
+    .composerPopupSurface()
+    .onHover { setBoardPickerHover($0) }
+    .animation(.easeOut(duration: 0.16), value: boardPickerOpen)
+    .help(boardPickerOpen ? "" : "Switch board")
+  }
+
+  /// Full-width "New board" action pinned under the list.
+  private var newBoardRow: some View {
+    Button {
+      Haptics.generic()
+      boardPickerOpen = false
+      newBoard()
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
+        Text("New board").font(WindowChrome.labelFont)
+      }
+      .foregroundStyle(Theme.Palette.body)
+      .frame(maxWidth: .infinity)
+      .frame(height: 30)
+      .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.rowFill))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help("New board  ⌘N")
+  }
+
+  /// Opening is immediate; closing waits a beat so crossing the pill→list gap doesn't flicker.
+  /// A pinned panel (inline rename / delete confirm in progress) never closes on hover-out.
+  private func setBoardPickerHover(_ hovering: Bool) {
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    if hovering {
+      boardPickerOpen = true
+    } else {
+      let work = DispatchWorkItem { if !boardPickerPinned { boardPickerOpen = false } }
+      boardPickerCloseWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+    }
+  }
+
+  /// The agent toggle floats as its own pill in the top-right. Board reading/exporting belongs to
+  /// the agent and the local Canvas API now — the old Describe/Copy buttons are gone.
+  private func boardActionsPill(in size: CGSize) -> some View {
+    SidebarAgentButton(active: showAgent) { toggleAgent() }
+    .chromePill()
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+    .padding(.top, WindowChrome.edgeInset)
+    .padding(.trailing, WindowChrome.edgeInset)
+  }
+
+  /// Standard-window mode: ONE bottom-center command bar carrying everything hands-on —
+  /// zoom · tools · folder/settings — tldraw-style, so the top stays calm (identity left,
+  /// AI actions right) and the bottom is a single strong grouping instead of scattered pills.
+  private func bottomCommandBar(fit innerSize: CGSize) -> some View {
+    let grounded = !groundingPath.isEmpty
+    let folderName = grounded ? URL(fileURLWithPath: groundingPath).lastPathComponent : nil
+    return HStack(spacing: WindowChrome.itemSpacing) {
+      SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out") { zoom(0.8, anchoredAt: zoomAnchor) }
+      Button(action: { Haptics.tap(); withAnimation(Theme.Motion.accessory) { scale = 1 } }) {
+        Text("\(Int((effectiveScale * 100).rounded()))%")
+          .font(WindowChrome.labelFont.monospacedDigit())
+          .foregroundStyle(Theme.Palette.chromeText)
+          .frame(width: 44, height: WindowChrome.controlHeight)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help("Reset to 100%")
+      SidebarButton(symbol: "plus.magnifyingglass", help: "Zoom in") { zoom(1.25, anchoredAt: zoomAnchor) }
+      SidebarButton(symbol: "arrow.up.left.and.down.right.magnifyingglass", help: "Fit board") {
+        withAnimation(Theme.Motion.accessory) { fitBoard(in: innerSize) }
+      }
+
+      barDivider
+
+      CanvasToolbar(tool: $tool)
+
+      barDivider
+
+      SidebarButton(symbol: grounded ? "folder.fill" : "folder.badge.plus",
+                    help: folderName.map { "Agent grounded in \($0)  ·  click to change" }
+                      ?? "Ground the agent in a folder it can read",
+                    active: grounded) { agent.chooseDirectory() }
+        .contextMenu {
+          if grounded {
+            Button("Change Folder\u{2026}") { agent.chooseDirectory() }
+            Button("Remove Grounding", role: .destructive) { agent.setGroundingDirectory(nil) }
+          } else {
+            Button("Ground in Folder\u{2026}") { agent.chooseDirectory() }
+          }
+        }
+      SidebarButton(symbol: "gearshape", help: "Settings  ⌘,",
+                    active: store.isSettingsOpen) { toggleSettings() }
+    }
+    .chromePill()
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+    .padding(.bottom, WindowChrome.edgeInset)
+  }
+
+  private var barDivider: some View {
+    Rectangle().fill(Theme.Palette.chromeDivider)
+      .frame(width: 1, height: 20)
+      .padding(.horizontal, 4)
+  }
+
+  /// Agent and Settings float over the canvas as glass panels (top-right, full-height).
+  /// One slot — they never co-exist.
+  @ViewBuilder
+  private func dockOverlay(in size: CGSize) -> some View {
+    let width = min(360, max(300, size.width * 0.32))
+    if showAgent {
+      AgentDock(agent: agent, width: width, onClose: { toggleAgent() })
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        .padding(.top, size.height * 0.10)
+        .padding(.trailing, WindowChrome.edgeInset)
+        // Stop above the bottom command bar rather than covering its right end.
+        .padding(.bottom, WindowChrome.edgeInset + WindowChrome.controlHeight + WindowChrome.padV * 2 + 8)
+        .shadow(color: Theme.Shadow.panel.color, radius: Theme.Shadow.panel.radius, y: Theme.Shadow.panel.y)
+        .transition(.move(edge: .trailing).combined(with: .opacity))
+        .zIndex(40)
+    } else if store.isSettingsOpen {
+      SettingsOverlay(width: width, onClose: { toggleSettings() })
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        .padding(.top, size.height * 0.10)
+        .padding(.trailing, WindowChrome.edgeInset)
+        // Stop above the bottom command bar rather than covering its right end.
+        .padding(.bottom, WindowChrome.edgeInset + WindowChrome.controlHeight + WindowChrome.padV * 2 + 8)
+        .shadow(color: Theme.Shadow.panel.color, radius: Theme.Shadow.panel.radius, y: Theme.Shadow.panel.y)
+        .transition(.move(edge: .trailing).combined(with: .opacity))
+        .zIndex(40)
     }
   }
 
@@ -703,8 +815,7 @@ struct ComposerCanvas: View {
   /// gear while Settings is up closes it again. (⌘, and the menu-bar item still always open.)
   private func toggleSettings() {
     if store.isSettingsOpen {
-      store.isSettingsOpen = false
-      NotificationCenter.default.post(name: .composerDismissDock, object: nil)
+      withAnimation(Theme.Motion.accessory) { store.isSettingsOpen = false }
     } else {
       openSettings()
     }
@@ -713,20 +824,18 @@ struct ComposerCanvas: View {
   private func openSettings() {
     store.isHistoryOpen = false
     store.compiledDraft = nil
-    showAgent = false
-    store.isSettingsOpen = true
-    NotificationCenter.default.post(
-      name: .composerPresentDock,
-      object: nil,
-      userInfo: ["kind": ComposerDockKind.settings.rawValue]
-    )
+    withAnimation(Theme.Motion.accessory) {
+      showAgent = false
+      store.isSettingsOpen = true
+    }
   }
 
   private func closeAuxiliaryPanel() {
     guard showAgent || store.isSettingsOpen else { return }
-    showAgent = false
-    store.isSettingsOpen = false
-    NotificationCenter.default.post(name: .composerDismissDock, object: nil)
+    withAnimation(Theme.Motion.accessory) {
+      showAgent = false
+      store.isSettingsOpen = false
+    }
   }
 
   // MARK: Command palette (⌘K)
@@ -796,8 +905,6 @@ struct ComposerCanvas: View {
     var commands: [PaletteCommand] = [
       PaletteCommand(id: "new-board", title: "New board", symbol: "square.and.pencil", shortcut: "⌘N") { newBoard() },
       PaletteCommand(id: "compile", title: "Compile board into one draft", symbol: "wand.and.stars", shortcut: "⌘R") { runCompile() },
-      PaletteCommand(id: "copy", title: "Copy whole board", subtitle: "Self-contained · connectors resolved", symbol: "doc.on.doc", shortcut: "⌘⇧C") { copyBoard() },
-      PaletteCommand(id: "describe", title: "Copy board description with Claude", symbol: "doc.text.magnifyingglass") { describeBoard() },
       PaletteCommand(id: "capture", title: "Capture screen to board", subtitle: "Read on-device into an agent-ready card", symbol: "text.viewfinder", shortcut: ShortcutStore.shared.captureShortcut.displayString) {
         NotificationCenter.default.post(name: .composerCaptureToBoard, object: nil)
       },
@@ -818,7 +925,7 @@ struct ComposerCanvas: View {
     return commands
   }
 
-  // MARK: Compile + copy + refine
+  // MARK: Compile + refine
 
   /// Collapse the whole board into one ordered, paste-ready draft.
   private func runCompile() {
@@ -842,134 +949,6 @@ struct ComposerCanvas: View {
       }
       isWorking = false
     }
-  }
-
-  /// Copy the whole board as one self-contained block (connectors expanded, and — when the user has
-  /// opted in and confirmed — `$(command)` substitution and `name=(value)` variables run at copy).
-  private func copyBoard() {
-    guard !isCopyingBoard else { return }
-    let plain = board.joinedPlainText()
-    guard !plain.trimmed.isEmpty else {
-      show(Toast(text: "Nothing to copy yet", symbol: "doc.on.doc", tint: .orange))
-      return
-    }
-    let connectors = AppToken.scan(plain).filter { $0.selection != nil }.count
-    let shellCommands = ShellTemplate.commands(in: plain)
-    board.failedShellCommands = []   // a fresh copy clears last run's failure marks
-
-    // Shell only runs behind the opt-in toggle, and even then each copy confirms what will execute.
-    var runShell = false
-    if !shellCommands.isEmpty, ComposerPreferences.resolveShellAtCopy {
-      guard confirmRunShellCommands(shellCommands) else {
-        show(Toast(text: "Copy cancelled \u{00b7} commands not run", symbol: "xmark.circle", tint: .orange))
-        return
-      }
-      runShell = true
-    }
-
-    if runShell {
-      show(Toast(text: "Running \(shellCommands.count) command\(shellCommands.count == 1 ? "" : "s")\u{2026}", symbol: "terminal", tint: .accentColor))
-    } else if connectors > 0 {
-      show(Toast(text: "Resolving connectors\u{2026}", symbol: "arrow.triangle.2.circlepath", tint: .accentColor))
-    }
-    // Commands run in the board's grounding folder when one is set, else the user's home.
-    let commandDirectory = agent.groundingDirectory?.path ?? NSHomeDirectory()
-    isCopyingBoard = true
-    Task {
-      defer { isCopyingBoard = false }
-      let rendered = await SelfContainedRenderer.render(plain, runShell: runShell, commandDirectory: commandDirectory)
-      guard !rendered.text.trimmed.isEmpty else {
-        show(Toast(text: "Composer rendered no text from the non-empty board. Nothing was copied.", symbol: "exclamationmark.triangle.fill", tint: .orange))
-        return
-      }
-      guard copyToClipboard(rendered.text) else {
-        show(Toast(text: "macOS did not accept the clipboard contents. The board was not copied.", symbol: "exclamationmark.triangle.fill", tint: .orange))
-        return
-      }
-      if !rendered.failures.isEmpty {
-        // Mark the commands that failed so their `$(…)` tokens light up amber on the board.
-        board.failedShellCommands = Set(shellCommands.filter { command in
-          rendered.failures.contains { $0.hasPrefix("`\(command)`") }
-        })
-        show(Toast(
-          text: "Copied with error\(rendered.failures.count == 1 ? "" : "s"):\n" + rendered.failures.joined(separator: "\n"),
-          symbol: "exclamationmark.triangle.fill",
-          tint: .orange))
-        return
-      }
-      var resolved: [String] = []
-      if runShell { resolved.append("\(shellCommands.count) command\(shellCommands.count == 1 ? "" : "s") run") }
-      if connectors > 0 { resolved.append("\(connectors) connector\(connectors == 1 ? "" : "s") resolved") }
-      let message = resolved.isEmpty ? "Copied self-contained text" : "Copied \u{00b7} " + resolved.joined(separator: ", ")
-      show(Toast(text: message, symbol: "doc.on.doc.fill", tint: .accentColor))
-    }
-  }
-
-  /// Before running shell pulled from the board, show exactly what will execute. Returns true only
-  /// if the user clicks Run & Copy. Modal on the main thread, so the copy can't race ahead of it.
-  @MainActor
-  private func confirmRunShellCommands(_ commands: [String]) -> Bool {
-    let alert = NSAlert()
-    alert.alertStyle = .warning
-    let count = commands.count
-    alert.messageText = "Run \(count) shell command\(count == 1 ? "" : "s") before copying?"
-    let listed = commands.prefix(8).map { "•  \($0)" }.joined(separator: "\n")
-    let more = count > 8 ? "\n…and \(count - 8) more" : ""
-    alert.informativeText = "These run on your Mac now, and their output is pasted into the copied draft:\n\n\(listed)\(more)"
-    alert.addButton(withTitle: "Run & Copy")
-    alert.addButton(withTitle: "Cancel")
-    return alert.runModal() == .alertFirstButtonReturn
-  }
-
-  /// The toolbar Copy: snapshot the whole board state (text cards, shapes, diagrams, connections —
-  /// the same graph the canvas MCP `get_canvas` exposes), hand it to `claude -p`, and copy back a
-  /// self-contained description of everything the board holds.
-  private func describeBoard() {
-    guard !isWorking, !isDescribing else { return }
-    let graph = CanvasBridge.shared.snapshot()
-    guard !graph.nodes.isEmpty else {
-      show(Toast(text: "Add some cards to copy", symbol: "rectangle.dashed", tint: .orange))
-      return
-    }
-    guard let engine = preferredEngine() else {
-      show(Toast(text: unavailableEngineMessage(), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    let state: String
-    do {
-      state = try Self.encodeBoardState(graph)
-    } catch {
-      show(Toast(text: UserFacingError.message(for: error, while: "Encoding the board for Claude"), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    isDescribing = true
-    isWorking = true
-    show(Toast(text: "Describing board\u{2026}", symbol: "doc.on.doc", tint: .accentColor))
-    Task {
-      do {
-        let description = try await service.describeBoard(state: state, engine: engine, model: ModelPreferences.describeModel)
-        if copyToClipboard(description) {
-          show(Toast(text: "Copied board description", symbol: "doc.on.doc.fill", tint: .accentColor))
-        } else {
-          show(Toast(text: "macOS did not accept the clipboard contents. The board description was not copied.", symbol: "exclamationmark.triangle.fill", tint: .orange))
-        }
-      } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Describing the board with \(engine.title)"), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      }
-      isWorking = false
-      isDescribing = false
-    }
-  }
-
-  /// Encode the board graph as the pretty-printed JSON the describe prompt reads.
-  private static func encodeBoardState(_ graph: CanvasGraph) throws -> String {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    let data = try encoder.encode(graph)
-    guard let state = String(data: data, encoding: .utf8) else {
-      throw BoardDescriptionError.nonUTF8BoardState
-    }
-    return state
   }
 
   /// Refine the active card's current selection in place.
@@ -1477,13 +1456,11 @@ private struct ActiveCardOverlays: View {
   let size: CGSize
   let isWorking: Bool
   let onRefine: (HeadlessEngine) -> Void
-  let onCopy: () -> Void
   let onApplyFix: (LintFlag, String) -> Void
   let onAskClaude: (LintFlag) -> Void
 
   init(card: CardInteraction, size: CGSize, isWorking: Bool,
        onRefine: @escaping (HeadlessEngine) -> Void,
-       onCopy: @escaping () -> Void,
        onApplyFix: @escaping (LintFlag, String) -> Void,
        onAskClaude: @escaping (LintFlag) -> Void) {
     self.card = card
@@ -1493,7 +1470,6 @@ private struct ActiveCardOverlays: View {
     self.size = size
     self.isWorking = isWorking
     self.onRefine = onRefine
-    self.onCopy = onCopy
     self.onApplyFix = onApplyFix
     self.onAskClaude = onAskClaude
   }
@@ -1515,7 +1491,7 @@ private struct ActiveCardOverlays: View {
   @ViewBuilder
   private var selectionBar: some View {
     if !card.selection.isEmpty, !mentions.isOpen, !appSearch.isOpen, let rect = card.selection.rectInView {
-      SelectionActionBar(isWorking: isWorking, onRefine: onRefine, onCopy: onCopy)
+      SelectionActionBar(isWorking: isWorking, onRefine: onRefine)
         .fixedSize()
         .position(x: clamp(rect.midX, 120, max(120, size.width - 120)),
                   y: clamp(rect.minY - 22, 30, max(30, size.height - 28)))
@@ -1669,20 +1645,126 @@ private struct DragSegment: Equatable {
 
 /// The board card is derived from its own AppKit window's current viewport. The auxiliary dock is
 /// deliberately absent here: it is a sibling window managed by `PanelController`.
-private struct CanvasSurfaceLayout {
-  let cardSize: CGSize
-  let cardOrigin: CGPoint
+/// One row of the hover board picker: click to switch; hover reveals rename (pencil) and delete
+/// (trash) icons. Rename is inline; delete arms on first click (red) and fires on the second.
+private struct BoardPickerRow: View {
+  let title: String
+  let isCurrent: Bool
+  let onPick: () -> Void
+  let onRename: (String) -> Void
+  var onDelete: (() -> Void)?
+  /// True while this row is renaming or confirming a delete — pins the panel open.
+  var onManaging: (Bool) -> Void
 
-  init(windowSize: CGSize) {
-    let windowWidth = max(windowSize.width, 0)
-    let windowHeight = max(windowSize.height, 0)
-    let rail = Theme.Size.railGutter(in: windowWidth)
-    let toolbar = Theme.Size.toolbarGutter(in: windowHeight)
-    let cardWidth = max(windowWidth - rail, 1)
-    let cardHeight = max(windowHeight - toolbar, 1)
+  @State private var hovering = false
+  @State private var isRenaming = false
+  @State private var confirmingDelete = false
+  @State private var draftName = ""
+  @FocusState private var nameFocused: Bool
 
-    cardSize = CGSize(width: cardWidth, height: cardHeight)
-    cardOrigin = CGPoint(x: rail, y: toolbar)
+  var body: some View {
+    Group {
+      if isRenaming { renameRow } else { pickRow }
+    }
+    .onHover { over in
+      hovering = over
+      if !over { setConfirmingDelete(false) }
+    }
+    .animation(.easeOut(duration: 0.1), value: hovering)
+  }
+
+  private var pickRow: some View {
+    Button(action: onPick) {
+      HStack(spacing: 8) {
+        Circle()
+          .fill(isCurrent ? Theme.Palette.accent : Color.clear)
+          .frame(width: 5, height: 5)
+        Text(title)
+          .font(WindowChrome.labelFont)
+          .foregroundStyle(Theme.Palette.body)
+          .lineLimit(1)
+        Spacer(minLength: 10)
+        if hovering {
+          rowIcon("pencil", help: "Rename board", tint: nil) { beginRename() }
+          if let onDelete {
+            rowIcon("trash", help: confirmingDelete ? "Click again to permanently delete" : "Delete board",
+                    tint: confirmingDelete ? .red : nil) {
+              if confirmingDelete { onDelete() } else { setConfirmingDelete(true) }
+            }
+          }
+        }
+      }
+      .padding(.horizontal, WindowChrome.labelPadH)
+      .frame(height: 30)
+      .background(
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+          .fill(hovering ? Theme.Palette.hoverWash : Color.clear)
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+  }
+
+  private var renameRow: some View {
+    HStack(spacing: 8) {
+      Circle()
+        .fill(isCurrent ? Theme.Palette.accent : Color.clear)
+        .frame(width: 5, height: 5)
+      TextField("Board name", text: $draftName)
+        .textFieldStyle(.plain)
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .focused($nameFocused)
+        .onSubmit(commitRename)
+        .onExitCommand(perform: cancelRename)
+    }
+    .padding(.horizontal, WindowChrome.labelPadH)
+    .frame(height: 30)
+    .background(
+      RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .fill(Theme.Palette.rowFill)
+    )
+    // Defer a runloop tick: focusing straight from onAppear can miss while the panel animates in.
+    .onAppear { DispatchQueue.main.async { nameFocused = true } }
+    // Clicking away (focus leaves the field) commits, so the rename isn't lost.
+    .onChange(of: nameFocused) { _, focused in if !focused { commitRename() } }
+  }
+
+  private func rowIcon(_ symbol: String, help: String, tint: Color?, action: @escaping () -> Void) -> some View {
+    Button(action: { Haptics.tap(); action() }) {
+      Image(systemName: symbol)
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(tint ?? Theme.Palette.title)
+        .frame(width: 20, height: 20)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(help)
+  }
+
+  private func beginRename() {
+    draftName = title
+    setConfirmingDelete(false)
+    isRenaming = true
+    onManaging(true)
+  }
+
+  private func commitRename() {
+    guard isRenaming else { return }   // guard so the focus-loss path doesn't re-fire after a cancel
+    isRenaming = false
+    onManaging(false)
+    onRename(draftName)
+  }
+
+  private func cancelRename() {
+    isRenaming = false
+    onManaging(false)
+  }
+
+  private func setConfirmingDelete(_ value: Bool) {
+    guard confirmingDelete != value else { return }
+    confirmingDelete = value
+    onManaging(value)
   }
 }
 
@@ -1696,7 +1778,7 @@ private struct ElementDraftPreview: View {
     let r = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
                    width: abs(end.x - start.x), height: abs(end.y - start.y))
     path(in: r).stroke(
-      Color.accentColor.opacity(0.9),
+      Theme.Palette.accent.opacity(0.9),
       style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: dash))
   }
 
@@ -1727,15 +1809,4 @@ private struct Toast: Identifiable, Equatable {
   let text: String
   let symbol: String
   let tint: Color
-}
-
-private enum BoardDescriptionError: LocalizedError {
-  case nonUTF8BoardState
-
-  var errorDescription: String? {
-    switch self {
-    case .nonUTF8BoardState:
-      return "The encoded board state was not valid UTF-8 text, so Composer did not send it to Claude."
-    }
-  }
 }

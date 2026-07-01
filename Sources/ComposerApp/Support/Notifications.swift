@@ -1,17 +1,9 @@
 import Foundation
 
-/// The two auxiliary panels are real AppKit windows, coordinated with the board window rather
-/// than rendered inside its SwiftUI hierarchy.
-enum ComposerDockKind: String {
-  case agent
-  case settings
-}
-
 extension Notification.Name {
   static let composerToggleWindow = Notification.Name("composerToggleWindow")
   static let composerShowWindow = Notification.Name("composerShowWindow")
   static let composerDismiss = Notification.Name("composerDismiss")
-  static let composerCopy = Notification.Name("composerCopy")
   /// Fires on ⌘R / ⌘↩ — compile the whole board into one paste-ready draft.
   static let composerCompileBoard = Notification.Name("composerCompileBoard")
   /// Fires when a refine starts/ends; userInfo["busy"] gates click-away dismissal.
@@ -54,19 +46,15 @@ extension Notification.Name {
   static let composerTogglePalette = Notification.Name("composerTogglePalette")
   /// Opens the separate Settings panel (sidebar gear, ⌘, or the menu-bar item).
   static let composerShowSettings = Notification.Name("composerShowSettings")
-  /// Requests an auxiliary panel. `object` is the active `CanvasAgent` for `.agent` and
-  /// `userInfo["kind"]` is a `ComposerDockKind.rawValue`.
-  static let composerPresentDock = Notification.Name("composerPresentDock")
-  /// Requests the currently-visible auxiliary panel to close.
-  static let composerDismissDock = Notification.Name("composerDismissDock")
-  /// Sent after the panel has closed, so the board can update its toolbar/overlay state.
-  static let composerDockDismissed = Notification.Name("composerDockDismissed")
   /// Fires after ⌘+/⌘− or Settings changes the editor point size.
   static let composerFontSizeChanged = Notification.Name("composerFontSizeChanged")
   /// Fires when MentionStyleCache gains a favicon/brand color (e.g. for the Settings Apps list).
   static let composerStyleCacheUpdated = Notification.Name("composerStyleCacheUpdated")
   /// Re-bind the global summon hotkey after the user records a new shortcut in Settings.
   static let composerShortcutChanged = Notification.Name("composerShortcutChanged")
+  /// Fires when the app-wide theme (System / Light / Dark) changes — windows re-apply their
+  /// `NSAppearance` in place, no rebuild needed.
+  static let composerThemeChanged = Notification.Name("composerThemeChanged")
   /// Fires on the capture hotkey ("Snap to board") — grab a screen region, understand it on-device,
   /// and drop it on the board as an agent-ready card.
   static let composerCaptureToBoard = Notification.Name("composerCaptureToBoard")

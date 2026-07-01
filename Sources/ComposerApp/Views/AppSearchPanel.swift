@@ -131,7 +131,7 @@ struct AppSearchPanel: View {
         let on = state.githubKind == kind
         Text(kind.shortLabel)
           .font(.caption.weight(.medium))
-          .foregroundStyle(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+          .foregroundStyle(on ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(.secondary))
           .padding(.horizontal, 8).padding(.vertical, 3)
           .background(RoundedRectangle(cornerRadius: 5).fill(on ? Theme.Palette.accentFill : .clear))
           .contentShape(Rectangle())

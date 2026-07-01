@@ -735,7 +735,7 @@ private final class AnnotationToolbar: NSView {
   /// tool after a draw, so it can reflect that without a feedback loop.
   func highlight(toolIndex index: Int) {
     for (i, button) in toolButtons.enumerated() {
-      button.contentTintColor = i == index ? .controlAccentColor : NSColor.white.withAlphaComponent(0.7)
+      button.contentTintColor = i == index ? Theme.Palette.nsAccent : NSColor.white.withAlphaComponent(0.7)
     }
   }
 

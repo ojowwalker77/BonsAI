@@ -24,6 +24,10 @@ final class AgentTranscript: ObservableObject {
 
 @MainActor
 final class CanvasAgent: ObservableObject {
+  /// One agent for the app's one window — a singleton so the conversation survives canvas
+  /// rebuilds (e.g. a theme switch).
+  static let shared = CanvasAgent()
+
   /// Streaming messages live in their own observable so the board, toolbar, and ⌘K palette can
   /// observe the agent for *coarse* state (below) without re-rendering on every streamed token.
   let transcript = AgentTranscript()

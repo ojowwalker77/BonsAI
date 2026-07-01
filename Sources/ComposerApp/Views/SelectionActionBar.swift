@@ -4,7 +4,6 @@ import SwiftUI
 struct SelectionActionBar: View {
   var isWorking: Bool
   var onRefine: (HeadlessEngine) -> Void
-  var onCopy: () -> Void
 
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
   @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
@@ -43,7 +42,6 @@ struct SelectionActionBar: View {
             .frame(height: Theme.Size.actionBarItemHeight)
         }
         Divider().frame(height: 16).opacity(0.35)
-        iconAction(icon: "doc.on.doc", help: "Copy self-contained text", run: onCopy)
       }
     }
     .padding(.horizontal, 5)

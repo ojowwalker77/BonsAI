@@ -35,7 +35,7 @@ struct CompiledDraftOverlay: View {
 
   private var header: some View {
     HStack(spacing: 10) {
-      Image(systemName: "wand.and.rays").foregroundStyle(Color.accentColor)
+      Image(systemName: "wand.and.rays").foregroundStyle(Theme.Palette.accent)
       Text("Compiled draft")
         .font(.title2.weight(.semibold))
         .foregroundStyle(Theme.Palette.body)
@@ -46,7 +46,7 @@ struct CompiledDraftOverlay: View {
           Text("Copy")
         }
         .font(.body.weight(.medium))
-        .foregroundStyle(Color.accentColor)
+        .foregroundStyle(Theme.Palette.accent)
         .padding(.horizontal, 12)
         .frame(height: 30)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.Palette.accentFill))
