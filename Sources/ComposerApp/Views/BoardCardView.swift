@@ -34,7 +34,7 @@ struct BoardCardView: View {
   private var radius: CGFloat {
     switch card.elementKind {
     case .text: 12
-    case .image: 10
+    case .image: 8
     case .rectangle: 8
     default: 6
     }
@@ -682,6 +682,9 @@ private struct ImageObjectPlaceholder: View {
       Image(nsImage: image)
         .resizable()
         .scaledToFill()
+        // Clamp to the card frame so `scaledToFill` fills-and-crops within the card instead of
+        // overflowing it — the image's rounded border (and the selection ring) then hug the frame.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
           .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
