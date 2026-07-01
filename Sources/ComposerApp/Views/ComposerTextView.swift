@@ -73,12 +73,13 @@ final class ComposerTextView: NSTextView {
   // a chip (no selection), one press removes the whole run instead of a single glyph.
 
   override func deleteBackward(_ sender: Any?) {
-    if deleteChipRun(adjacentTo: selectedRange(), before: true) { return }
+    // Mid-IME-composition, Delete edits the marked candidate — let the input system own it.
+    if !hasMarkedText(), deleteChipRun(adjacentTo: selectedRange(), before: true) { return }
     super.deleteBackward(sender)
   }
 
   override func deleteForward(_ sender: Any?) {
-    if deleteChipRun(adjacentTo: selectedRange(), before: false) { return }
+    if !hasMarkedText(), deleteChipRun(adjacentTo: selectedRange(), before: false) { return }
     super.deleteForward(sender)
   }
 

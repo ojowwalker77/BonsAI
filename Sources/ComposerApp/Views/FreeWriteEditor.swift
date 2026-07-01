@@ -336,6 +336,19 @@ extension FreeWriteEditor {
     // MARK: Text change → binding + count + mention scan
     func textDidChange(_ notification: Notification) {
       guard let tv = textView else { return }
+      // IME composition (Japanese/Chinese/Korean, and dead-key accents): while marked/provisional
+      // text is on screen, NSTextView posts textDidChange on every keystroke. Reformatting the
+      // text storage (normalizeBodyRuns) or opening the @-mention menu over that provisional text
+      // corrupts the input session — it strips the IME's marked-text styling and can steal the
+      // Return that confirms a candidate — and serializing it would persist text the user may still
+      // cancel. Do only the cheap on-screen updates and defer the rest to the commit, which posts
+      // one final textDidChange with no marked text.
+      if tv.hasMarkedText() {
+        parent.onCountChange(tv.string.count)
+        updatePlaceholderVisibility()
+        reportHeight(force: true)
+        return
+      }
       normalizeBodyRuns(in: tv)
       let serialized = tv.attributedString().composerPlainText
       if parent.text != serialized { parent.text = serialized }
@@ -381,7 +394,9 @@ extension FreeWriteEditor {
       guard let tv = textView else { return }
       // Caret moved inside the editor (click-away / arrow keys) → dismiss app search.
       if parent.appSearch.isOpen { closeAppSearch() }
-      refreshMentionMenu(tv)
+      // The selection walks forward as IME marked text grows; don't re-scan for @-mentions over a
+      // half-composed candidate. The commit's textDidChange re-checks with settled text.
+      if !tv.hasMarkedText() { refreshMentionMenu(tv) }
       selectionWork?.cancel()
       let work = DispatchWorkItem { [weak self, weak tv] in
         guard let self, let tv else { return }
