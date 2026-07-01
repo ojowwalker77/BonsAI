@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The companion chat window for the canvas. You talk; it edits the board via the canvas MCP while
 /// remaining a distinct, right-docked glass panel.
@@ -125,14 +126,21 @@ struct AgentDock: View {
         .font(.callout)
         .foregroundStyle(Theme.Palette.body)
         .focused($inputFocused)
-        // Enter sends; Shift+Enter inserts a newline — the standard chat convention (Slack, Discord,
-        // Linear). `.onSubmit` fired on every Return, including Shift+Return, so a shifted Return sent
-        // instead of breaking the line. We intercept the key instead: plain Return we consume and
-        // submit; for Shift+Return we return `.ignored` so the field editor inserts the break at the
-        // caret. See https://github.com/ojowwalker77/BonsAI/issues/27.
+        // Enter sends; Shift+Enter inserts a newline at the caret — the standard chat convention
+        // (Slack, Discord, Linear). We must handle BOTH keys ourselves. Returning `.ignored` for
+        // Shift+Return (the previous fix) let the event fall through to the field editor, which on a
+        // Return selected all the text instead of breaking the line. So for Shift+Return we insert the
+        // line break directly into the focused field editor — while editing, the key window's first
+        // responder is the NSTextView backing this TextField (the panel relies on the same fact, see
+        // FloatingPanel.performKeyEquivalent). The insert routes through the normal text-change path,
+        // so `draft` updates and the field auto-grows. See https://github.com/ojowwalker77/BonsAI/issues/27.
         .onKeyPress(.return, phases: .down) { keyPress in
-          if keyPress.modifiers.contains(.shift) { return .ignored }
-          submit()
+          guard keyPress.modifiers.contains(.shift) else { submit(); return .handled }
+          if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
+            editor.insertNewlineIgnoringFieldEditor(nil)
+          } else {
+            draft.append("\n")   // fallback: no field editor in reach — append rather than drop the break
+          }
           return .handled
         }
       if agent.isRunning {
