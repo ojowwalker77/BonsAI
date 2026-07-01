@@ -17,6 +17,11 @@ under the new version heading.
   ring now hugs the image's own edge as a single clean outline. Other elements are unchanged.
 
 ### Added
+- **Agent skills for any coding agent.** BonsAI's canvas API (`127.0.0.1:7337`) now ships a portable
+  skill doc, not just a Claude Code skill. On first launch, if Claude Code, Codex CLI, and/or Cursor
+  are detected on the Mac, BonsAI offers to install the matching doc into each one's own config
+  location, so any of them can read and write the board over HTTP. Reinstall or add more anytime
+  from **Settings ▸ Connectors ▸ Agent Skills**.
 - **Model pickers for the agent chat and board description.** Choose which Claude model each runs on
   (Opus / Sonnet / Haiku). The chat picker lives in the Agent panel header and mirrors a matching
   control in **Settings ▸ Runtime ▸ Models**; describing the board has its own picker in the same

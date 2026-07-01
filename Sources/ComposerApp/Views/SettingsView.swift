@@ -161,6 +161,10 @@ private struct SettingsContent: View {
   /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
   /// visibility. Refreshed in `onAppear`; flipped false the moment the user resets.
   @State private var agentHasGrants = false
+  /// Bumped after an agent-skills install so `AgentSkillTarget.isInstalled` (a filesystem check,
+  /// not a published property) re-reads and the row badges refresh.
+  @State private var agentSkillsRevision = 0
+  @State private var agentSkillsError: String?
 
   var body: some View {
     ScrollView {
@@ -513,6 +517,8 @@ private struct SettingsContent: View {
       pageHeader("Connectors",
                  "Type @ in a card to attach live context. Copied drafts become self-contained text — the source is resolved at copy time.")
 
+      agentSkillsCard
+
       shellResolutionCard
 
       ForEach(MentionCatalog.appsByCategory, id: \.category) { group in
@@ -529,6 +535,63 @@ private struct SettingsContent: View {
         }
       }
     }
+  }
+
+  /// Lets coding agents (Claude Code, Codex CLI, Cursor) drive the board over the local canvas API.
+  /// Each row reflects a live filesystem check, not a stored preference — `agentSkillsRevision`
+  /// forces a re-read after install since SwiftUI has no other reason to invalidate this view.
+  private var agentSkillsCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("AGENT SKILLS").sectionLabel()
+      VStack(spacing: 0) {
+        ForEach(Array(AgentSkillTarget.allCases.enumerated()), id: \.element.id) { index, target in
+          if index > 0 { Divider().overlay(Theme.Palette.separator) }
+          agentSkillRow(target)
+        }
+      }
+      .padding(.horizontal, 13)
+      .settingsCard()
+      if let agentSkillsError {
+        Text(agentSkillsError)
+          .font(.caption)
+          .foregroundStyle(.orange)
+      }
+    }
+  }
+
+  private func agentSkillRow(_ target: AgentSkillTarget) -> some View {
+    let installed = { _ = agentSkillsRevision; return target.isInstalled }()
+    return HStack(spacing: 11) {
+      Image(systemName: target.symbol)
+        .font(.system(size: 15, weight: .medium))
+        .foregroundStyle(Theme.Palette.body)
+        .frame(width: 24, height: 24)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(target.displayName).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
+        Text(target.isDetected ? (installed ? "Skill installed" : "Detected on this Mac") : "Not detected")
+          .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
+      }
+      Spacer(minLength: 8)
+      Button(action: { installAgentSkill(target) }) {
+        Text(installed ? "Reinstall" : "Install")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(Theme.Palette.body)
+          .padding(.horizontal, 11)
+          .frame(height: 26)
+      }
+      .buttonStyle(SettingsPillButtonStyle())
+    }
+    .padding(.vertical, 11)
+  }
+
+  private func installAgentSkill(_ target: AgentSkillTarget) {
+    do {
+      try AgentSkillsInstaller.install(target)
+      agentSkillsError = nil
+    } catch {
+      agentSkillsError = "\(target.displayName): \(error.localizedDescription)"
+    }
+    agentSkillsRevision += 1
   }
 
   /// Opt-in for copy-time shell. Off by default; even on, every copy confirms what will run.
