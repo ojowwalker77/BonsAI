@@ -44,9 +44,11 @@ struct FinderService {
     .map(\.result)
   }
 
-  func render(_ reference: FinderReference) async -> String {
+  /// `heading` labels the rendered block — "Finder" for the `@finder` chip, "iCloud Drive" when the
+  /// `@icloud` connector reuses this same file/folder rendering.
+  func render(_ reference: FinderReference, heading: String = "Finder") async -> String {
     await Task.detached(priority: .userInitiated) {
-      Self.renderSync(reference)
+      Self.renderSync(reference, heading: heading)
     }.value
   }
 
@@ -253,16 +255,16 @@ struct FinderService {
   private static let maxFolderEntries = 90
   private static let maxFolderDepth = 3
 
-  private static func renderSync(_ reference: FinderReference) -> String {
+  private static func renderSync(_ reference: FinderReference, heading: String = "Finder") -> String {
     let url = URL(fileURLWithPath: reference.path).standardizedFileURL
     let path = url.path
     var isDirectory = ObjCBool(false)
     guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
-      return "## Finder — \(displayName(url))\nPath: \(path)\nStatus: Not found on this Mac."
+      return "## \(heading) — \(displayName(url))\nPath: \(path)\nStatus: Not found on this Mac."
     }
 
     var lines = [
-      "## Finder — \(displayName(url))",
+      "## \(heading) — \(displayName(url))",
       "Path: \(path)",
       "File URL: \(url.absoluteString)",
       "Kind: \(isDirectory.boolValue ? "Folder" : "File")",

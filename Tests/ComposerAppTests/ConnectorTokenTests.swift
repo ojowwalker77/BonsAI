@@ -27,6 +27,16 @@ final class ConnectorTokenTests: XCTestCase {
     XCTAssertEqual(AppToken.label(appID: "@notion", selection: selection), "My Spec")
   }
 
+  func testICloudTokenRoundTrips() {
+    let path = "/Users/me/Library/Mobile Documents/com~apple~CloudDocs/Specs/Q3 Plan.pdf"
+    let selection = AppSelection.icloud(FinderReference(path: path, isDirectory: false))
+    let token = AppToken.string(appID: "@icloud", selection: selection)
+    XCTAssertEqual(token, "@icloud:/Users/me/Library/Mobile%20Documents/com~apple~CloudDocs/Specs/Q3%20Plan.pdf")
+    guard case let .icloud(ref)? = AppToken.parse(token)?.selection else { return XCTFail("expected .icloud") }
+    XCTAssertEqual(ref.path, path)
+    XCTAssertEqual(AppToken.label(appID: "@icloud", selection: selection), "Q3 Plan.pdf")
+  }
+
   func testNotesTokenRoundTrips() {
     let selection = AppSelection.notes(NotesReference(id: "x-coredata://ABC-123/ICNote/p42", title: "Trip Ideas"))
     let token = AppToken.string(appID: "@notes", selection: selection)

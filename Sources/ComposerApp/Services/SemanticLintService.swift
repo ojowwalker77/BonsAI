@@ -275,6 +275,7 @@ private struct ConnectorLintContext {
   let hasContext7: Bool
   let hasGitHub: Bool
   let hasFinder: Bool
+  let hasICloud: Bool
   let hasBrowser: Bool
   let hasLinear: Bool
   let hasNotion: Bool
@@ -284,13 +285,13 @@ private struct ConnectorLintContext {
   let hasXcode: Bool
 
   private var resolvedConnectorCount: Int {
-    [hasContext7, hasGitHub, hasFinder, hasBrowser, hasLinear, hasNotion, hasNotes, hasSentry, hasFigma, hasXcode].filter { $0 }.count
+    [hasContext7, hasGitHub, hasFinder, hasICloud, hasBrowser, hasLinear, hasNotion, hasNotes, hasSentry, hasFigma, hasXcode].filter { $0 }.count
   }
 
   init(plainText: String) {
     let tokens = AppToken.scan(plainText)
     var lines: [String] = []
-    var context7 = false, github = false, finder = false, browser = false, linear = false, notion = false, notes = false, sentry = false, figma = false, xcode = false
+    var context7 = false, github = false, finder = false, icloud = false, browser = false, linear = false, notion = false, notes = false, sentry = false, figma = false, xcode = false
 
     for entry in tokens {
       switch entry.selection {
@@ -303,6 +304,9 @@ private struct ConnectorLintContext {
       case let .finder(reference):
         finder = true
         lines.append("- Finder reference selected: \(reference.path).")
+      case let .icloud(reference):
+        icloud = true
+        lines.append("- iCloud Drive reference selected: \(reference.path).")
       case let .browser(reference):
         browser = true
         lines.append("- Browser tab selected: \(reference.title.isEmpty ? reference.url : reference.title), URL \(reference.url).")
@@ -334,6 +338,7 @@ private struct ConnectorLintContext {
     self.hasContext7 = context7
     self.hasGitHub = github
     self.hasFinder = finder
+    self.hasICloud = icloud
     self.hasBrowser = browser
     self.hasLinear = linear
     self.hasNotion = notion
@@ -352,6 +357,7 @@ private struct ConnectorLintContext {
       if hasContext7, containsAny(lower, ["context7", "docs", "documentation", "api", "apis", "library", "libraries", "version", "versions", "examples"]) { return false }
       if hasGitHub, containsAny(lower, ["github", "issue", "issues", "pr", "prs", "pull request", "pull requests", "ticket", "acceptance criteria"]) { return false }
       if hasFinder, containsAny(lower, ["finder", "file", "files", "folder", "folders", "path", "local", "contents", "listing"]) { return false }
+      if hasICloud, containsAny(lower, ["icloud", "icloud drive", "cloud", "file", "files", "folder", "document", "synced"]) { return false }
       if hasBrowser, containsAny(lower, ["browser", "tab", "page", "url", "site", "website", "link", "host", "title"]) { return false }
       if hasLinear, containsAny(lower, ["linear", "issue", "issues", "ticket", "tickets", "acceptance criteria", "spec", "story", "task"]) { return false }
       if hasNotion, containsAny(lower, ["notion", "page", "doc", "docs", "spec", "rfc", "document", "wiki", "notes"]) { return false }

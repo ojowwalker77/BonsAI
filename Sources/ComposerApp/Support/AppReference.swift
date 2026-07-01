@@ -90,6 +90,8 @@ enum AppSelection: Equatable, Hashable {
   case github(kind: GitHubItemKind, url: String)
   /// A local file or folder found through Finder/Spotlight.
   case finder(FinderReference)
+  /// A file or folder from iCloud Drive — same shape as a Finder reference, rendered at copy time.
+  case icloud(FinderReference)
   /// An open browser tab, populated from Safari and Chromium browsers.
   case browser(BrowserTabReference)
   /// A Linear issue (description, status, comments, links rendered at copy time).
@@ -119,6 +121,7 @@ enum AppSelection: Equatable, Hashable {
 /// - `@github:https://github.com/owner/repo/issues/1`
 /// - `@github:https://github.com/owner/repo/pull/2`
 /// - `@finder:/Users/me/Project/README.md`
+/// - `@icloud:/Users/me/Library/Mobile Documents/com~apple~CloudDocs/Doc.pdf`
 /// - `@browser:<base64url-json>`                    (Safari/Chrome tab metadata)
 /// - `@linear:<uuid>?k=ENG-123`                      (issue uuid + identifier)
 /// - `@notion:<uuid>?t=Page%20Title`                 (page uuid + title)
@@ -141,6 +144,8 @@ enum AppToken {
     case let .github(_, url):
       return "\(appID):\(url)"
     case let .finder(reference):
+      return "\(appID):\(percentEncodePath(reference.path))"
+    case let .icloud(reference):
       return "\(appID):\(percentEncodePath(reference.path))"
     case let .browser(reference):
       return "\(appID):\(encodeJSONPayload(reference) ?? percentEncodeTokenComponent(reference.url) ?? reference.url)"
@@ -195,6 +200,8 @@ enum AppToken {
       return (appID, .github(kind: gitHubKind(forURL: payload), url: payload))
     case "@finder":
       return (appID, .finder(FinderReference(path: percentDecode(payload), isDirectory: nil)))
+    case "@icloud":
+      return (appID, .icloud(FinderReference(path: percentDecode(payload), isDirectory: nil)))
     case "@browser":
       if let reference = decodeJSONPayload(payload, as: BrowserTabReference.self) {
         return (appID, .browser(reference))
@@ -261,6 +268,8 @@ enum AppToken {
     case let .github(_, url):
       return shortGitHub(url)
     case let .finder(reference):
+      return shortPath(reference.path)
+    case let .icloud(reference):
       return shortPath(reference.path)
     case let .browser(reference):
       return shortBrowser(reference)

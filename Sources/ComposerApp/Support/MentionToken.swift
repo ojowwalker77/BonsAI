@@ -39,6 +39,7 @@ enum MentionCatalog {
   static let all: [MentionItem] = [
     // On this Mac — local context, no account
     .init(id: "@finder", title: "finder", label: "Finder", subtitle: "Local file or folder", symbol: "folder", kind: .app),
+    .init(id: "@icloud", title: "icloud", label: "iCloud Drive", subtitle: "File from iCloud Drive", symbol: "icloud", kind: .app),
     .init(id: "@notes", title: "notes", label: "Notes", subtitle: "Apple Notes note", symbol: "note.text", kind: .app),
     .init(id: "@browser", title: "browser", label: "Browser", subtitle: "Open Safari or Chromium tab", symbol: "safari", kind: .app),
     .init(id: "@xcode", title: "xcode", label: "Xcode", subtitle: "Build errors & test failures", symbol: "hammer", kind: .app),
@@ -61,7 +62,7 @@ enum MentionCatalog {
 
   /// Which category each connector belongs to (see ConnectorCategory), keyed by token id.
   static let appCategory: [String: ConnectorCategory] = [
-    "@finder": .local, "@notes": .local, "@browser": .local, "@xcode": .local,
+    "@finder": .local, "@icloud": .local, "@notes": .local, "@browser": .local, "@xcode": .local,
     "@github": .service, "@context7": .service, "@linear": .service, "@notion": .service, "@sentry": .service, "@figma": .service,
   ]
 
