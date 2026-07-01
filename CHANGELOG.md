@@ -24,8 +24,14 @@ under the new version heading.
   control in **Settings ▸ Runtime ▸ Models**; describing the board has its own picker in the same
   place. Chat defaults to **Opus**, describe defaults to **Sonnet**. The choice is passed to
   `claude --model`; Refine and Compile stay on the CLI default.
+- **Describe board now sees your images.** When describing the board, the agent opens each image
+  card by its file path and reads the picture, so the description reflects what the image actually
+  shows instead of noting "an image".
 
 ### Fixed
+- **Copying a board no longer drops image cards.** An image card now contributes its file path to
+  the copied and compiled prompt, so a coding agent can open it — and a board that holds only an
+  image no longer copies as "Nothing to copy yet".
 - **Board edits made right before quit are no longer lost.** The board autosaves on a ~400ms
   debounce, so an edit landing just before the app closed — including a `delete`/`add_text` op from
   an external agent over the canvas API — could be dropped before the pending save fired. BonsAI now

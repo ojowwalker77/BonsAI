@@ -134,9 +134,10 @@ final class BoardViewModel: ObservableObject {
 
   /// Reads the most recent text without creating a runtime/editor bundle for an off-screen card.
   func plainText(for card: CardState) -> String {
-    // A screenshot card has no editable text; it contributes its on-device "understanding" (OCR +
-    // classification) instead, so the image becomes real context for Compile, copy, and the agent.
-    if card.elementKind == .image { return card.imageUnderstanding ?? "" }
+    // An image card contributes its file path — so Copy and Compile emit a reference the reader (or a
+    // coding agent) can open, and Describe can read the actual image off disk. An image with no path
+    // yet (placeholder) contributes nothing.
+    if card.elementKind == .image { return card.imagePath ?? "" }
     return interactions[card.id]?.plainText ?? card.text
   }
 

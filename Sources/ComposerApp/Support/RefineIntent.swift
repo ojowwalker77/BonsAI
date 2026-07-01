@@ -99,6 +99,8 @@ enum BoardDescribe {
   cards and shapes (each with an id, kind, text, position, size, and `whoWrote`: 1 = the human \
   wrote or edited it, 2 = an agent drew it, 0 = unknown). `edges` are the arrows/lines that bind \
   one node to another. `readingOrder` lists node ids top-to-bottom, then left-to-right. \
+  An `image` node's `text` is the absolute file path to a picture on this Mac — open and view that \
+  file (read it) so the image's actual content is part of the description, not just "an image". \
   Read the whole graph and write ONE self-contained description of everything the board holds, so \
   someone who cannot see it understands it completely. Walk the cards in reading order; describe \
   the shapes and what the arrows connect and imply; surface the structure and relationships, not \
