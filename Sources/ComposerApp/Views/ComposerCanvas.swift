@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 /// The entire app surface: a pan/zoom board of text cards on a chromeless glass card, with a
 /// top tool toolbar and a left action rail floating in the gutters. Per-card editor chrome
@@ -17,6 +18,10 @@ struct ComposerCanvas: View {
   @State private var toast: Toast?
   @State private var lastViewportSize: CGSize = .zero
   @State private var selectionRect: CGRect?
+  /// True while an EXTERNAL image drag (Finder etc.) is hovering the canvas — drives the
+  /// drop-target treatment. In-canvas card drags never set this (onDrop's isTargeted only
+  /// fires for external content).
+  @State private var isImageDropTargeted = false
   @State private var freehandDraft: [CGPoint]?
   @State private var elementDraft: DragSegment?
   @State private var isSpacePressed = false
@@ -294,8 +299,57 @@ struct ComposerCanvas: View {
       // toolbar, editing text view). Transparent to clicks; only listens for magnify.
       PinchZoomCatcher(onZoom: handleZoom)
         .allowsHitTesting(false)
+
+      imageDropTargetOverlay
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    // Accept image files dragged in from Finder etc. onto the board. The delegate's isTargeted
+    // only fires for EXTERNAL content, so this never fights in-canvas card drags or editor drops.
+    .onDrop(
+      of: [.fileURL],
+      delegate: ImageFileDropDelegate(
+        isTargeted: $isImageDropTargeted,
+        onDrop: handleImageFileDrop
+      )
+    )
+  }
+
+  /// The drop-target treatment shown while an external image drag hovers the canvas: a dashed
+  /// accent outline inset from the edges over a subtle accent wash, plus one centered chrome pill
+  /// prompting the drop. Pointer-transparent so it never eats the drop.
+  @ViewBuilder
+  private var imageDropTargetOverlay: some View {
+    if isImageDropTargeted {
+      ZStack {
+        RoundedRectangle(cornerRadius: WindowChrome.radius, style: .continuous)
+          .fill(Theme.Palette.accent.opacity(0.06))
+          .overlay(
+            RoundedRectangle(cornerRadius: WindowChrome.radius, style: .continuous)
+              .strokeBorder(
+                Theme.Palette.accent.opacity(0.55),
+                style: StrokeStyle(lineWidth: 2, dash: [8, 6])
+              )
+          )
+          .padding(WindowChrome.edgeInset)
+
+        HStack(spacing: WindowChrome.itemSpacing) {
+          Image(systemName: "photo.badge.plus")
+            .font(WindowChrome.iconFont)
+            .foregroundStyle(Theme.Palette.chromeGlyph)
+          Text("Drop to add")
+            .font(WindowChrome.labelFont)
+            .foregroundStyle(Theme.Palette.chromeText)
+            .padding(.trailing, WindowChrome.labelPadH)
+        }
+        .frame(height: WindowChrome.controlHeight)
+        .padding(.leading, WindowChrome.labelPadH)
+        .chromePill()
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .allowsHitTesting(false)
+      .transition(.opacity)
+      .animation(.easeOut(duration: 0.15), value: isImageDropTargeted)
+    }
   }
 
   @ViewBuilder
@@ -1229,8 +1283,8 @@ struct ComposerCanvas: View {
       }
       return
     }
-    if let image = firstImage(from: pasteboard), let url = ComposerTextView.savePNG(image) {
-      board.addImageObject(path: url.path, at: boardPoint(forViewport: viewportCenter))
+    if let image = firstImage(from: pasteboard), let filename = image.ingest() {
+      board.addImageObject(path: filename, at: boardPoint(forViewport: viewportCenter))
     }
   }
 
@@ -1269,6 +1323,81 @@ struct ComposerCanvas: View {
     }
   }
 
+  /// An external drag of image files landed on the canvas at `viewportLocation`. Resolve each
+  /// provider to a file URL, ingest it OFF the main thread (like AppDelegate.captureToBoard), then
+  /// drop the card on the MainActor. The first image lands at the drop point (converted to board
+  /// coordinates); subsequent images in a multi-drop stagger so they don't stack invisibly.
+  /// `addImageObject` registers its own undo.
+  @discardableResult
+  private func handleImageFileDrop(_ providers: [NSItemProvider], at viewportLocation: CGPoint) -> Bool {
+    // Snapshot the board-space drop point now, on the main thread, before any async hop.
+    let dropPoint = boardPoint(forViewport: viewportLocation)
+
+    // SwiftUI's NSItemProvider bridging is unreliable for Finder drags on macOS — providers can
+    // arrive with no registered type identifiers at all. The AppKit drag pasteboard always holds
+    // the real file URLs during performDrop, so read it directly; the provider dance below is
+    // only a fallback for drag sources that don't populate the pasteboard.
+    let pasteboardURLs = (NSPasteboard(name: .drag).readObjects(
+      forClasses: [NSURL.self],
+      options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+    if !pasteboardURLs.isEmpty {
+      for (index, url) in pasteboardURLs.enumerated() {
+        ingestDroppedImage(url, at: Self.staggered(dropPoint, index: index))
+      }
+      return true
+    }
+
+    guard !providers.isEmpty else { return false }
+    for (index, provider) in providers.enumerated() {
+      let point = Self.staggered(dropPoint, index: index)
+      Self.loadFileURL(from: provider) { url in
+        guard let url else { return }
+        ingestDroppedImage(url, at: point)
+      }
+    }
+    return true
+  }
+
+  /// Subsequent images in a multi-drop stagger so they don't stack invisibly.
+  private static func staggered(_ point: CGPoint, index: Int) -> CGPoint {
+    CGPoint(x: point.x + CGFloat(index) * 24, y: point.y + CGFloat(index) * 24)
+  }
+
+  /// Ingest one dropped file OFF the main thread (like AppDelegate.captureToBoard), then add the
+  /// card on the MainActor. Non-image files are ignored silently (no error UI) — the filter is the
+  /// same NSImage.imageTypes conformance set the paste path uses. `addImageObject` registers undo.
+  private func ingestDroppedImage(_ url: URL, at point: CGPoint) {
+    guard url.conformsToImageType else {
+      NSLog("Composer drop: ignoring non-image file %@", url.path)
+      return
+    }
+    Task.detached(priority: .userInitiated) {
+      // Finder URLs may be security-scoped even when we can already read them; start/stop is a
+      // harmless no-op when the app isn't sandboxed, and correct if it ever is.
+      let scoped = url.startAccessingSecurityScopedResource()
+      defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+      guard let filename = AssetStore.ingest(fileURL: url) else { return }
+      await MainActor.run {
+        _ = board.addImageObject(path: filename, at: point)
+      }
+    }
+  }
+
+  /// Resolve a dropped provider to a file URL. `loadObject(ofClass: URL.self)` is unreliable for
+  /// Finder drags on macOS (the provider surfaces `public.file-url` as raw data, which that
+  /// overload won't decode), so read the raw representation first and fall back through the
+  /// shapes it's known to arrive in.
+  private static func loadFileURL(from provider: NSItemProvider, completion: @escaping (URL?) -> Void) {
+    provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+      if let url = item as? URL { completion(url); return }
+      if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) { completion(url); return }
+      if let text = item as? String, let url = URL(string: text), url.isFileURL { completion(url); return }
+      NSLog("Composer drop: could not resolve a file URL from the dropped item (%@)",
+            error?.localizedDescription ?? "no underlying error")
+      completion(nil)
+    }
+  }
+
   private func dismiss() { NotificationCenter.default.post(name: .composerDismiss, object: nil) }
 
   private func boardPoint(forViewport point: CGPoint) -> CGPoint {
@@ -1276,19 +1405,31 @@ struct ComposerCanvas: View {
             y: (point.y - pan.height) / effectiveScale)
   }
 
-  private func firstImage(from pasteboard: NSPasteboard) -> NSImage? {
-    if pasteboard.canReadObject(forClasses: [NSImage.self], options: nil),
-       let images = pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
-       let first = images.first {
-      return first
+  private enum ImageInput {
+    case file(URL)
+    case image(NSImage)
+
+    func ingest() -> String? {
+      switch self {
+      case let .file(url): return AssetStore.ingest(fileURL: url)
+      case let .image(image): return AssetStore.ingest(image: image)
+      }
     }
+  }
+
+  private func firstImage(from pasteboard: NSPasteboard) -> ImageInput? {
     let options: [NSPasteboard.ReadingOptionKey: Any] = [
       .urlReadingFileURLsOnly: true,
       .urlReadingContentsConformToTypes: NSImage.imageTypes,
     ]
     if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL],
        let url = urls.first {
-      return NSImage(contentsOf: url)
+      return .file(url)
+    }
+    if pasteboard.canReadObject(forClasses: [NSImage.self], options: nil),
+       let images = pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+       let first = images.first {
+      return .image(first)
     }
     return nil
   }
@@ -1576,6 +1717,47 @@ private struct BoardViewportInput: NSViewRepresentable {
         height: abs(end.y - start.y)
       )
     }
+  }
+}
+
+// MARK: - External image-file drop
+
+/// Accepts EXTERNAL image-file drags (Finder etc.) onto the canvas, exposing both the hover state
+/// (for the drop-target treatment) and the drop location (for board-coordinate placement).
+/// SwiftUI's plain `.onDrop(of:isTargeted:)` gives one or the other; a DropDelegate gives both.
+private struct ImageFileDropDelegate: DropDelegate {
+  @Binding var isTargeted: Bool
+  /// Called with the item providers and the drop location in canvas viewport space. Returns
+  /// whether the drop was accepted.
+  let onDrop: ([NSItemProvider], CGPoint) -> Bool
+
+  func validateDrop(info: DropInfo) -> Bool {
+    info.hasItemsConforming(to: [.fileURL])
+  }
+
+  func dropEntered(info: DropInfo) {
+    withAnimation(.easeOut(duration: 0.15)) { isTargeted = true }
+  }
+
+  func dropExited(info: DropInfo) {
+    withAnimation(.easeOut(duration: 0.15)) { isTargeted = false }
+  }
+
+  func performDrop(info: DropInfo) -> Bool {
+    withAnimation(.easeOut(duration: 0.15)) { isTargeted = false }
+    return onDrop(info.itemProviders(for: [.fileURL]), info.location)
+  }
+}
+
+private extension URL {
+  /// True when the file's own content type conforms to any image type BonsAI accepts — the same
+  /// `NSImage.imageTypes` set the paste path filters on.
+  var conformsToImageType: Bool {
+    guard let type = (try? resourceValues(forKeys: [.contentTypeKey]))?.contentType else {
+      // No resolvable type (e.g. a file that no longer exists): fall back to the extension.
+      return NSImage.imageTypes.contains { UTType($0)?.preferredFilenameExtension == pathExtension.lowercased() }
+    }
+    return NSImage.imageTypes.contains { UTType($0).map { type.conforms(to: $0) } ?? false }
   }
 }
 
