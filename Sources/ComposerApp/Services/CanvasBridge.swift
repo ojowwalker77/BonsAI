@@ -73,6 +73,17 @@ final class CanvasBridge {
       }
       return ok(["id": board.insertTextAutoPlaced(text).uuidString])
 
+    case "add_equation":
+      guard let latex = string(op["latex"]).map(stripMathDelimiters),
+            !latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return fail("missing or empty \"latex\"")
+      }
+      // Coordinates are optional: when omitted, the board auto-places without overlap.
+      if let x = double(op["x"]), let y = double(op["y"]) {
+        return ok(["id": board.insertEquation(latex, at: CGPoint(x: x, y: y)).uuidString])
+      }
+      return ok(["id": board.insertEquationAutoPlaced(latex).uuidString])
+
     case "add_shape":
       guard let kind = string(op["kind"]).flatMap(CanvasElementKind.init(rawValue:)) else {
         return fail("bad \"kind\"")
@@ -135,7 +146,12 @@ final class CanvasBridge {
 
     case "update_text":
       guard let id = uuid(op["id"]) else { return fail("bad \"id\"") }
-      board.setText(id, string(op["text"]) ?? "")
+      let text = string(op["text"]) ?? ""
+      if board.cards.first(where: { $0.id == id })?.elementKind == .equation {
+        board.setText(id, stripMathDelimiters(text))
+      } else {
+        board.setText(id, text)
+      }
       return ok()
 
     case "move":
@@ -197,6 +213,17 @@ final class CanvasBridge {
   }
 
   private func string(_ value: Any?) -> String? { value as? String }
+  private func stripMathDelimiters(_ value: String) -> String {
+    var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.hasPrefix("$$"), text.hasSuffix("$$"), text.count >= 4 {
+      text.removeFirst(2)
+      text.removeLast(2)
+    } else if text.hasPrefix("$"), text.hasSuffix("$"), text.count >= 2 {
+      text.removeFirst()
+      text.removeLast()
+    }
+    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
   private func uuid(_ value: Any?) -> UUID? { (value as? String).flatMap(UUID.init(uuidString:)) }
   private func double(_ value: Any?) -> Double? {
     if let d = value as? Double { return d }

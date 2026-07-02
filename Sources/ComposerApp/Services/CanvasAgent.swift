@@ -256,8 +256,11 @@ final class CanvasAgent: ObservableObject {
   the chat or a separate note card. Use a node "shape" of "diamond" for decision points and \
   "ellipse" for data/stores when it adds clarity. Use direction "down" for hierarchies/architecture \
   and "right" for pipelines/flows. For one-off prose use add_text and omit x/y (the board places \
-  it). If you've added cards incrementally and the board looks messy, call `tidy` to straighten \
-  everything. Treat the layout as the board's job, not yours.
+  it). For math — a derivation step, a governing equation, a formula worth staring at — use \
+  `add_equation` with raw LaTeX math-mode source (no $ delimiters); it renders typeset on the \
+  board, so never dump LaTeX into add_text where it would sit as raw markup. If you've added \
+  cards incrementally and the board looks messy, call `tidy` to straighten everything. Treat the \
+  layout as the board's job, not yours.
 
   AUTHORSHIP — every node reports `whoWrote`: 1 = the human wrote or edited it, 2 = you drew it, \
   0 = unknown. When you re-read a board you've worked on, scan for whoWrote=1 nodes first: those \

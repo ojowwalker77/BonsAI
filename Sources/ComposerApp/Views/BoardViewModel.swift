@@ -137,6 +137,10 @@ final class BoardViewModel: ObservableObject {
     // An image card contributes its file path so Copy, Compile, and Describe emit a concrete
     // reference the reader (or a coding agent) can open. An image with no path yet contributes nothing.
     if card.elementKind == .image { return card.imagePath ?? "" }
+    if card.elementKind == .equation {
+      let latex = (card.latex ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      return latex.isEmpty ? "" : "$$\(latex)$$"
+    }
     return interactions[card.id]?.plainText ?? card.text
   }
 
@@ -339,6 +343,7 @@ final class BoardViewModel: ObservableObject {
     let size: CGSize = {
       switch kind {
       case .line, .arrow, .freehand: CardState.lineSize
+      case .equation: CardState.equationSize
       case .image: CardState.shapeSize
       case .rectangle, .ellipse, .diamond: CardState.shapeSize
       case .text: CardState.defaultSize
@@ -350,7 +355,7 @@ final class BoardViewModel: ObservableObject {
         return CardState.defaultLinePoints()
       case .freehand:
         return CardState.defaultFreehandPoints()
-      case .text, .rectangle, .ellipse, .diamond, .image:
+      case .text, .rectangle, .ellipse, .diamond, .image, .equation:
         return nil
       }
     }()
@@ -381,7 +386,7 @@ final class BoardViewModel: ObservableObject {
   /// keep the two points as their endpoints; boxes use the bounding frame. Clamped to a minimum.
   @discardableResult
   func addDrawnElement(_ kind: CanvasElementKind, from start: CGPoint, to end: CGPoint) -> UUID? {
-    guard kind != .text, kind != .freehand, kind != .image else { return nil }
+    guard kind != .text, kind != .freehand, kind != .image, kind != .equation else { return nil }
     registerUndo()
     let isLine = (kind == .line || kind == .arrow)
     let minSize = isLine ? CardState.lineMinSize : CardState.shapeMinSize
@@ -508,6 +513,25 @@ final class BoardViewModel: ObservableObject {
     return card.id
   }
 
+  /// Insert an equation card carrying raw LaTeX math-mode source at a board point, without entering
+  /// edit mode — used by the canvas API so an agent can drop math without stealing the caret.
+  @discardableResult
+  func insertEquation(_ latex: String, at point: CGPoint) -> UUID {
+    registerUndo()
+    let size = CardState.equationSize
+    let card = CardState(kind: .equation, text: "", x: Double(point.x), y: Double(point.y),
+                         w: Double(size.width), h: Double(size.height), z: nextZ,
+                         latex: latex, whoWrote: nextAuthor)
+    nextZ += 1
+    cards.append(card)
+    interactions[card.id] = CardInteraction(card)
+    selectedCardIDs = [card.id]
+    primarySelectedCardID = card.id
+    editingCardID = nil
+    scheduleSave()
+    return card.id
+  }
+
   /// Replace a card's text (serialized form). The live editor re-chipifies it if mounted.
   /// Fill in an image card's on-device understanding once the OCR/classification pass finishes.
   /// Not an undoable user edit — it's the async completion of a capture, so it skips undo and just
@@ -521,6 +545,12 @@ final class BoardViewModel: ObservableObject {
   func setText(_ id: UUID, _ text: String) {
     guard let i = cards.firstIndex(where: { $0.id == id }) else { return }
     registerUndo()
+    if cards[i].elementKind == .equation {
+      cards[i].latex = text
+      cards[i].whoWrote = nextAuthor
+      scheduleSave()
+      return
+    }
     cards[i].text = text
     cards[i].whoWrote = nextAuthor
     let bundle = interaction(for: id)
@@ -528,6 +558,15 @@ final class BoardViewModel: ObservableObject {
     bundle.cachePlainText(text)
     if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w)) }
     scheduleSave()
+  }
+
+  /// Esc-cancel on an equation card: keep its committed LaTeX as-is, but if it never held any (a
+  /// freshly placed card the user backed out of), delete it — a blank equation shows nothing and,
+  /// unlike blank text, isn't a useful write-spot. Called after the draft is discarded in the view.
+  func pruneBlankEquation(_ id: UUID) {
+    guard let i = index(for: id), cards[i].elementKind == .equation else { return }
+    let committed = (cards[i].latex ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    if committed.isEmpty { delete(id) }
   }
 
   /// Height a text card needs to show `text` at `width`, measured the way the non-editing card
@@ -694,6 +733,13 @@ final class BoardViewModel: ObservableObject {
     return insertText(text, at: autoPlacePoint(for: size))
   }
 
+  /// Insert an equation and let the board pick a non-overlapping spot — used when an agent adds a
+  /// one-off math card without coordinates.
+  @discardableResult
+  func insertEquationAutoPlaced(_ latex: String) -> UUID {
+    insertEquation(latex, at: autoPlacePoint(for: CardState.equationSize))
+  }
+
   /// Append captured text from the menu bar, Services menu, URL scheme, or loopback API.
   @discardableResult
   func captureExternalText(_ text: String) -> UUID? {
@@ -723,7 +769,7 @@ final class BoardViewModel: ObservableObject {
 
   private static func isLayoutNode(_ card: CardState) -> Bool {
     switch card.elementKind {
-    case .text, .rectangle, .ellipse, .diamond, .image: return true
+    case .text, .rectangle, .ellipse, .diamond, .image, .equation: return true
     case .line, .arrow, .freehand: return false
     }
   }

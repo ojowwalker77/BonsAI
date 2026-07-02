@@ -170,8 +170,8 @@ final class FloatingPanel: NSPanel {
       NotificationCenter.default.post(name: .composerZoomReset, object: nil)
       return true
     }
-    // ⌘1–⌘8 pick a tool (select, text, rectangle, ellipse, diamond, line, arrow, freehand).
-    if flags == [.command], let raw, let index = Int(raw), (1...8).contains(index) {
+    // ⌘1–⌘9 pick a tool (select, text, rectangle, ellipse, diamond, line, arrow, freehand, equation).
+    if flags == [.command], let raw, let index = Int(raw), (1...9).contains(index) {
       NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["index": index])
       return true
     }
