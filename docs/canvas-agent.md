@@ -134,6 +134,7 @@ live board and is tagged agent-authored.
 | `draw_diagram`          | `create_diagram`| **Preferred for structure.** Declare nodes + edges in one call; the board lays them out cleanly. Returns your keys → new ids. |
 | `tidy`                  | `relayout`      | Re-flow everything into a clean layered layout.                       |
 | `add_text`              | `add_text`      | Add one text card (auto-placed if x/y omitted).                       |
+| `add_equation`          | `add_equation`  | Add one typeset LaTeX math card (auto-placed if x/y omitted).         |
 | `add_shape`            | `add_shape`     | Add a shape by bounding box (auto-placed if x/y omitted).            |
 | `set_text`              | `update_text`   | Replace a node's text by id.                                          |
 | `move_node`             | `move`          | Move a node.                                                          |

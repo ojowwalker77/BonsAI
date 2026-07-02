@@ -260,7 +260,7 @@ struct ComposerCanvas: View {
   }
 
   private func selectTool(index: Int) {
-    let order: [CanvasTool] = [.select, .text, .rectangle, .ellipse, .diamond, .line, .arrow, .freehand]
+    let order: [CanvasTool] = [.select, .text, .rectangle, .ellipse, .diamond, .line, .arrow, .freehand, .equation]
     guard index >= 1, index <= order.count else { return }
     tool = order[index - 1]
   }
@@ -451,6 +451,13 @@ struct ComposerCanvas: View {
     if kind == .text {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
         board.interaction(for: id).controller.focus()
+      }
+    } else if kind == .equation {
+      // Mirror the text tool: a placed equation is empty and useless until you type LaTeX, so
+      // drop straight into edit mode. Its editor is the SwiftUI strip below the card (no NSTextView
+      // to focus), so the same post-place delay just lets the card mount before edit mode arms it.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+        board.beginEditing(id)
       }
     }
   }
@@ -2490,6 +2497,10 @@ private struct ElementDraftPreview: View {
           }
         }
       }
+    case .equation:
+      // Equations never drag-place (click-to-place, like text), so this preview is only ever hit
+      // for exhaustiveness — a plain rounded box matches the card frame if it ever renders.
+      return Path(roundedRect: r, cornerRadius: 6)
     case .ellipse:
       return Path(ellipseIn: r)
     case .diamond:

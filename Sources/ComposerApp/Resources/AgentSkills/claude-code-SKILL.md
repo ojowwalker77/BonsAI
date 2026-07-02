@@ -53,6 +53,7 @@ escaping is correct, then send it.
 | op | required | optional | returns |
 |----|----------|----------|---------|
 | `add_text` | `text` | `x`, `y` | `id` |
+| `add_equation` | `latex` | `x`, `y` | `id` |
 | `add_shape` | `kind` (`rectangle`\|`ellipse`\|`diamond`\|`line`\|`arrow`) | `w`, `h`, `x`, `y` | `id` |
 | `create_diagram` | `nodes` | `edges`, `direction` | `nodes` (key→id map) |
 | `relayout` | — | `direction` | — |

@@ -68,7 +68,7 @@ enum CanvasMCP {
   /// Tool name → the `CanvasBridge.apply` op it maps to (get_canvas is handled directly).
   private static let opForTool: [String: String] = [
     "draw_diagram": "create_diagram", "tidy": "relayout",
-    "add_text": "add_text", "add_shape": "add_shape", "set_text": "update_text",
+    "add_text": "add_text", "add_equation": "add_equation", "add_shape": "add_shape", "set_text": "update_text",
     "move_node": "move", "resize_node": "resize", "delete_node": "delete", "connect": "connect",
     "archive": "set_archived", "supersede": "supersede",
   ]
@@ -130,6 +130,10 @@ enum CanvasMCP {
          ["direction": str("\"down\" (default) or \"right\"")], []),
     tool("add_text", "Add ONE text card. For several related cards use draw_diagram instead. Omit x/y to let the board place it without overlap; pass them only for a deliberate spot. Text may contain @-connector tokens.",
          ["text": str("Card text"), "x": num("Optional board x"), "y": num("Optional board y")], ["text"]),
+    tool("add_equation", "Add ONE equation card that renders typeset LaTeX math on the board. Omit x/y to let the board place it without overlap; pass them only for a deliberate spot.",
+         ["latex": str("LaTeX math-mode source, e.g. \\frac{d}{dt}\\langle p \\rangle = -\\langle \\nabla V \\rangle; no $ delimiters needed"),
+          "x": num("Optional board x"), "y": num("Optional board y")],
+         ["latex"]),
     tool("add_shape", "Add a shape sized by a bounding box. Omit x/y to auto-place.",
          ["kind": str("rectangle | ellipse | diamond | line | arrow"),
           "x": num("Optional top-left x"), "y": num("Optional top-left y"), "w": num("Width"), "h": num("Height")],

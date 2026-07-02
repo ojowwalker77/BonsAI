@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import SwiftMath
 import SwiftUI
 
 /// One text card on the board, with Excalidraw-style interaction:
@@ -25,6 +26,10 @@ struct BoardCardView: View {
   @GestureState private var resize: ResizeSession?
   @State private var hovering = false
   @FocusState private var labelFocused: Bool
+  /// Equation edit is a local draft (raw LaTeX, no `$` delimiters), seeded from the card and
+  /// committed on Return / click-away. Esc reverts it; a blank commit prunes the card.
+  @State private var equationDraft = ""
+  @FocusState private var equationFocused: Bool
   /// True when a plain (unmodified) press armed this card for a same-gesture move: one press then
   /// drag both selects (if needed) and moves the card, no separate "click to select, click again to
   /// move" step. A modified press (shift/command toggles selection) leaves this false so the drag
@@ -36,6 +41,7 @@ struct BoardCardView: View {
   private var radius: CGFloat {
     switch card.elementKind {
     case .text: 12
+    case .equation: 12
     case .image: 8
     case .rectangle: 8
     default: 6
@@ -48,6 +54,7 @@ struct BoardCardView: View {
   private var minH: CGFloat { card.minimumSize.height }
   private var zoom: CGFloat { max(scale, 0.01) }
   private var isTextElement: Bool { card.elementKind == .text }
+  private var isEquationElement: Bool { card.elementKind == .equation }
   /// An empty text card is just a place to write, not a placed object — so it shows no chrome.
   private var isEmptyText: Bool { isTextElement && interaction.text.trimmed.isEmpty }
   /// Suppress chrome (ring, handles, delete ✕) on an empty text card ONLY while it's being edited —
@@ -74,6 +81,7 @@ struct BoardCardView: View {
       .overlay(selectionChrome)
       .overlay(deleteButton, alignment: .topTrailing)
       .overlay(lockBadge, alignment: .topLeading)
+      .overlay(equationEditor, alignment: .bottom)
       .offset(x: liveFrame.minX * zoom, y: liveFrame.minY * zoom)
       .onHover { hovering = $0 }
       .onChange(of: interaction.text) { oldValue, newValue in
@@ -135,6 +143,12 @@ struct BoardCardView: View {
         // is layout-zoomed and stays crisp. Anchored top-left to line up with the static render.
         .frame(width: liveFrame.width, height: liveFrame.height, alignment: .topLeading)
         .scaleEffect(zoom, anchor: .topLeading)
+      } else if isEditing, isEquationElement {
+        // An equation edits live: the card body renders the DRAFT LaTeX (updating as you type),
+        // and the actual field is the glass strip below the card. No CanvasElementContent here —
+        // it would render the stale committed source instead of what you're typing.
+        EquationView(latex: equationDraft, tint: tint, zoom: zoom)
+          .allowsHitTesting(false)
       } else {
         // Non-editing cards render from the serialized plain text (tokens like "@github"), so
         // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
@@ -145,7 +159,7 @@ struct BoardCardView: View {
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)
 
-        if isEditing, !isTextElement {
+        if isEditing, !isTextElement, !isEquationElement {
           shapeLabelEditor
         }
 
@@ -216,6 +230,41 @@ struct BoardCardView: View {
       }
   }
 
+  /// The compact LaTeX editor for an equation card — a monospaced field on glass, floating just
+  /// below the card while it's being edited. Kept at screen size (not zoom-scaled) so it stays
+  /// legible and clickable at any board zoom, like the rest of the floating chrome. The card body
+  /// above renders the live preview of this same draft.
+  @ViewBuilder
+  private var equationEditor: some View {
+    if isEditing, isEquationElement {
+      TextField("\\frac{\\hbar^2}{2m} \u{2026}", text: $equationDraft)
+        .textFieldStyle(.plain)
+        .font(.system(size: 12.5, design: .monospaced))
+        .foregroundStyle(Theme.Palette.body)
+        .frame(width: max(min(liveFrame.width * zoom, 320), 200))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .composerPopupSurface()
+        .focused($equationFocused)
+        .onSubmit { commitEquationDraft() }
+        .onExitCommand { handleEscape() }
+        .onChange(of: equationFocused) { _, focused in
+          // Click-away (focus left the field while still in edit mode) commits the draft — Esc,
+          // which reverts, resigns editing first so `isEditing` is already false and this no-ops.
+          if !focused, isEditing { commitEquationDraft() }
+        }
+        .onAppear {
+          // Seed from the committed source each time edit mode arms, so reopening an equation shows
+          // its LaTeX and a freshly placed one starts empty.
+          equationDraft = card.latex ?? ""
+          DispatchQueue.main.async { equationFocused = true }
+        }
+        // Sits below the card: half the card's screen height (the .bottom anchor centerline) plus a
+        // small gap, so the strip clears the frame and its selection ring regardless of zoom.
+        .offset(y: liveFrame.height * zoom / 2 + 26)
+    }
+  }
+
   private func enterEditing() {
     board.beginEditing(card.id)
     if isTextElement {
@@ -223,10 +272,24 @@ struct BoardCardView: View {
     }
   }
 
+  /// Return / click-away commits the equation draft (already routes to `card.latex`) and leaves
+  /// edit mode. Trimmed here so a whitespace-only draft commits as empty and prunes on close.
+  private func commitEquationDraft() {
+    board.setText(card.id, equationDraft.trimmingCharacters(in: .whitespacesAndNewlines))
+    board.endEditing(card.id)
+  }
+
   private func handleEscape() {
     if isEditing {
       if isTextElement {
         interaction.controller.resignFocus()
+      } else if isEquationElement {
+        // House rule: Esc cancels the draft. Drop what was typed, end editing, then prune the card
+        // if it never held any committed LaTeX (a blank equation is nothing to show, unlike blank
+        // text which stays as an invisible write-spot).
+        equationDraft = card.latex ?? ""
+        board.endEditing(card.id)
+        board.pruneBlankEquation(card.id)
       } else {
         board.endEditing(card.id)
       }
@@ -486,6 +549,8 @@ private struct CanvasElementContent: View {
                   .help("Read on-device — this screenshot adds text to the compiled prompt")
               }
             }
+        case .equation:
+          EquationView(latex: card.latex ?? "", tint: tint, zoom: zoom)
         }
       }
 
@@ -844,6 +909,103 @@ extension EnvironmentValues {
   var exportImageProvider: ((String) -> NSImage?)? {
     get { self[ExportImageProviderKey.self] }
     set { self[ExportImageProviderKey.self] = newValue }
+  }
+}
+
+// MARK: - Equation (LaTeX) rendering
+
+/// A LaTeX math-mode equation, typeset natively by SwiftMath (CoreText, not a web view) into an
+/// NSImage that fills the card aspect-fit. Ink is the card's tint (or board body ink); an empty
+/// card shows a hint, and unparseable source falls back to the raw LaTeX rather than a blank card.
+private struct EquationView: View {
+  /// Raw math-mode source — no `$` delimiters (that's what `CardState.latex` stores).
+  let latex: String
+  /// The card's tint resolved against the active flavor, or nil for default body ink.
+  var tint: Color?
+  /// Board zoom — quantized before it reaches the renderer so a pinch doesn't re-typeset per frame.
+  var zoom: CGFloat = 1
+
+  /// Base display size at 100%; scales with the quantized zoom like the text body does.
+  private static let baseFontSize: CGFloat = 24
+
+  /// Zoom snapped to 0.25 steps and clamped 0.25…4. Deliberate: the render is keyed off this, so
+  /// it re-typesets only when you cross a step (crisp at rest) instead of on every pinch frame.
+  private var quantizedZoom: CGFloat {
+    min(max((zoom / 0.25).rounded() * 0.25, 0.25), 4)
+  }
+  private var fontSize: CGFloat { Self.baseFontSize * quantizedZoom }
+
+  /// The ink as an NSColor — the flavor's tint slots are already NSColors, and body ink has an
+  /// NSColor twin. Never a hard-coded color, so both light and dark flavors read correctly.
+  private var inkColor: NSColor {
+    tint.map { NSColor($0) } ?? Theme.nsBodyText
+  }
+
+  private var trimmed: String { latex.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+  var body: some View {
+    Group {
+      if trimmed.isEmpty {
+        // An empty equation card awaiting input — same placeholder weight as the text card's hint.
+        Text("E = mc\u{00B2}")
+          .font(.system(size: Theme.Typography.body.pointSize * zoom))
+          .foregroundStyle(Theme.Palette.placeholder)
+      } else if let image = EquationImageCache.shared.image(latex: trimmed, ink: inkColor, fontSize: fontSize) {
+        Image(nsImage: image)
+          .resizable()
+          .aspectRatio(contentMode: .fit)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .padding(10)
+      } else {
+        // Parse failure: show the raw source (never crash, never blank) with a warning glyph.
+        HStack(alignment: .firstTextBaseline, spacing: 4 * zoom) {
+          Image(systemName: "exclamationmark.triangle")
+            .font(.system(size: 11 * zoom))
+          Text(trimmed)
+            .font(.system(size: 12 * zoom, design: .monospaced))
+            .lineLimit(3)
+        }
+        .foregroundStyle(Theme.Palette.placeholder)
+        .padding(10)
+        .help("LaTeX didn't parse")
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+}
+
+/// A bounded cache of rendered equation images, modeled on `CanvasImageCache`. Keyed by
+/// latex + resolved-ink + quantized font size: theme switches rebuild the canvas so stale-flavor
+/// entries are naturally abandoned, but the ink is in the key so a live tint change still
+/// re-renders. Rendering is cheap and synchronous (CoreText), so unlike the thumbnail cache this
+/// one renders on the calling thread and just memoizes the result.
+private final class EquationImageCache {
+  static let shared = EquationImageCache()
+  private let cache = NSCache<NSString, NSImage>()
+
+  private init() {
+    cache.countLimit = 256
+  }
+
+  /// The rendered image, or nil if the LaTeX doesn't parse (an empty string never reaches here).
+  func image(latex: String, ink: NSColor, fontSize: CGFloat) -> NSImage? {
+    // Include ink components (not just the object) so a tint change re-renders; fontSize is already
+    // quantized by the caller, so the key is stable at rest.
+    let inkKey = ink.usingColorSpace(.deviceRGB) ?? ink
+    let key = "\(fontSize)|\(inkKey.redComponent),\(inkKey.greenComponent),\(inkKey.blueComponent),\(inkKey.alphaComponent)|\(latex)" as NSString
+    if let cached = cache.object(forKey: key) { return cached }
+    guard let image = Self.render(latex: latex, ink: ink, fontSize: fontSize) else { return nil }
+    cache.setObject(image, forKey: key)
+    return image
+  }
+
+  /// Typeset at 2× the target size for Retina crispness (the view aspect-fits it back down).
+  private static func render(latex: String, ink: NSColor, fontSize: CGFloat) -> NSImage? {
+    let mathImage = MTMathImage(latex: latex, fontSize: fontSize * 2, textColor: ink,
+                                labelMode: .display, textAlignment: .center)
+    let (error, image) = mathImage.asImage()
+    guard error == nil, let image, image.size.width > 0, image.size.height > 0 else { return nil }
+    return image
   }
 }
 

@@ -6,7 +6,7 @@ import Foundation
 struct CanvasGraph: Codable {
   struct Node: Codable {
     var id: String
-    /// text, rectangle, ellipse, diamond, line, arrow, freehand, image
+    /// text, rectangle, ellipse, diamond, line, arrow, freehand, image, equation (text is LaTeX in $$…$$)
     var kind: String
     /// Serialized plain text with mention tokens preserved (e.g. "@github:…"). Empty for shapes.
     var text: String

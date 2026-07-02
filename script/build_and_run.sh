@@ -46,7 +46,6 @@ pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 swift build -c "$BUILD_CONFIGURATION"
 BUILD_DIR="$(swift build -c "$BUILD_CONFIGURATION" --show-bin-path)"
 BUILD_BINARY="$BUILD_DIR/$PRODUCT_NAME"
-RESOURCE_BUNDLE="$BUILD_DIR/Composer_ComposerApp.bundle"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS"
@@ -57,14 +56,15 @@ if [[ "$BUILD_CONFIGURATION" == "release" ]]; then
   /usr/bin/strip -S "$APP_BINARY"
 fi
 chmod +x "$APP_BINARY"
-# Stage SwiftPM's resource bundle in the canonical Contents/Resources. Bundle.appResources (our
-# crash-proof resolver) looks here first, and it's the codesign-clean location the release signs and
-# notarizes — so local builds exercise the exact layout users download. Do NOT move it back to the
-# .app root: that is non-standard for a signed app and only ever worked by accident locally.
-if [[ -d "$RESOURCE_BUNDLE" ]]; then
+# Stage SwiftPM resource bundles in the canonical Contents/Resources: our app resources plus package
+# resources such as SwiftMath's math fonts. Bundle.appResources (our crash-proof resolver) looks here
+# first, and it's the codesign-clean location the release signs and notarizes — so local builds
+# exercise the exact layout users download. Do NOT move them back to the .app root: that is
+# non-standard for a signed app and only ever worked by accident locally.
+while IFS= read -r -d '' resource_bundle; do
   mkdir -p "$APP_CONTENTS/Resources"
-  cp -R "$RESOURCE_BUNDLE" "$APP_CONTENTS/Resources/"
-fi
+  cp -R "$resource_bundle" "$APP_CONTENTS/Resources/"
+done < <(find "$BUILD_DIR" -maxdepth 1 -type d -name "*.bundle" -print0)
 
 # Sparkle auto-updater. SwiftPM links Sparkle but does not bundle it into our hand-staged .app, so copy
 # Sparkle.framework into Contents/Frameworks and add the loader rpath that resolves @rpath/Sparkle...

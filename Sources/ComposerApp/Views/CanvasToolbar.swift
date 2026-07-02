@@ -11,6 +11,7 @@ enum CanvasTool: Equatable {
   case line
   case arrow
   case freehand
+  case equation
   case image
 
   var elementKind: CanvasElementKind? {
@@ -23,6 +24,7 @@ enum CanvasTool: Equatable {
     case .line: .line
     case .arrow: .arrow
     case .freehand: .freehand
+    case .equation: .equation
     case .image: .image
     }
   }
@@ -63,6 +65,8 @@ struct CanvasToolbar: View {
                  active: tool == .arrow, shortcut: 7) { tool = .arrow }
       ToolButton(symbol: "scribble.variable", help: "Freehand stroke  ·  drag to draw  ⌘8",
                  active: tool == .freehand, shortcut: 8) { tool = .freehand }
+      ToolButton(symbol: "x.squareroot", help: "Equation  ·  click the board, then type LaTeX  ⌘9",
+                 active: tool == .equation, shortcut: 9) { tool = .equation }
     }
   }
 }
