@@ -1,12 +1,15 @@
 import SwiftUI
 
 /// The card that appears when you hover an underlined ambiguity. Shows the one
-/// clarifying question, offers one-tap drop-in fixes, and can escalate to Claude.
+/// clarifying question, offers one-tap drop-in fixes, and can escalate to the chat agent.
 /// Styled to match `MentionMenu` / `SelectionActionBar` so it reads as part of the app.
 struct LintPopover: View {
   let flag: LintFlag
+  /// The engine the "Refine with …" escalation runs on (the resolved Chat Agent pick). `nil` when no
+  /// engine is enabled + installed — the escalate row is hidden, leaving just the question + fixes.
+  let escalationEngine: HeadlessEngine?
   var onPick: (String) -> Void
-  var onAskClaude: () -> Void
+  var onEscalate: () -> Void
   /// Reports its own hover so the coordinator can keep it alive across the gap.
   var onHover: (Bool) -> Void
 
@@ -26,8 +29,10 @@ struct LintPopover: View {
         .padding(.vertical, 4)
       }
 
-      hairline
-      askClaudeButton
+      if let engine = escalationEngine {
+        hairline
+        escalateButton(engine)
+      }
     }
     .frame(width: 300, alignment: .leading)
     .composerPopupSurface()
@@ -81,11 +86,11 @@ struct LintPopover: View {
     .buttonStyle(HoverButtonStyle())
   }
 
-  private var askClaudeButton: some View {
-    Button(action: onAskClaude) {
+  private func escalateButton(_ engine: HeadlessEngine) -> some View {
+    Button(action: onEscalate) {
       HStack(spacing: 7) {
-        EngineLogo(engine: .claude)
-        Text("Refine with Claude").font(Theme.Typography.actionLabel)
+        EngineLogo(engine: engine)
+        Text("Refine with \(engine.title)").font(Theme.Typography.actionLabel)
         Spacer(minLength: 0)
       }
       .foregroundStyle(Theme.Palette.body)

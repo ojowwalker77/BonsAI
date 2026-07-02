@@ -12,9 +12,18 @@ struct AgentDock: View {
   var onClose: () -> Void
   @State private var draft = ""
   @FocusState private var inputFocused: Bool
-  /// The model the agent runs on. Shares its key with the Settings ▸ Runtime picker, so the two
-  /// always read back the same value (see [[ModelPreferences]]); `CanvasAgent` reads it at send.
+  /// The Claude model the agent runs on when the chat is on Claude. Shares its key with the Settings ▸
+  /// Runtime picker, so the two always read back the same value (see [[ModelPreferences]]); Codex and
+  /// OpenCode use their own picks below. `CanvasAgent` reads it at send.
   @AppStorage(ModelPreferences.chatModelKey) private var chatModel: ClaudeModel = ModelPreferences.defaultChatModel
+  /// Which engine the streaming chat runs on. Empty ⇒ auto (preference order). Mirrored by
+  /// `CanvasAgent.resolvedEngine()` and the leading `AgentEngineIcon`.
+  @AppStorage(EnginePreferences.chatEngineKey) private var chatEngineRaw = ""
+  /// Per-engine model picks (empty ⇒ that engine's own default). Same keys `CanvasChatEngine` reads.
+  @AppStorage("model.chat.codex") private var codexModelRaw = ""
+  @AppStorage("model.chat.opencode") private var opencodeModelRaw = ""
+  @ObservedObject private var capabilities = EngineCapabilityStore.shared
+  @ObservedObject private var modelCatalog = ChatModelCatalog.shared
 
   /// Keep the grounding chip compact: at most 12 characters, then an ellipsis.
   static func trimmed(_ name: String) -> String {
@@ -83,6 +92,7 @@ struct AgentDock: View {
         }
 
       HStack(spacing: 6) {
+        engineChip
         modelChip
         groundingChip
         Spacer(minLength: 8)
@@ -93,11 +103,62 @@ struct AgentDock: View {
     .background(RoundedRectangle(cornerRadius: WindowChrome.radius, style: .continuous).fill(Theme.Palette.rowFill))
     .overlay(RoundedRectangle(cornerRadius: WindowChrome.radius, style: .continuous).strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
     .padding(12)
-    .onAppear { inputFocused = true }
+    .onAppear {
+      inputFocused = true
+      // Prefetch OpenCode's model list so its picker is populated before it's opened (a Menu's own
+      // onAppear is unreliable). Cheap and cached.
+      modelCatalog.loadOpenCodeModelsIfNeeded()
+    }
   }
 
-  /// Quiet model selector chip: the current model + a chevron, checkmarked menu on click.
+  /// The engines the chat can run on right now: enabled in Settings *and* installed on this Mac.
+  private var availableEngines: [HeadlessEngine] {
+    HeadlessEngine.allCases.filter { EnginePreferences.isEnabled($0) && capabilities.isAvailable($0) }
+  }
+
+  /// A quiet capsule menu — same idiom as the model chip — to switch which coding-agent CLI backs the
+  /// chat. Only shown when there's a real choice (2+ engines ready); with one engine the header's
+  /// brand mark already says which. Picking writes the shared `engine.chat.selected` preference.
+  @ViewBuilder
+  private var engineChip: some View {
+    let engines = availableEngines
+    if engines.count >= 2, let active = CanvasAgent.resolvedEngine() {
+      Menu {
+        Picker("Engine", selection: Binding(get: { active }, set: { chatEngineRaw = $0.rawValue })) {
+          ForEach(engines, id: \.self) { engine in Text(engine.title).tag(engine) }
+        }
+      } label: {
+        HStack(spacing: 4) {
+          EngineLogo(engine: active)
+          Text(active.title).font(.caption.weight(.medium)).lineLimit(1).fixedSize()
+          Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+        }
+        .foregroundStyle(Theme.Palette.menuDesc)
+        .padding(.horizontal, 9).frame(height: 22)
+        .background(Capsule().fill(Theme.Palette.keycapFill))
+        .contentShape(Capsule())
+      }
+      .menuStyle(.button)
+      .buttonStyle(.plain)
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .help("Engine for the agent chat — Claude, Codex, or OpenCode")
+    }
+  }
+
+  /// The model chip for whichever engine is active: Claude keeps its Opus/Sonnet/Haiku tiers; Codex
+  /// and OpenCode get a provider/model picker (`opencode models`; the Codex config model).
+  @ViewBuilder
   private var modelChip: some View {
+    switch CanvasAgent.resolvedEngine() {
+    case .claude, .none: claudeModelChip
+    case .codex: engineModelChip(.codex, selection: $codexModelRaw)
+    case .opencode: engineModelChip(.opencode, selection: $opencodeModelRaw)
+    }
+  }
+
+  /// Quiet Claude model selector chip: the current tier + a chevron, checkmarked menu on click.
+  private var claudeModelChip: some View {
     Menu {
       Picker("Model", selection: $chatModel) {
         ForEach(ClaudeModel.allCases) { model in
@@ -105,20 +166,52 @@ struct AgentDock: View {
         }
       }
     } label: {
-      HStack(spacing: 4) {
-        Text(chatModel.title).font(.caption.weight(.medium)).lineLimit(1).fixedSize()
-        Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
-      }
-      .foregroundStyle(Theme.Palette.menuDesc)
-      .padding(.horizontal, 9).frame(height: 22)
-      .background(Capsule().fill(Theme.Palette.keycapFill))
-      .contentShape(Capsule())
+      chipLabel { Text(chatModel.title).font(.caption.weight(.medium)).lineLimit(1).fixedSize() }
     }
     .menuStyle(.button)
     .buttonStyle(.plain)
     .menuIndicator(.hidden)
     .fixedSize()
     .help("Model for the agent chat — mirrors Settings ▸ Runtime")
+  }
+
+  /// A provider/model chip for Codex / OpenCode, styled like the Claude chip. "Default" leaves the
+  /// engine on its own default; OpenCode's list comes from `opencode models`.
+  @ViewBuilder
+  private func engineModelChip(_ engine: HeadlessEngine, selection raw: Binding<String>) -> some View {
+    let label = raw.wrappedValue.isEmpty ? "Default" : Self.shortModel(raw.wrappedValue)
+    Menu {
+      Picker("Model", selection: raw) {
+        Text("Default").tag("")
+        ForEach(modelCatalog.models(for: engine), id: \.self) { Text(Self.shortModel($0)).tag($0) }
+      }
+    } label: {
+      chipLabel { Text(label).font(.caption.weight(.medium)).lineLimit(1).fixedSize() }
+    }
+    .menuStyle(.button)
+    .buttonStyle(.plain)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .help("Model for \(engine.title) — from its provider list")
+    .onAppear { if engine == .opencode { modelCatalog.loadOpenCodeModelsIfNeeded() } }
+  }
+
+  /// The shared chip shell: content + chevron in a keycap capsule, matching the grounding chip.
+  private func chipLabel<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    HStack(spacing: 4) {
+      content()
+      Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+    }
+    .foregroundStyle(Theme.Palette.menuDesc)
+    .padding(.horizontal, 9).frame(height: 22)
+    .background(Capsule().fill(Theme.Palette.keycapFill))
+    .contentShape(Capsule())
+  }
+
+  /// Compact model label: the id's last path component, clamped. `opencode/big-pickle` → `big-pickle`.
+  private static func shortModel(_ id: String) -> String {
+    let name = id.split(separator: "/").last.map(String.init) ?? id
+    return name.count > 16 ? String(name.prefix(16)) + "\u{2026}" : name
   }
 
   /// Grounding chip: folder name (click to change) + ✕ to un-ground; a quiet add-chip when unset.

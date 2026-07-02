@@ -1,44 +1,66 @@
 import Foundation
 
-/// Minimal MCP (Model Context Protocol) server over the local HTTP transport, so a headless
-/// `claude` agent — pointed at http://127.0.0.1:<port>/mcp — can read and drive the canvas with
-/// real tools. Stateless JSON-RPC: each POST is one request, answered with one JSON response.
-/// Tools surface to the agent as `mcp__canvas__<name>`.
-@MainActor
+/// Minimal MCP (Model Context Protocol) server over the local HTTP transport, so a headless coding
+/// agent — pointed at http://127.0.0.1:<port>/mcp — can read and drive the canvas with real tools.
+/// Stateless JSON-RPC: each POST is one request, answered with one JSON response. Tools surface to
+/// the agent as `mcp__canvas__<name>` (Claude) / `canvas.<name>` (Codex) / `canvas_<name>` (OpenCode).
+///
+/// The MCP handshake (`initialize` / `notifications/initialized` / `tools/list` / `ping`) touches no
+/// board state, so it is answered **off the MainActor** — see `dispatch`. This matters: Codex's Rust
+/// MCP client has a short startup handshake window, and hopping to a possibly-busy MainActor just to
+/// echo static capabilities intermittently lost the race, so the canvas server failed to register.
+/// Only `tools/call` (which reads/mutates the board via `CanvasBridge`) needs the MainActor.
 enum CanvasMCP {
   private static let fallbackProtocol = "2025-06-18"
 
-  /// Returns the JSON-RPC response, or nil for notifications (which get a 202 with no body).
-  static func handle(_ message: [String: Any]) -> [String: Any]? {
+  /// The disposition of one JSON-RPC message once the transport-level method is known.
+  enum Dispatch {
+    /// A ready JSON-RPC response the transport can send immediately (no MainActor needed).
+    case reply([String: Any])
+    /// A notification (or empty ack): the transport replies 202 with no body.
+    case notification
+    /// A `tools/call` that must run on the MainActor; the transport hops, then calls `callToolReply`.
+    case toolCall(name: String, arguments: [String: Any], id: Any?)
+  }
+
+  /// Classify a message and answer everything that doesn't touch the board, without the MainActor.
+  nonisolated static func dispatch(_ message: [String: Any]) -> Dispatch {
     let id = message["id"]
-    guard let method = message["method"] as? String else { return nil }
+    guard let method = message["method"] as? String else { return .notification }
 
     switch method {
     case "initialize":
       let version = ((message["params"] as? [String: Any])?["protocolVersion"] as? String) ?? fallbackProtocol
-      return reply(id, [
+      return .reply(reply(id, [
         "protocolVersion": version,
         "capabilities": ["tools": [String: Any]()],
         "serverInfo": ["name": "composer-canvas", "version": "0.1.0"],
-      ])
+      ]))
 
     case "ping":
-      return reply(id, [:])
+      return .reply(reply(id, [:]))
 
     case "tools/list":
-      return reply(id, ["tools": toolSpecs])
+      return .reply(reply(id, ["tools": toolSpecs]))
 
     case "tools/call":
       let params = message["params"] as? [String: Any] ?? [:]
-      return reply(id, callTool(params["name"] as? String ?? "",
-                                arguments: params["arguments"] as? [String: Any] ?? [:]))
+      return .toolCall(name: params["name"] as? String ?? "",
+                       arguments: params["arguments"] as? [String: Any] ?? [:], id: id)
 
     case let m where m.hasPrefix("notifications/"):
-      return nil
+      return .notification
 
     default:
-      return errorReply(id, code: -32601, message: "method not found: \(method)")
+      return .reply(errorReply(id, code: -32601, message: "method not found: \(method)"))
     }
+  }
+
+  /// Run one `tools/call` against the live board. MainActor-isolated because it reads/mutates canvas
+  /// state through `CanvasBridge`.
+  @MainActor
+  static func callToolReply(name: String, arguments: [String: Any], id: Any?) -> [String: Any] {
+    reply(id, callTool(name, arguments: arguments))
   }
 
   // MARK: Tools
@@ -51,6 +73,7 @@ enum CanvasMCP {
     "archive": "set_archived", "supersede": "supersede",
   ]
 
+  @MainActor
   private static func callTool(_ name: String, arguments: [String: Any]) -> [String: Any] {
     if name == "get_canvas" {
       let graph = CanvasBridge.shared.snapshot()

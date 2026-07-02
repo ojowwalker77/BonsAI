@@ -5,13 +5,14 @@
 > This document is the map of which engine runs where, how each is invoked, and
 > how one gets picked — and how to add another.
 
-There are three engines today — two CLI, one on-device — each earning its place
+There are four engines today — three CLI, one on-device — each earning its place
 on a different surface:
 
 | Engine                 | CLI / runtime                | Where it's used                                          | Mode                 |
 | ---------------------- | ---------------------------- | ------------------------------------------------------- | -------------------- |
 | **Claude Code**        | `claude -p`                  | Refine, Compile, **and** the in-canvas chat agent       | one-shot + streaming |
-| **Codex**              | `codex exec`                 | Refine, Compile (read-only sandbox; no streaming agent) | one-shot             |
+| **Codex**              | `codex exec`                 | Refine, Compile, **and** the in-canvas chat agent       | one-shot + streaming |
+| **OpenCode**           | `opencode run`               | Refine, Compile, **and** the in-canvas chat agent       | one-shot + streaming |
 | **Apple Intelligence** | on-device Foundation Models  | the semantic linter (only)                              | on-device, in-process |
 
 Two facts to anchor on before the details, because they're the things people
@@ -19,9 +20,9 @@ assume wrong:
 
 1. **The CLI engines run through one shared layer built for more.** Engine choice
    runs through a small enum + preference + capability machinery (below) that's
-   deliberately multi-engine — Claude and Codex are just the two `case`s wired up
-   today. Adding OpenCode, Pi, or another agent CLI is a well-scoped change — see
-   [Adding an engine](#adding-an-engine).
+   deliberately multi-engine — Claude, Codex, and OpenCode are the three `case`s
+   wired up today, on **both** surfaces. Adding Pi or another agent CLI is a
+   well-scoped change — see [Adding an engine](#adding-an-engine).
 2. **Apple Intelligence is *not* a fallback for chat or refine.** It is a
    separate, in-process, on-device path that today powers exactly one feature —
    the [semantic linter](semanticlinter.md). See
@@ -57,17 +58,28 @@ engine's invocation (and any **headless/non-interactive flags** it needs) is one
 new `case` here. Failure handling is deliberately blunt: a non-zero exit becomes
 the trimmed stderr surfaced as a toast; empty stdout is treated as failure too.
 
-One of these — **Describe board** (the toolbar copy that summarizes the whole
-board graph) — passes its own `--model`, read from
-[`ModelPreferences`](../Sources/ComposerApp/Support/ModelPreferences.swift)
-(default Sonnet, picked in Settings ▸ Runtime ▸ Models). Refine and Compile pass
-no `--model` and stay on the CLI's own default.
+Refine and Compile pass no `--model`, so they stay on the CLI's own default; the
+per-engine provider + model pick applies to the streaming chat agent (Path 2). The
+one-shot `run(...)` still takes an optional `model`, but no current caller sets it.
 
 ### Path 2 — streaming canvas agent ([`CanvasAgent`](../Sources/ComposerApp/Services/CanvasAgent.swift))
 
-This is the conversational agent in the dock. Each turn spawns `claude` in
-`stream-json` mode with the **canvas MCP server attached**, so the agent can read
-and reshape the board live while it talks. The invocation:
+This is the conversational agent in the dock. Each turn spawns the selected engine
+in a streaming-JSON mode with the **canvas MCP server attached**, so the agent can
+read and reshape the board live while it talks. `CanvasAgent` owns the process
+lifecycle, the transcript, and the run-token that guards a superseded turn; the
+per-engine differences — how to build the invocation and how to parse the stream —
+live behind a [`CanvasChatEngine`](../Sources/ComposerApp/Services/CanvasChatEngine.swift)
+adapter (`ClaudeChatEngine` / `CodexChatEngine` / `OpenCodeChatEngine`). Each adapter
+turns its CLI's stream into the same normalized `AgentStreamEvent`s
+(`assistantText` / `toolSummary` / `session`), so one transcript renders them all.
+The engine is chosen at send time by `CanvasAgent.resolvedEngine()` — the user's
+pick from the Agent-dock engine picker when it's enabled and installed, otherwise
+the first enabled + installed engine in preference order.
+
+The three invocations, same board over the same loopback MCP endpoint:
+
+**Claude** — `stream-json` + MCP over `--mcp-config`, plus the permission arbiter:
 
 ```text
 claude -p "<prompt>"
@@ -85,8 +97,8 @@ What each piece buys us:
   [`ModelPreferences`](../Sources/ComposerApp/Support/ModelPreferences.swift) at
   send time (default Opus). It's a CLI *alias* (`opus` / `sonnet` / `haiku`), so
   the CLI resolves it to the latest model in that tier — BonsAI never pins a
-  dated snapshot. The picker lives in the Agent dock header and mirrors the one
-  in Settings ▸ Runtime ▸ Models (both bind the same `UserDefaults` key).
+  dated snapshot. The picker lives on the Agent panel's composer row and mirrors
+  the one in Settings ▸ Models (both bind the same `UserDefaults` key).
 - **`--output-format stream-json --verbose`** — the agent emits one JSON object
   per line (`system` / `assistant` / `result`). `handleLine(_:)` parses those
   into the chat transcript: assistant `text` becomes a reply, `tool_use` becomes
@@ -105,12 +117,57 @@ What each piece buys us:
   `init` / `result` events is stashed and replayed next turn, so it's one ongoing
   conversation rather than N cold starts.
 
+**Codex** — `exec --json`, canvas MCP over `-c mcp_servers.*`:
+
+```text
+codex exec [resume "<thread-id>"] "<system prompt + prompt on turn 1>"
+  --json --skip-git-repo-check --ignore-user-config
+  --sandbox read-only --cd <grounding-or-scratch-dir>
+  -c approval_policy="never"
+  -c mcp_servers.canvas.url="http://127.0.0.1:7337/mcp"
+  -c mcp_servers.canvas.default_tools_approval_mode="approve"
+```
+
+The load-bearing choices: **`default_tools_approval_mode="approve"`** auto-approves
+the (board-only) canvas tools — without it, headless `exec` cancels every MCP call
+because it can't answer the approval prompt. **`--sandbox read-only`** keeps Codex
+off the user's disk while still letting it read grounded files (its file reads don't
+need escalation). **`--ignore-user-config`** skips the user's `config.toml` so their
+other MCP servers can't crowd out canvas during startup (auth still comes from
+`$CODEX_HOME`). Codex has no `--append-system-prompt`, so the system prompt is
+prepended to the first turn's message; later turns `codex exec resume <thread_id>`
+carry the context. `CodexChatEngine.parse` reads `thread.started` for the session id
+and `item.completed` for the assistant message, MCP tool calls, and shell commands.
+
+**OpenCode** — `run --format json`, canvas MCP injected inline:
+
+```text
+OPENCODE_CONFIG_CONTENT='{"mcp":{"canvas":{"type":"remote","url":".../mcp","enabled":true}},
+                          "permission":{"edit":"deny","bash":"deny"}}'
+opencode run --format json --dangerously-skip-permissions
+  --dir <grounding-or-scratch-dir> [--session "<id>"]
+  "<system prompt + prompt on turn 1>"
+```
+
+OpenCode configures MCP through its config, so the canvas server is injected via
+`OPENCODE_CONFIG_CONTENT` (its highest-priority source) alongside a permission policy
+that **denies edits and shell** — the agent's writes belong on the board, not on
+disk — while `--dangerously-skip-permissions` auto-approves what's left (the canvas
+tools and file reads). Continuity is `--session <id>`. `OpenCodeChatEngine.parse`
+reads `text` / `tool_use` parts and the `sessionID` that rides every event.
+
 Unlike Path 1, this path streams: `CanvasAgent` reads `stdout.bytes.lines`
 incrementally and appends messages as they arrive, and `stop()` terminates the
-live `Process`. **This path is Claude-specific by design** — it depends on
-`stream-json` framing and MCP tool wiring. A new engine can join Path 1 with a
-single `case`; joining Path 2 means writing an equivalent streaming + tools
-adapter, which is a much bigger lift.
+live `Process`. Adding an engine to Path 2 means writing a `CanvasChatEngine`
+adapter — a bigger lift than Path 1's single `case`, but a well-worn one now.
+
+> **Reliability note.** The canvas MCP handshake (`initialize` / `tools/list` /
+> `ping` / notifications) is answered **off the MainActor** (see
+> [`CanvasMCP.dispatch`](../Sources/ComposerApp/Services/CanvasMCP.swift)); only
+> `tools/call` hops to the MainActor to touch the board. Codex's Rust MCP client has
+> a short startup handshake window, and hopping to a busy MainActor just to echo
+> static capabilities used to lose that race intermittently, so the canvas server
+> failed to register. Keep the handshake board-free.
 
 ---
 
@@ -155,10 +212,16 @@ return nil   // → "No engines enabled in Settings"
 ```
 
 Refine-selection takes the engine the user picked in the selection bar (one
-button per enabled engine); the linter's **"Ask Claude"** escalation always
-forces `.claude`. If the chosen engine is disabled or missing, the action toasts
-and stops rather than silently substituting a different model. When a second
-engine is added, this is the function that decides the order they're preferred in.
+button per enabled engine); the linter's **"Refine with …"** escalation follows
+the resolved **Chat Agent** engine (`resolvedChatEngine()` → `resolvedEngine(for:
+.chat)`), so the popover shows that engine's logo and clarifies with it — Claude,
+Codex, or OpenCode. The streaming chat has its own explicit pick (the Agent-dock
+engine picker, key `engine.chat.selected`), resolved by
+`CanvasAgent.resolvedEngine()` — the user's choice when it's ready, else this same
+preference order. If a chosen engine is disabled or missing, the action toasts and
+stops rather than silently substituting a different model. The order of the cases
+in `HeadlessEngine` *is* the preference order, so adding an engine slots it in by
+where its `case` sits.
 
 ---
 
@@ -186,12 +249,18 @@ compiler will walk you through most of them once you add the `case`:
    ENGINES ledger so the user can see and gate it.
 6. **`SelectionActionBar`** — add the engine's case to `enabledEngines` so it gets
    a Refine button.
-7. **`preferredEngine()` and `AgentEngineIcon`** — decide where the new engine
-   sits in the preference order for surfaces that auto-pick one.
+7. **`AgentEngineIcon`** — nothing to do beyond adding the `case`; it and
+   `preferredEngine()` iterate `HeadlessEngine.allCases`, so the new engine slots
+   into the preference order by where its `case` sits.
 
-That covers the **one-shot** surfaces (Refine / Compile). Wiring a non-Claude
-engine into the **streaming chat agent** is a separate, larger effort (see
-Path 2) and isn't required to land a useful new engine.
+That covers the **one-shot** surfaces (Refine / Compile). To also put it on the
+**streaming chat agent**, add a `CanvasChatEngine` adapter
+([`CanvasChatEngine.swift`](../Sources/ComposerApp/Services/CanvasChatEngine.swift)):
+a `launch(...)` that builds the streaming invocation (canvas MCP attached, session
+resume, headless tool-approval) and a `parse(...)` that maps the CLI's stream onto
+`AgentStreamEvent`s, then wire it into `CanvasChatEngines.adapter(for:)`. That's a
+larger lift than the one-shot `case`, but it's a well-worn path now — the existing
+three adapters are the templates.
 
 ---
 

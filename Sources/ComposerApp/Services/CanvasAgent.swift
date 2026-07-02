@@ -8,10 +8,11 @@ struct AgentMessage: Identifiable, Equatable {
   var text: String
 }
 
-/// Drives a headless `claude` agent that lives *inside* the canvas: each turn spawns the CLI in
-/// `stream-json` mode with the canvas MCP server auto-attached (canvas tools only), and parses the
-/// stream into a chat transcript. Session continuity is kept with `--resume`, so it's one ongoing
-/// conversation. The agent's edits land on the board live via MCP → CanvasBridge.
+/// Drives a headless coding agent that lives *inside* the canvas: each turn spawns the selected
+/// engine's CLI in a streaming JSON mode with the canvas MCP server attached, and a `CanvasChatEngine`
+/// adapter parses the stream into a chat transcript. Session continuity is kept per engine (Claude
+/// `--resume`, Codex `exec resume`, OpenCode `--session`), so it's one ongoing conversation. The
+/// agent's edits land on the board live via MCP → CanvasBridge. See docs/agent-engines.md.
 /// The streaming chat transcript, split out of `CanvasAgent` so its high-frequency updates (one
 /// per assistant token / tool call) re-render only the dock's message list — not every surface
 /// that observes the agent's coarse status. The agent dock observes this; the canvas never does.
@@ -86,13 +87,25 @@ final class CanvasAgent: ObservableObject {
     let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !prompt.isEmpty, !isRunning else { return }
     transcript.append(AgentMessage(role: .user, text: prompt))
+    guard let engine = Self.resolvedEngine() else {
+      transcript.append(AgentMessage(
+        role: .error,
+        text: "No coding-agent engine is enabled and installed for chat. Enable one in Settings → Runtime."))
+      return
+    }
     didRequestStop = false
     isRunning = true
     runToken &+= 1
     let token = runToken
     let resume = sessionID
     let model = ModelPreferences.chatModel
-    Task { await run(prompt: prompt, resume: resume, token: token, model: model) }
+    Task { await run(engine: engine, prompt: prompt, resume: resume, token: token, model: model) }
+  }
+
+  /// The engine this chat will run on: the user's explicit pick (Agent dock / Settings) when it's
+  /// enabled and installed, otherwise the first enabled + installed engine in preference order.
+  static func resolvedEngine() -> HeadlessEngine? {
+    EnginePreferences.resolvedEngine(for: .chat, isAvailable: EngineCapabilityStore.shared.isAvailable)
   }
 
   func stop() {
@@ -112,7 +125,7 @@ final class CanvasAgent: ObservableObject {
 
   // MARK: Run one turn
 
-  private func run(prompt: String, resume: String?, token: Int, model: ClaudeModel) async {
+  private func run(engine: HeadlessEngine, prompt: String, resume: String?, token: Int, model: ClaudeModel) async {
     // Write back coarse state only while this turn is still the current one — a stop() or a newer
     // send() bumps `runToken`, after which this (now superseded) turn must leave shared state alone.
     func finish(_ work: () -> Void) {
@@ -122,43 +135,34 @@ final class CanvasAgent: ObservableObject {
       self.process = nil
     }
 
-    guard let claude = Self.claudePath else {
-      transcript.append(AgentMessage(role: .error, text: "Couldn't find the `claude` CLI. Install Claude Code, then reopen Composer."))
+    let adapter = CanvasChatEngines.adapter(for: engine)
+    guard let executable = adapter.executableURL else {
+      transcript.append(AgentMessage(
+        role: .error,
+        text: "Couldn't find the `\(engine.rawValue)` CLI. Install \(engine.title), then reopen BonsAI."))
       finish {}
       return
     }
-    // Two in-process MCP servers: `canvas` exposes the board tools the agent drives; `composer`
-    // exposes only the permission arbiter that backs `--permission-prompt-tool` (see below).
-    let port = CanvasServer.port
-    let mcp = #"{"mcpServers":{"canvas":{"type":"http","url":"http://127.0.0.1:\#(port)/mcp"},"\#(PermissionMCP.serverName)":{"type":"http","url":"http://127.0.0.1:\#(port)/permission"}}}"#
-    // Grounded: run in the chosen folder with read-only file tools so the agent can argue from
-    // real files. Otherwise: canvas-only, in a neutral scratch dir.
-    let grounded = groundingDirectory
-    let tools = grounded != nil ? "mcp__canvas__*,Read,Grep,Glob" : "mcp__canvas__*"
-    let systemPrompt = grounded != nil ? Self.systemPrompt + "\n\n" + Self.groundingAddendum : Self.systemPrompt
-    // Anything the model reaches for beyond `tools` (an account connector like Craft, a built-in)
-    // routes to our permission arbiter, which shows a real allow/deny dialog instead of letting the
-    // CLI hit a silent wall in `-p` mode - the model used to invent a non-existent "approve in the
-    // app" popup (issue #28). The arbiter tool is intentionally not in `--allowedTools`.
-    var args = ["-p", prompt,
-                "--model", model.cliAlias,
-                "--output-format", "stream-json", "--verbose",
-                "--mcp-config", mcp,
-                "--allowedTools", tools,
-                "--permission-prompt-tool", "mcp__\(PermissionMCP.serverName)__\(PermissionMCP.toolName)",
-                "--append-system-prompt", systemPrompt]
-    if let resume { args += ["--resume", resume] }
+    // Each engine reaches the same board over the loopback MCP server; the adapter builds its own
+    // dialect of the invocation (Claude stream-json + --mcp-config, Codex exec --json + -c
+    // mcp_servers.*, OpenCode run --format json + an inline config).
+    let launch = adapter.launch(prompt: prompt, resume: resume, grounding: groundingDirectory,
+                                model: model, port: CanvasServer.port, workdir: Self.workdir)
 
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: claude)
-    process.arguments = args
-    process.currentDirectoryURL = grounded ?? Self.workdir
+    process.executableURL = executable
+    process.arguments = launch.arguments
+    process.currentDirectoryURL = launch.workingDirectory
     var env = ProcessInfo.processInfo.environment
     env["PATH"] = Self.augmentedPATH(env["PATH"])
+    for (key, value) in launch.extraEnvironment { env[key] = value }
     process.environment = env
     let stdout = Pipe(), stderr = Pipe()
     process.standardOutput = stdout
     process.standardError = stderr
+    // Close stdin (EOF) so a CLI that reads it — Codex prints "Reading additional input from
+    // stdin…" — doesn't block waiting for input that never comes.
+    process.standardInput = FileHandle.nullDevice
 
     // A stop() between this turn being queued and reaching here already invalidated the token —
     // don't launch a process that nobody can see in `self.process` (and so nobody could stop).
@@ -168,14 +172,14 @@ final class CanvasAgent: ObservableObject {
     do {
       try process.run()
     } catch {
-      transcript.append(AgentMessage(role: .error, text: UserFacingError.message(for: error, while: "Starting Claude")))
+      transcript.append(AgentMessage(role: .error, text: UserFacingError.message(for: error, while: "Starting \(engine.title)")))
       finish {}
       return
     }
 
-    // Claude may put diagnostics on either stream. Drain stderr while stream-json is consumed from
-    // stdout so an unusually verbose failure cannot block the process, and retain non-JSON stdout
-    // for tools such as Claude Code that report a preflight failure before stream-json starts.
+    // The CLI may put diagnostics on either stream. Drain stderr while the JSON stream is consumed
+    // from stdout so an unusually verbose failure cannot block the process, and retain non-protocol
+    // stdout for a CLI that reports a preflight failure before its JSON stream starts.
     let stderrReader = Task.detached { () -> Result<String, Error> in
       do {
         let data = try stderr.fileHandleForReading.readToEnd()
@@ -190,10 +194,19 @@ final class CanvasAgent: ObservableObject {
       for try await line in stdout.fileHandleForReading.bytes.lines {
         // Stop consuming (and appending) a superseded turn's stream the moment it's invalidated.
         if Task.isCancelled || token != runToken { break }
-        if handleLine(line) {
-          sawOutput = true
-        } else {
+        let events = adapter.parse(line)
+        if events.isEmpty {
           nonProtocolOutput.append(line)
+          continue
+        }
+        for event in events {
+          switch event {
+          case let .session(id): if !id.isEmpty { sessionID = id }
+          case let .assistantText(text):
+            transcript.append(AgentMessage(role: .assistant, text: text)); sawOutput = true
+          case let .toolSummary(summary):
+            transcript.append(AgentMessage(role: .tool, text: summary)); sawOutput = true
+          }
         }
       }
     } catch { /* stream closed */ }
@@ -204,14 +217,14 @@ final class CanvasAgent: ObservableObject {
     case let .success(text):
       stderrText = text
     case let .failure(error):
-      stderrText = UserFacingError.message(for: error, while: "Reading Claude’s error output")
+      stderrText = UserFacingError.message(for: error, while: "Reading \(engine.title)’s error output")
     }
     finish {
       if process.terminationStatus != 0, !didRequestStop {
         transcript.append(AgentMessage(
           role: .error,
           text: UserFacingError.commandFailure(
-            command: "Claude",
+            command: engine.title,
             status: process.terminationStatus,
             stdout: nonProtocolOutput.joined(separator: "\n"),
             stderr: stderrText)))
@@ -219,74 +232,15 @@ final class CanvasAgent: ObservableObject {
         let diagnostic = UserFacingError.commandOutput(
           stdout: nonProtocolOutput.joined(separator: "\n"), stderr: stderrText)
         if !diagnostic.isEmpty {
-          transcript.append(AgentMessage(role: .error, text: "Claude returned output Composer could not read: \(diagnostic)"))
+          transcript.append(AgentMessage(role: .error, text: "\(engine.title) returned output BonsAI could not read: \(diagnostic)"))
         }
       }
     }
-  }
-
-  /// Parse one stream-json line into transcript updates. Returns true if it produced output.
-  @discardableResult
-  private func handleLine(_ line: String) -> Bool {
-    guard let data = line.data(using: .utf8),
-          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-    switch obj["type"] as? String {
-    case "system":
-      if (obj["subtype"] as? String) == "init", let sid = obj["session_id"] as? String { sessionID = sid }
-      return false
-    case "assistant":
-      guard let message = obj["message"] as? [String: Any],
-            let content = message["content"] as? [[String: Any]] else { return false }
-      var produced = false
-      for item in content {
-        switch item["type"] as? String {
-        case "text":
-          let t = (item["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-          if !t.isEmpty { transcript.append(AgentMessage(role: .assistant, text: t)); produced = true }
-        case "tool_use":
-          let name = (item["name"] as? String ?? "").replacingOccurrences(of: "mcp__canvas__", with: "")
-          transcript.append(AgentMessage(role: .tool, text: toolSummary(name, item["input"] as? [String: Any])))
-          produced = true
-        default: break
-        }
-      }
-      return produced
-    case "result":
-      if let sid = obj["session_id"] as? String { sessionID = sid }
-      return true
-    default:
-      return false
-    }
-  }
-
-  private func toolSummary(_ name: String, _ input: [String: Any]?) -> String {
-    switch name {
-    case "get_canvas": return "read the board"
-    case "draw_diagram":
-      let count = (input?["nodes"] as? [[String: Any]])?.count ?? 0
-      return "drew a diagram · \(count) card\(count == 1 ? "" : "s")"
-    case "tidy": return "tidied the layout"
-    case "add_text": return "added a card · \(snippet(input?["text"]))"
-    case "add_shape": return "drew a \(input?["kind"] as? String ?? "shape")"
-    case "set_text": return "rewrote a card · \(snippet(input?["text"]))"
-    case "move_node": return "moved a card"
-    case "resize_node": return "resized a card"
-    case "delete_node": return "removed a card"
-    case "connect": return "connected two cards"
-    default: return name
-    }
-  }
-  private func snippet(_ value: Any?) -> String {
-    // Collapse whitespace (including newlines) so a card's multi-line text stays on one
-    // transcript line; the bubble itself also clamps to a single line.
-    let collapsed = ((value as? String) ?? "")
-      .split(whereSeparator: \.isWhitespace).joined(separator: " ")
-    return collapsed.count > 44 ? String(collapsed.prefix(44)) + "…" : collapsed
   }
 
   // MARK: Environment
 
-  static let systemPrompt = """
+  nonisolated static let systemPrompt = """
   You are a thinking partner working ON a spatial idea canvas with the user. Use the canvas tools \
   (mcp__canvas__*) to read and shape the board directly — start by calling get_canvas. As you talk, \
   evolve the board: add concise cards for new ideas, sharpen vague ones with set_text, connect \
@@ -318,7 +272,7 @@ final class CanvasAgent: ObservableObject {
   surgical cards over walls of text. Keep chat replies short — let the canvas hold the detail.
   """
 
-  static let groundingAddendum = """
+  nonisolated static let groundingAddendum = """
   You're running inside a folder you can READ (its files and code) with Read/Grep/Glob. Ground your \
   suggestions in what's actually there — open the relevant files before asserting how something \
   works. You cannot modify files; your thinking goes onto the canvas.
@@ -334,8 +288,6 @@ final class CanvasAgent: ObservableObject {
     }
     return dir
   }()
-
-  static let claudePath: String? = CommandLineToolLocator.executableURL(for: .claude)?.path
 
   static func augmentedPATH(_ existing: String?) -> String {
     let extra = ["/opt/homebrew/bin", "/opt/homebrew/sbin", NSHomeDirectory() + "/.local/bin",

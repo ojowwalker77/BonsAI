@@ -94,7 +94,8 @@ struct ComposerCanvas: View {
           onFormat: { editing.controller.applyMarkdown($0) },
           onTint: { board.setTint($0, for: editing.id) },
           onApplyFix: { editing.controller.applyLintFix(range: $0.range, expecting: $0.phrase, with: $1) },
-          onAskClaude: { askClaude(about: $0, card: editing) }
+          askEngine: resolvedChatEngine(),
+          onEscalate: { askAgent(about: $0, card: editing) }
         )
         .id(editing.id)
       }
@@ -1139,14 +1140,11 @@ struct ComposerCanvas: View {
     }
   }
 
-  /// Escalate one flagged phrase on the active card to Claude.
-  private func askClaude(about flag: LintFlag, card: CardInteraction) {
+  /// Escalate one flagged phrase on the active card to the chat agent — the same engine the in-canvas
+  /// chat runs on, so the linter's "Refine with …" matches the user's Default Chat Agent pick.
+  private func askAgent(about flag: LintFlag, card: CardInteraction) {
     guard !isWorking else { return }
-    guard EnginePreferences.isEnabled(.claude) else {
-      show(Toast(text: "Claude is disabled in Settings", symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    guard engineCapabilities.isAvailable(.claude) else {
+    guard let engine = resolvedChatEngine() else {
       show(Toast(text: unavailableEngineMessage(), symbol: "exclamationmark.triangle.fill", tint: .orange))
       return
     }
@@ -1155,11 +1153,11 @@ struct ComposerCanvas: View {
     card.lint.activeFlagID = nil
     Task {
       do {
-        let result = try await service.refineSelection(whole: whole, selection: flag.phrase, engine: .claude)
+        let result = try await service.refineSelection(whole: whole, selection: flag.phrase, engine: engine)
         card.controller.applyLintFix(range: flag.range, expecting: flag.phrase, with: result)
-        show(Toast(text: "Clarified with Claude", symbol: "checkmark.circle.fill", tint: .green))
+        show(Toast(text: "Clarified with \(engine.title)", symbol: "checkmark.circle.fill", tint: .green))
       } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Clarifying the selected text with Claude"), symbol: "exclamationmark.triangle.fill", tint: .orange))
+        show(Toast(text: UserFacingError.message(for: error, while: "Clarifying the selected text with \(engine.title)"), symbol: "exclamationmark.triangle.fill", tint: .orange))
       }
       isWorking = false
     }
@@ -1170,6 +1168,12 @@ struct ComposerCanvas: View {
       if EnginePreferences.isEnabled(engine), engineCapabilities.isAvailable(engine) { return engine }
     }
     return nil
+  }
+
+  /// The engine the in-canvas chat — and the linter's "Refine with …" escalation — runs on: the
+  /// Default Chat Agent pick when enabled + available, else the first available engine.
+  private func resolvedChatEngine() -> HeadlessEngine? {
+    EnginePreferences.resolvedEngine(for: .chat, isAvailable: engineCapabilities.isAvailable)
   }
 
   private func unavailableEngineMessage() -> String {
@@ -1641,11 +1645,14 @@ private struct ActiveCardOverlays: View {
   let size: CGSize
   let isWorking: Bool
   let currentTint: Int?
+  /// The engine the linter's "Refine with …" escalation targets (the resolved Chat Agent pick);
+  /// `nil` hides the escalate row.
+  let askEngine: HeadlessEngine?
   let onRefine: (HeadlessEngine) -> Void
   let onFormat: (MarkdownStyle.Action) -> Void
   let onTint: (Int?) -> Void
   let onApplyFix: (LintFlag, String) -> Void
-  let onAskClaude: (LintFlag) -> Void
+  let onEscalate: (LintFlag) -> Void
 
   init(card: CardInteraction, size: CGSize, isWorking: Bool,
        currentTint: Int?,
@@ -1653,7 +1660,8 @@ private struct ActiveCardOverlays: View {
        onFormat: @escaping (MarkdownStyle.Action) -> Void,
        onTint: @escaping (Int?) -> Void,
        onApplyFix: @escaping (LintFlag, String) -> Void,
-       onAskClaude: @escaping (LintFlag) -> Void) {
+       askEngine: HeadlessEngine?,
+       onEscalate: @escaping (LintFlag) -> Void) {
     self.card = card
     self.mentions = card.mentions
     self.appSearch = card.appSearch
@@ -1661,11 +1669,12 @@ private struct ActiveCardOverlays: View {
     self.size = size
     self.isWorking = isWorking
     self.currentTint = currentTint
+    self.askEngine = askEngine
     self.onRefine = onRefine
     self.onFormat = onFormat
     self.onTint = onTint
     self.onApplyFix = onApplyFix
-    self.onAskClaude = onAskClaude
+    self.onEscalate = onEscalate
   }
 
   var body: some View {
@@ -1726,8 +1735,9 @@ private struct ActiveCardOverlays: View {
       let origin = popupOrigin(anchor: CGPoint(x: rect.minX, y: rect.maxY + 1), popup: popup)
       LintPopover(
         flag: flag,
+        escalationEngine: askEngine,
         onPick: { onApplyFix(flag, $0) },
-        onAskClaude: { onAskClaude(flag) },
+        onEscalate: { onEscalate(flag) },
         onHover: { hovering in if hovering { lint.cancelHide?() } else { lint.requestHide?() } }
       )
       .fixedSize(horizontal: true, vertical: false)
@@ -1755,9 +1765,12 @@ private struct ActiveCardOverlays: View {
   }
 
   private func lintPopoverHeight(_ flag: LintFlag) -> CGFloat {
+    // The escalate row is hidden when no engine is available; each shown block adds its own hairline.
+    let hasButton = askEngine != nil
     let suggestions = CGFloat(flag.suggestions.count) * 42
-    let dividers = flag.suggestions.isEmpty ? 1.0 : 2.0
-    return min(260, 62 + suggestions + 42 + dividers)
+    let button: CGFloat = hasButton ? 42 : 0
+    let dividers = (flag.suggestions.isEmpty ? 0.0 : 1.0) + (hasButton ? 1.0 : 0.0)
+    return min(260, 62 + suggestions + button + dividers)
   }
 
   private func popupOrigin(anchor: CGPoint, popup: CGSize) -> CGPoint {

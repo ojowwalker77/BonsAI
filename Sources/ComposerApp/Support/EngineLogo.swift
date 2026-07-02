@@ -25,14 +25,17 @@ struct EngineLogo: View {
   }
 }
 
-/// The mark for the in-canvas agent: the active engine's brand logo (Claude today), falling back to
-/// the Apple Intelligence mark when no CLI engine is enabled and available.
+/// The mark for the in-canvas agent: the brand logo of the engine the chat will actually run on —
+/// the user's pick when set, else the preferred available engine — falling back to the Apple
+/// Intelligence mark when no CLI engine is enabled and available. Observes both the availability
+/// store and the chat-engine pick so it tracks either changing.
 struct AgentEngineIcon: View {
   var size: CGFloat = 15
   @ObservedObject private var capabilities = EngineCapabilityStore.shared
+  @AppStorage(EnginePreferences.chatEngineKey) private var chatEngineRaw = ""
 
   var body: some View {
-    if let engine = preferredEngine {
+    if let engine = CanvasAgent.resolvedEngine() {
       EngineLogo(engine: engine)
     } else {
       Image(systemName: "apple.intelligence")
@@ -44,13 +47,6 @@ struct AgentEngineIcon: View {
             gradient: Gradient(colors: [.orange, .red, .purple, .blue, .cyan, .orange]),
             center: .center))
     }
-  }
-
-  private var preferredEngine: HeadlessEngine? {
-    for engine in HeadlessEngine.allCases {
-      if EnginePreferences.isEnabled(engine), capabilities.isAvailable(engine) { return engine }
-    }
-    return nil
   }
 }
 

@@ -155,6 +155,13 @@ private struct SettingsContent: View {
   @ObservedObject private var shortcutStore = ShortcutStore.shared
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
   @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
+  @AppStorage(EnginePreferences.opencodeEnabledKey) private var opencodeEnabled = true
+  // The chat surface's provider pick + per-engine model. These keys are shared with the Agent dock,
+  // so the two controls mirror each other live.
+  @AppStorage(EnginePreferences.chatEngineKey) private var chatEngineRaw = ""
+  @AppStorage("model.chat.codex") private var codexChatModel = ""
+  @AppStorage("model.chat.opencode") private var opencodeChatModel = ""
+  @ObservedObject private var modelCatalog = ChatModelCatalog.shared
   // Both keys are shared with their in-canvas pickers (the Agent dock for chat), so the controls
   // mirror each other live. See [[ModelPreferences]].
   @AppStorage(ModelPreferences.chatModelKey) private var chatModel: ClaudeModel = ModelPreferences.defaultChatModel
@@ -237,6 +244,12 @@ private struct SettingsContent: View {
           availability: capabilities.status(for: .codex),
           toggle: $codexEnabled
         ) { EngineLogo(engine: .codex).frame(width: 18, height: 18) }
+        engineRow(
+          name: HeadlessEngine.opencode.title,
+          command: HeadlessEngine.opencode.commandLabel,
+          availability: capabilities.status(for: .opencode),
+          toggle: $opencodeEnabled
+        ) { EngineLogo(engine: .opencode).frame(width: 18, height: 18) }
 
         engineRow(
           name: "Apple Intelligence",
@@ -291,55 +304,110 @@ private struct SettingsContent: View {
         .settingsCard()
       }
     }
-    .onAppear { agentHasGrants = AgentPermissionBroker.hasRememberedGrants }
+    .onAppear {
+      agentHasGrants = AgentPermissionBroker.hasRememberedGrants
+      modelCatalog.loadOpenCodeModelsIfNeeded()
+    }
   }
 
-  /// The agent chat's model. Mirrors the Agent panel's picker (same key). Refine/Compile aren't
-  /// listed — they stay on the CLI default deliberately.
+  /// Pick a provider (engine), then a model for it — the same shape as the Agent panel's per-session
+  /// picker, kept in sync via the shared keys. Refine/Compile aren't listed: they stay on the CLI
+  /// default deliberately.
   private var modelsCard: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("MODELS").sectionLabel()
       VStack(spacing: 0) {
-        modelRow(
-          title: "Agent chat",
-          subtitle: "The in-canvas agent you talk to. Mirrors the picker in the Agent panel.",
-          selection: $chatModel)
+        surfaceRow(
+          title: "Chat Agent",
+          subtitle: "The agent you talk to in the canvas. Also switchable live in the Agent panel.",
+          engineRaw: $chatEngineRaw,
+          claudeModel: $chatModel, codexModel: $codexChatModel, opencodeModel: $opencodeChatModel)
       }
       .padding(.horizontal, 13)
       .settingsCard()
+      if availableEngines.isEmpty {
+        Text("No engine is enabled and installed. Enable one in Runtime above.")
+          .font(.caption).foregroundStyle(.orange)
+      }
     }
   }
 
-  private func modelRow(
-    title: String, subtitle: String, selection: Binding<ClaudeModel>,
-    active: Bool = true, inactiveNote: String? = nil
+  /// Engines that can run a surface right now — enabled in Runtime *and* installed.
+  private var availableEngines: [HeadlessEngine] {
+    HeadlessEngine.allCases.filter { EnginePreferences.isEnabled($0) && capabilities.isAvailable($0) }
+  }
+
+  /// The engine a `engine.<surface>.selected` string resolves to: the pick when it's ready, else the
+  /// first available engine.
+  private func resolvedEngine(_ raw: String) -> HeadlessEngine? {
+    if let engine = HeadlessEngine(rawValue: raw),
+       EnginePreferences.isEnabled(engine), capabilities.isAvailable(engine) { return engine }
+    return availableEngines.first
+  }
+
+  /// One "surface → provider → model" row: a title, a provider menu, and a model menu whose options
+  /// follow the chosen provider (Claude tiers, or the Codex/OpenCode `provider/model` list).
+  @ViewBuilder
+  private func surfaceRow(
+    title: String, subtitle: String, engineRaw: Binding<String>,
+    claudeModel: Binding<ClaudeModel>, codexModel: Binding<String>, opencodeModel: Binding<String>
   ) -> some View {
-    HStack(spacing: 11) {
+    let engine = resolvedEngine(engineRaw.wrappedValue)
+    HStack(spacing: 10) {
       VStack(alignment: .leading, spacing: 2) {
         Text(title).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
         Text(subtitle)
           .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
           .fixedSize(horizontal: false, vertical: true)
-        if !active, let inactiveNote {
-          Text(inactiveNote)
-            .font(.caption).foregroundStyle(Color.orange)
-            .fixedSize(horizontal: false, vertical: true)
-        }
       }
       Spacer(minLength: 8)
-      Picker("", selection: selection) {
-        ForEach(ClaudeModel.allCases) { model in
-          Text(model.title).tag(model)
-        }
+      if let engine {
+        providerPicker(engineRaw, resolved: engine)
+        modelPicker(for: engine, claudeModel: claudeModel, codexModel: codexModel, opencodeModel: opencodeModel)
       }
-      .labelsHidden()
-      .pickerStyle(.menu)
-      .fixedSize()
-      .tint(Theme.Palette.body)
-      .disabled(!active)
-      .opacity(active ? 1 : 0.5)
     }
     .padding(.vertical, 11)
+  }
+
+  /// Provider (engine) menu, listing every ready engine.
+  private func providerPicker(_ engineRaw: Binding<String>, resolved: HeadlessEngine) -> some View {
+    Picker("", selection: Binding(get: { resolved }, set: { engineRaw.wrappedValue = $0.rawValue })) {
+      ForEach(availableEngines) { Text($0.title).tag($0) }
+    }
+    .labelsHidden().pickerStyle(.menu).fixedSize().tint(Theme.Palette.body)
+  }
+
+  /// Model menu for the chosen provider: Claude tiers, or a "Default" + `provider/model` list.
+  @ViewBuilder
+  private func modelPicker(
+    for engine: HeadlessEngine,
+    claudeModel: Binding<ClaudeModel>, codexModel: Binding<String>, opencodeModel: Binding<String>
+  ) -> some View {
+    switch engine {
+    case .claude:
+      Picker("", selection: claudeModel) {
+        ForEach(ClaudeModel.allCases) { Text($0.title).tag($0) }
+      }
+      .labelsHidden().pickerStyle(.menu).fixedSize().tint(Theme.Palette.body)
+    case .codex:
+      stringModelPicker(codexModel, models: modelCatalog.models(for: .codex))
+    case .opencode:
+      stringModelPicker(opencodeModel, models: modelCatalog.opencodeModels)
+    }
+  }
+
+  /// A `provider/model` menu (Codex / OpenCode). "Default" leaves the engine on its own default.
+  private func stringModelPicker(_ selection: Binding<String>, models: [String]) -> some View {
+    Picker("", selection: selection) {
+      Text("Default").tag("")
+      ForEach(models, id: \.self) { Text(Self.shortModel($0)).tag($0) }
+    }
+    .labelsHidden().pickerStyle(.menu).fixedSize().tint(Theme.Palette.body)
+  }
+
+  /// Compact model label: the id's last path component. `opencode/big-pickle` → `big-pickle`.
+  private static func shortModel(_ id: String) -> String {
+    id.split(separator: "/").last.map(String.init) ?? id
   }
 
   /// A live count of what's ready, in the mono "instrument" voice. One status dot, neutral capsule.
