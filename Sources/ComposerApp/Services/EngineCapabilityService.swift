@@ -89,7 +89,16 @@ final class EngineCapabilityStore: ObservableObject {
   /// re-check when the user explicitly asks (Settings → Recheck), so opening Settings no longer
   /// re-shells `--version` for every engine and flickers "Checking…".
   private init() {
-    if !restorePersisted() { refresh() }
+    if restorePersisted() {
+      // A snapshot written before an engine was added (e.g. OpenCode) won't mention it, which would
+      // leave the newcomer stuck on `.checking` — invisible to the agent picker and refine bar until
+      // the user happened to hit Recheck. Detect just the missing engines so they light up on their
+      // own, without re-scanning the ones we already know.
+      let missing = HeadlessEngine.allCases.filter { cli[$0] == nil }
+      if !missing.isEmpty { detect(missing) }
+    } else {
+      refresh()
+    }
   }
 
   func status(for engine: HeadlessEngine) -> RuntimeAvailability {
@@ -115,6 +124,24 @@ final class EngineCapabilityStore: ObservableObject {
       }.value
       guard !Task.isCancelled, let self else { return }
       self.cli = detected
+      self.persist()
+    }
+  }
+
+  /// Detect only the given engines and merge them into the known state — used when a restored
+  /// snapshot predates a newly added engine, so the newcomer resolves without a full re-scan (and
+  /// without disturbing the engines already showing as ready).
+  private func detect(_ engines: [HeadlessEngine]) {
+    for engine in engines { cli[engine] = .checking }
+    let toDetect = engines
+    refreshTask = Task { [weak self] in
+      let detected = await Task.detached(priority: .utility) {
+        var statuses: [HeadlessEngine: RuntimeAvailability] = [:]
+        for engine in toDetect { statuses[engine] = await CommandLineToolLocator.detect(engine) }
+        return statuses
+      }.value
+      guard !Task.isCancelled, let self else { return }
+      for (engine, status) in detected { self.cli[engine] = status }
       self.persist()
     }
   }

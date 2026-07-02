@@ -13,9 +13,10 @@ import Foundation
 @MainActor
 enum PermissionMCP {
   /// Must match the server key the agent registers in `--mcp-config` and the
-  /// `--permission-prompt-tool mcp__<serverName>__<toolName>` it passes.
-  static let serverName = "composer"
-  static let toolName = "approve"
+  /// `--permission-prompt-tool mcp__<serverName>__<toolName>` it passes. `nonisolated` so the engine
+  /// adapters (which build the invocation off the MainActor) can name it.
+  nonisolated static let serverName = "composer"
+  nonisolated static let toolName = "approve"
   private static let fallbackProtocol = "2025-06-18"
 
   /// Returns the JSON-RPC response, or nil for notifications (which get a 202 with no body).

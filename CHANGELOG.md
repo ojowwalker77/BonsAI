@@ -11,6 +11,36 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Added
+- **Codex and OpenCode join the streaming agent.** The in-canvas chat agent now runs on Codex
+  (`codex exec --json`) or OpenCode (`opencode run --format json`), not just Claude. Pick one from the
+  new engine chip on the Agent panel's composer row — it appears whenever two or more engines are
+  ready. Each engine reaches the same board over the loopback canvas MCP server, keeps its own session
+  for follow-ups, and streams replies and tool calls into one shared transcript. See
+  `docs/agent-engines.md`.
+- **OpenCode as a one-shot engine.** OpenCode joins Claude and Codex on Refine / Compile,
+  toggleable in **Settings ▸ Runtime ▸ Engines** and gated on the `opencode` binary being installed.
+- **The linter's clarify escalation follows your chat engine.** The ambiguity popover's escalate
+  button was hardcoded to Claude; it now runs on your resolved **Chat Agent** engine and shows that
+  engine's logo — "Refine with Codex" / "Refine with OpenCode" — so a non-Claude setup no longer
+  silently reaches for Claude (and the row hides when no engine is installed).
+- **Provider + model for the chat agent.** Both **Settings ▸ Models** and the Agent panel now read as
+  *pick a provider, then a model*: Claude keeps its Opus/Sonnet/Haiku tiers; OpenCode lists its live
+  `opencode models` catalog; Codex offers the model from your `~/.codex/config.toml`. Each is passed
+  to the CLI (`--model` / `-m`). Codex now honors your configured model again — the chat runs it with
+  `--ignore-user-config` (to protect canvas MCP startup), which had been dropping it — and the
+  one-shot Codex path gained `--skip-git-repo-check` so Refine / Compile work from any folder.
+
+### Fixed
+- **Canvas MCP registers reliably for strict clients.** The MCP handshake (`initialize` /
+  `tools/list` / `ping`) is now answered off the main thread; only board mutations hop to it. An
+  agent CLI with a short startup handshake window (Codex) no longer intermittently fails to see the
+  canvas tools while the UI is busy.
+- **Newly added engines light up on their own.** The runtime-availability cache used to restore its
+  saved snapshot verbatim, so an engine added in an update (OpenCode) stayed stuck on "Checking…" —
+  invisible to the agent picker and refine bar — until you hit Recheck. It now detects any engine the
+  snapshot doesn't cover on launch.
+
 ## [1.2.2] - 2026-06-30
 
 ### Added

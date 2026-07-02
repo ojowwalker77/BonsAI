@@ -141,25 +141,32 @@ final class CanvasServer {
         self.send(connection, status: ok ? "200 OK" : "422 Unprocessable Entity", json: result)
       }
 
-    // MCP (JSON-RPC) transport so a headless `claude` agent can use canvas tools.
+    // MCP (JSON-RPC) transport so a headless coding agent can use canvas tools. The handshake
+    // (initialize / tools/list / ping / notifications) is answered right here, off the MainActor, so
+    // a busy UI can't stall a client's startup handshake; only `tools/call` hops to the MainActor to
+    // touch the board. See CanvasMCP for why.
     case ("POST", "/mcp"):
       let body = self.body(of: buffer, request: request)
-      Task { @MainActor in
-        let message: [String: Any]
-        do {
-          guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-            self.send(connection, status: "400 Bad Request", json: ["error": "MCP request must be a JSON object."])
-            return
-          }
-          message = decoded
-        } catch {
-          self.send(connection, status: "400 Bad Request", json: ["error": UserFacingError.message(for: error, while: "Decoding the MCP request")])
+      let message: [String: Any]
+      do {
+        guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+          self.send(connection, status: "400 Bad Request", json: ["error": "MCP request must be a JSON object."])
           return
         }
-        if let response = CanvasMCP.handle(message) {
+        message = decoded
+      } catch {
+        self.send(connection, status: "400 Bad Request", json: ["error": UserFacingError.message(for: error, while: "Decoding the MCP request")])
+        return
+      }
+      switch CanvasMCP.dispatch(message) {
+      case let .reply(response):
+        self.send(connection, status: "200 OK", json: response)
+      case .notification:
+        self.send(connection, status: "202 Accepted", data: Data())   // notification: no body
+      case let .toolCall(name, arguments, id):
+        Task { @MainActor in
+          let response = CanvasMCP.callToolReply(name: name, arguments: arguments, id: id)
           self.send(connection, status: "200 OK", json: response)
-        } else {
-          self.send(connection, status: "202 Accepted", data: Data())   // notification: no body
         }
       }
 

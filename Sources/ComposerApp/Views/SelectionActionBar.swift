@@ -7,17 +7,22 @@ struct SelectionActionBar: View {
 
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
   @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
+  @AppStorage(EnginePreferences.opencodeEnabledKey) private var opencodeEnabled = true
   @ObservedObject private var capabilities = EngineCapabilityStore.shared
   @State private var shown = false
 
-  private var enabledEngines: [HeadlessEngine] {
-    HeadlessEngine.allCases.filter { engine in
-      let enabled = switch engine {
-      case .claude: claudeEnabled
-      case .codex: codexEnabled
-      }
-      return enabled && capabilities.isAvailable(engine)
+  /// Read through the observed `@AppStorage` toggles (not `EnginePreferences.isEnabled`) so the bar
+  /// re-renders the moment a toggle flips in Settings.
+  private func isEnabled(_ engine: HeadlessEngine) -> Bool {
+    switch engine {
+    case .claude: claudeEnabled
+    case .codex: codexEnabled
+    case .opencode: opencodeEnabled
     }
+  }
+
+  private var enabledEngines: [HeadlessEngine] {
+    HeadlessEngine.allCases.filter { isEnabled($0) && capabilities.isAvailable($0) }
   }
 
   var body: some View {
@@ -54,7 +59,7 @@ struct SelectionActionBar: View {
 
   private var unavailableEngineMessage: String {
     if enabledEngines.isEmpty {
-      if !claudeEnabled && !codexEnabled {
+      if HeadlessEngine.allCases.allSatisfy({ !isEnabled($0) }) {
         return "All engines disabled in Settings → Runtime"
       }
       return "No engines ready — open Settings → Runtime → Recheck"
