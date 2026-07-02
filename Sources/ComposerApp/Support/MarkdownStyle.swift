@@ -126,19 +126,21 @@ enum MarkdownStyle {
     switch kind {
     case .heading(let level):
       let scale: CGFloat = level == 1 ? 1.5 : (level == 2 ? 1.28 : 1.14)
-      return [.font: NSFont.systemFont(ofSize: (size * scale).rounded(), weight: level == 1 ? .bold : .semibold)]
+      return [.font: ComposerPreferences.appFont(ofSize: (size * scale).rounded(), weight: level == 1 ? .bold : .semibold)]
     case .marker:
       return [.foregroundColor: Theme.flavor.overlay0]
     case .bold:
-      return [.font: NSFont.systemFont(ofSize: size, weight: .bold)]
+      // Select the Bold face directly (custom families ship a real Bold; trait conversion on a
+      // family with no synthesized bold would otherwise no-op).
+      return [.font: ComposerPreferences.appFont(ofSize: size, weight: .bold)]
     case .italic:
-      return [.font: NSFontManager.shared.convert(NSFont.systemFont(ofSize: size), toHaveTrait: .italicFontMask)]
+      return [.font: NSFontManager.shared.convert(ComposerPreferences.appFont(ofSize: size), toHaveTrait: .italicFontMask)]
     case .code:
       return [.font: NSFont.monospacedSystemFont(ofSize: max(size - 1, 10), weight: .regular),
               .backgroundColor: Theme.flavor.surface0.withAlphaComponent(0.55)]
     case .quote:
       return [.foregroundColor: Theme.flavor.subtext0,
-              .font: NSFontManager.shared.convert(NSFont.systemFont(ofSize: size), toHaveTrait: .italicFontMask)]
+              .font: NSFontManager.shared.convert(ComposerPreferences.appFont(ofSize: size), toHaveTrait: .italicFontMask)]
     case .listMarker:
       return [.foregroundColor: Theme.flavor.overlay1]
     case .checkboxTodo:
@@ -235,19 +237,19 @@ enum MarkdownStyle {
       switch span.kind {
       case .heading(let level):
         let scale: CGFloat = level == 1 ? 1.5 : (level == 2 ? 1.28 : 1.14)
-        attributed[range].font = .system(size: (size * scale).rounded(), weight: level == 1 ? .bold : .semibold)
+        attributed[range].font = ComposerPreferences.appSwiftUIFont(size: (size * scale).rounded(), weight: level == 1 ? .bold : .semibold)
       case .marker:
         attributed[range].foregroundColor = Color(nsColor: Theme.flavor.overlay0)
       case .bold:
-        attributed[range].font = .system(size: size, weight: .bold)
+        attributed[range].font = ComposerPreferences.appSwiftUIFont(size: size, weight: .bold)
       case .italic:
-        attributed[range].font = .system(size: size).italic()
+        attributed[range].font = ComposerPreferences.appSwiftUIFont(size: size).italic()
       case .code:
         attributed[range].font = .system(size: max(size - 1, 9), design: .monospaced)
         attributed[range].backgroundColor = Color(nsColor: Theme.flavor.surface0.withAlphaComponent(0.55))
       case .quote:
         attributed[range].foregroundColor = Color(nsColor: Theme.flavor.subtext0)
-        attributed[range].font = .system(size: size).italic()
+        attributed[range].font = ComposerPreferences.appSwiftUIFont(size: size).italic()
       case .listMarker, .checkboxTodo:
         attributed[range].foregroundColor = Color(nsColor: Theme.flavor.overlay1)
       case .checkboxDone:

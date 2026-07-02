@@ -28,6 +28,6 @@ enum ShellTokenStyle {
   static func font(for kind: ShellTemplate.Kind, size: CGFloat) -> NSFont {
     isCode(kind)
       ? NSFont.monospacedSystemFont(ofSize: size, weight: .bold)
-      : NSFont.systemFont(ofSize: size, weight: .bold)
+      : ComposerPreferences.appFont(ofSize: size, weight: .bold)
   }
 }

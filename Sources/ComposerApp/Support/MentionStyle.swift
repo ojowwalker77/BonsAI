@@ -338,7 +338,7 @@ enum MentionChip {
 
     let chip = NSMutableAttributedString(attributedString: NSAttributedString(attachment: attachment))
     chip.append(NSAttributedString(string: "\u{2009}", attributes: [.font: font]))
-    let nameFont = NSFont.systemFont(ofSize: font.pointSize - 1, weight: .medium)
+    let nameFont = ComposerPreferences.appFont(ofSize: font.pointSize - 1, weight: .medium)
     chip.append(NSAttributedString(string: label, attributes: [.font: nameFont, .foregroundColor: color]))
     if showDisclosure { chip.append(disclosure(font: font, color: color.withAlphaComponent(0.42))) }
     chip.addAttribute(.mentionToken, value: token, range: NSRange(location: 0, length: chip.length))
@@ -348,7 +348,7 @@ enum MentionChip {
   /// The "click to search" affordance appended to interactive app chips — a quiet
   /// chevron that sits a hair below the cap line so it reads as an affordance, not a glyph.
   static func disclosure(font: NSFont, color: NSColor) -> NSAttributedString {
-    let small = NSFont.systemFont(ofSize: font.pointSize - 4, weight: .medium)
+    let small = ComposerPreferences.appFont(ofSize: font.pointSize - 4, weight: .medium)
     return NSAttributedString(string: "\u{2009}\u{25BE}", attributes: [
       .font: small,
       .foregroundColor: color,

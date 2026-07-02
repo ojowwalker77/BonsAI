@@ -809,7 +809,7 @@ final class BoardViewModel: ObservableObject {
   static func fittedShapeSize(_ text: String, shape: CanvasElementKind = .rectangle, maxWidth: CGFloat = 216) -> CGSize {
     let paragraph = NSMutableParagraphStyle()
     paragraph.alignment = .center
-    let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+    let attributes: [NSAttributedString.Key: Any] = [.font: ComposerPreferences.appFont(ofSize: 14, weight: .semibold),
                                                       .paragraphStyle: paragraph]
     let ns = (text.isEmpty ? " " : text) as NSString
     let natural = ns.size(withAttributes: attributes).width

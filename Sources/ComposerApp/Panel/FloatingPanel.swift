@@ -130,6 +130,16 @@ final class FloatingPanel: NSPanel {
       }
     }
 
+    // ⌃⌘1 / ⌃⌘2 / ⌃⌘3: pick the app-wide body font (San Francisco / Nohemi / Satoshi). An
+    // app-level combo, so it works regardless of text-editing state — the exact `[.control,
+    // .command]` flag match keeps it clear of the plain ⌘1–⌘8 tool switch below.
+    if flags == [.control, .command], let raw,
+       let family: ComposerFontFamily = raw == "1" ? .system : (raw == "2" ? .nohemi : (raw == "3" ? .satoshi : nil)) {
+      ComposerPreferences.appFontFamily = family
+      NotificationCenter.default.post(name: .composerFontFamilyChanged, object: nil)
+      return true
+    }
+
     // ⇧⌘F: focus-write the current card (works while the editor has the keyboard).
     if flags == [.command, .shift], raw == "f" {
       NotificationCenter.default.post(name: .composerToggleFocus, object: nil)

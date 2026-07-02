@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
+    registerBundledFonts()
     hotKeyManager.register()
     menuBarController.install()
     _ = EngineCapabilityStore.shared
@@ -33,6 +34,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       name: .composerCaptureToBoard, object: nil)
 
     panelController.show()
+  }
+
+  /// Register every bundled `.otf` (Nohemi, Satoshi) so `NSFont(name:)` can resolve the custom
+  /// faces the app-font picker selects. The fonts live inside the nested SwiftPM resource bundle;
+  /// we iterate whatever `.otf`s it contains rather than hard-coding filenames. Registration is
+  /// best-effort — a failure (including "already registered", which the API reports as an error)
+  /// is logged and skipped so it can never take launch down; a genuinely missing face just falls
+  /// back to the system font at resolve time.
+  private func registerBundledFonts() {
+    let bundle = Bundle.appResources
+    let urls = bundle.urls(forResourcesWithExtension: "otf", subdirectory: nil)
+      ?? bundle.urls(forResourcesWithExtension: "otf", subdirectory: "Fonts")
+      ?? []
+    for url in urls {
+      var error: Unmanaged<CFError>?
+      if !CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) {
+        let message = error?.takeRetainedValue().localizedDescription ?? "unknown error"
+        NSLog("BonsAI: skipped font registration for \(url.lastPathComponent): \(message)")
+      }
+    }
   }
 
   /// The board autosaves on a ~400ms debounce; without this, an edit made just before quit

@@ -148,6 +148,9 @@ private struct SettingsContent: View {
     ("Select all · duplicate", "⌘A  ⌘D"),
     ("Group · ungroup", "⌘G  ⇧⌘G"),
     ("Lock · unlock", "⌘L  ⇧⌘L"),
+    ("App font: San Francisco", "⌃⌘1"),
+    ("App font: Nohemi", "⌃⌘2"),
+    ("App font: Satoshi", "⌃⌘3"),
   ]
 
   @StateObject private var appIcons = AppIconStore()
@@ -166,6 +169,7 @@ private struct SettingsContent: View {
   // mirror each other live. See [[ModelPreferences]].
   @AppStorage(ModelPreferences.chatModelKey) private var chatModel: ClaudeModel = ModelPreferences.defaultChatModel
   @AppStorage(ComposerPreferences.themeKey) private var themeRaw = ComposerTheme.bonsaiDark.rawValue
+  @AppStorage(ComposerPreferences.appFontFamilyKey) private var appFontRaw = ComposerFontFamily.system.rawValue
   @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
   /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
   /// visibility. Refreshed in `onAppear`; flipped false the moment the user resets.
@@ -560,7 +564,28 @@ private struct SettingsContent: View {
   private var appearancePage: some View {
     VStack(alignment: .leading, spacing: 20) {
       themeCard
+      fontCard
       canvasGlassCard
+    }
+  }
+
+  /// The app-font gallery: one specimen card per family, each "Aa" drawn in the family it selects,
+  /// so the choice previews itself. Switching posts `composerFontFamilyChanged`, which rebuilds the
+  /// canvas so every measurement cache and chrome label re-resolves.
+  private var fontCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Font", "Pick the body font for cards, chrome, and the editor.")
+      LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+        ForEach(ComposerFontFamily.allCases) { family in
+          FontPreviewCard(family: family, selected: appFontRaw == family.rawValue) {
+            Haptics.level()
+            appFontRaw = family.rawValue
+          }
+        }
+      }
+    }
+    .onChange(of: appFontRaw) { _, _ in
+      NotificationCenter.default.post(name: .composerFontFamilyChanged, object: nil)
     }
   }
 
@@ -997,6 +1022,60 @@ private struct ThemePreviewCard: View {
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
     .help(theme.title)
+    .animation(.easeOut(duration: 0.12), value: hovering)
+    .animation(.easeOut(duration: 0.12), value: selected)
+  }
+}
+
+/// One app-font specimen card, mirroring `ThemePreviewCard`'s selection language (accent stroke on
+/// select, hairline otherwise; a checkmark on the name row). The large "Aa" is drawn in the option's
+/// own face so each card previews exactly the font it selects.
+private struct FontPreviewCard: View {
+  let family: ComposerFontFamily
+  let selected: Bool
+  var action: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button(action: action) {
+      VStack(spacing: 0) {
+        ZStack {
+          Color(nsColor: Theme.flavor.mantle)
+          Text("Aa")
+            .font(ComposerPreferences.previewFont(for: family, size: 28, weight: .medium))
+            .foregroundStyle(Theme.Palette.body)
+        }
+        .frame(height: 82)
+
+        HStack(spacing: 6) {
+          Text(family.title)
+            .font(WindowChrome.labelFont)
+            .foregroundStyle(Theme.Palette.body)
+            .lineLimit(1)
+          Spacer(minLength: 0)
+          if selected {
+            Image(systemName: "checkmark.circle.fill")
+              .font(.system(size: 12))
+              .foregroundStyle(Theme.Palette.accent)
+          }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(Theme.Palette.rowFill)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .strokeBorder(
+            selected ? Theme.Palette.accent : (hovering ? Theme.Palette.panelInnerLine : Theme.Palette.panelHairline),
+            lineWidth: selected ? 2 : 1
+          )
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+    .help(family.title)
     .animation(.easeOut(duration: 0.12), value: hovering)
     .animation(.easeOut(duration: 0.12), value: selected)
   }
