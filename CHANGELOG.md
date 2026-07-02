@@ -11,6 +11,9 @@ under the new version heading.
 
 ## [Unreleased]
 
+
+## [1.3.0] - 2026-07-01
+
 ### Added
 - **A calmer standard window workspace.** BonsAI now opens as one resizable macOS window with the
   board, Agent, Settings, board switcher, tools, zoom, and grounding controls arranged as floating
