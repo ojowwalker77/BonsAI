@@ -11,6 +11,7 @@ enum CanvasTool: Equatable {
   case line
   case arrow
   case freehand
+  case equation
   case image
 
   var elementKind: CanvasElementKind? {
@@ -23,6 +24,7 @@ enum CanvasTool: Equatable {
     case .line: .line
     case .arrow: .arrow
     case .freehand: .freehand
+    case .equation: .equation
     case .image: .image
     }
   }
@@ -63,6 +65,8 @@ struct CanvasToolbar: View {
                  active: tool == .arrow, shortcut: 7) { tool = .arrow }
       ToolButton(symbol: "scribble.variable", help: "Freehand stroke  ·  drag to draw  ⌘8",
                  active: tool == .freehand, shortcut: 8) { tool = .freehand }
+      ToolButton(symbol: "x.squareroot", help: "Equation  ·  click the board, then type LaTeX  ⌘9",
+                 active: tool == .equation, shortcut: 9) { tool = .equation }
     }
   }
 }
@@ -87,7 +91,7 @@ private struct ToolButton: View {
   @State private var hovering = false
 
   var body: some View {
-    Button(action: { Haptics.tap(); action() }) {
+    Button(action: action) {
       Group {
         if busy {
           ProgressView()
@@ -100,12 +104,8 @@ private struct ToolButton: View {
         }
       }
       .frame(width: ToolMetrics.side, height: ToolMetrics.side)
-      // No blue fill for the active state — the accent-tinted glyph is the signal; the only
-      // background is a neutral hover wash.
-      .background(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(hovering && !disabled && !busy ? Theme.Palette.hoverWash : Color.clear)
-      )
+      // No blue fill for the active state — the accent-tinted glyph is the signal. No hover
+      // background either: the trackpad tick plus glyph brightening carry hover.
       .overlay(alignment: .bottomTrailing) {
         if let shortcut, !busy {
           Text("\(shortcut)")
@@ -118,7 +118,10 @@ private struct ToolButton: View {
     }
     .buttonStyle(.plain)
     .disabled(disabled || busy)
-    .onHover { hovering = $0 }
+    .onHover { over in
+      hovering = over
+      if over, !disabled, !busy { Haptics.hover() }
+    }
     .help(help)
     .animation(.easeOut(duration: 0.12), value: hovering)
   }

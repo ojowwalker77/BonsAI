@@ -19,7 +19,7 @@ curl -s -X POST http://127.0.0.1:7337/canvas \
   --data-binary '{"op":"add_text","text":"Ship the loopback skill"}'
 ```
 
-Ops: `add_text {text,x?,y?}`, `add_shape {kind: rectangle|ellipse|diamond|line|arrow, w?,h?,x?,y?}`,
+Ops: `add_text {text,x?,y?}`, `add_equation {latex,x?,y?}`, `add_shape {kind: rectangle|ellipse|diamond|line|arrow, w?,h?,x?,y?}`,
 `create_diagram {nodes,edges?,direction?}` (preferred for any structure — don't hand-place x/y
 yourself), `relayout {direction?}`, `update_text {id,text}`, `move {id,x,y}`, `resize {id,w,h}`,
 `delete {id}`, `connect {from,to,reason?}`, `set_archived {id,archived?}`,

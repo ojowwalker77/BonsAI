@@ -126,19 +126,21 @@ enum MarkdownStyle {
     switch kind {
     case .heading(let level):
       let scale: CGFloat = level == 1 ? 1.5 : (level == 2 ? 1.28 : 1.14)
-      return [.font: NSFont.systemFont(ofSize: (size * scale).rounded(), weight: level == 1 ? .bold : .semibold)]
+      return [.font: ComposerPreferences.appFont(ofSize: (size * scale).rounded(), weight: level == 1 ? .bold : .semibold)]
     case .marker:
       return [.foregroundColor: Theme.flavor.overlay0]
     case .bold:
-      return [.font: NSFont.systemFont(ofSize: size, weight: .bold)]
+      // Select the Bold face directly (custom families ship a real Bold; trait conversion on a
+      // family with no synthesized bold would otherwise no-op).
+      return [.font: ComposerPreferences.appFont(ofSize: size, weight: .bold)]
     case .italic:
-      return [.font: NSFontManager.shared.convert(NSFont.systemFont(ofSize: size), toHaveTrait: .italicFontMask)]
+      return [.font: NSFontManager.shared.convert(ComposerPreferences.appFont(ofSize: size), toHaveTrait: .italicFontMask)]
     case .code:
       return [.font: NSFont.monospacedSystemFont(ofSize: max(size - 1, 10), weight: .regular),
               .backgroundColor: Theme.flavor.surface0.withAlphaComponent(0.55)]
     case .quote:
       return [.foregroundColor: Theme.flavor.subtext0,
-              .font: NSFontManager.shared.convert(NSFont.systemFont(ofSize: size), toHaveTrait: .italicFontMask)]
+              .font: NSFontManager.shared.convert(ComposerPreferences.appFont(ofSize: size), toHaveTrait: .italicFontMask)]
     case .listMarker:
       return [.foregroundColor: Theme.flavor.overlay1]
     case .checkboxTodo:
@@ -157,9 +159,13 @@ enum MarkdownStyle {
   /// headings lose their hashes, `- ` becomes a real bullet, checkboxes become box glyphs.
   /// Markers are editing chrome; a card at rest shows the result.
   static func rendered(slice: String, sliceRange: NSRange, spans: [Span],
-                       baseSize: CGFloat, zoom: CGFloat) -> AttributedString {
+                       baseSize: CGFloat, zoom: CGFloat, ink: [InkRun] = []) -> AttributedString {
     var attributed = AttributedString(slice)
     style(&attributed, sliceRange: sliceRange, spans: spans, baseSize: baseSize, zoom: zoom)
+    // Ink colors are applied in SERIALIZED-offset space (matching `spans`/`sliceRange`), BEFORE the
+    // marker deletion below — so the color rides along with the surviving characters as markers are
+    // removed. Ink wins over markdown's marker/quote colors on the inked characters.
+    applyInk(&attributed, sliceRange: sliceRange, ink: ink)
 
     // Hide/replace syntax, walking edits from the END so earlier offsets stay valid.
     struct Edit { let start: Int; let end: Int; let replacement: String }
@@ -231,19 +237,19 @@ enum MarkdownStyle {
       switch span.kind {
       case .heading(let level):
         let scale: CGFloat = level == 1 ? 1.5 : (level == 2 ? 1.28 : 1.14)
-        attributed[range].font = .system(size: (size * scale).rounded(), weight: level == 1 ? .bold : .semibold)
+        attributed[range].font = ComposerPreferences.appSwiftUIFont(size: (size * scale).rounded(), weight: level == 1 ? .bold : .semibold)
       case .marker:
         attributed[range].foregroundColor = Color(nsColor: Theme.flavor.overlay0)
       case .bold:
-        attributed[range].font = .system(size: size, weight: .bold)
+        attributed[range].font = ComposerPreferences.appSwiftUIFont(size: size, weight: .bold)
       case .italic:
-        attributed[range].font = .system(size: size).italic()
+        attributed[range].font = ComposerPreferences.appSwiftUIFont(size: size).italic()
       case .code:
         attributed[range].font = .system(size: max(size - 1, 9), design: .monospaced)
         attributed[range].backgroundColor = Color(nsColor: Theme.flavor.surface0.withAlphaComponent(0.55))
       case .quote:
         attributed[range].foregroundColor = Color(nsColor: Theme.flavor.subtext0)
-        attributed[range].font = .system(size: size).italic()
+        attributed[range].font = ComposerPreferences.appSwiftUIFont(size: size).italic()
       case .listMarker, .checkboxTodo:
         attributed[range].foregroundColor = Color(nsColor: Theme.flavor.overlay1)
       case .checkboxDone:
@@ -252,6 +258,28 @@ enum MarkdownStyle {
         attributed[range].foregroundColor = Color(nsColor: Theme.flavor.overlay1)
         attributed[range].strikethroughStyle = .single
       }
+    }
+  }
+
+  /// Color the ink runs intersecting `sliceRange` onto `attributed` (which holds that slice in its
+  /// pre-deletion serialized form). Offsets are serialized UTF-16, exactly like `sliceRange`. Slots
+  /// re-resolve against the active flavor here, so ink follows a theme switch. Runs are applied in
+  /// serialized space so the marker deletion in `rendered` carries the color forward.
+  static func applyInk(_ attributed: inout AttributedString, sliceRange: NSRange, ink: [InkRun]) {
+    guard !ink.isEmpty else { return }
+    let plain = String(attributed.characters)
+    for run in ink {
+      guard let color = Theme.tintColor(run.slot) else { continue }
+      let start = max(run.loc, sliceRange.location)
+      let end = min(run.loc + run.len, sliceRange.location + sliceRange.length)
+      guard end > start else { continue }
+      let charStart = utf16ToCharacterOffset(start - sliceRange.location, in: plain)
+      let charEnd = utf16ToCharacterOffset(end - sliceRange.location, in: plain)
+      guard charEnd > charStart, charEnd <= plain.count else { continue }
+      let lower = attributed.index(attributed.startIndex, offsetByCharacters: charStart)
+      let upper = attributed.index(attributed.startIndex, offsetByCharacters: charEnd)
+      guard lower < upper else { continue }
+      attributed[lower..<upper].foregroundColor = Color(nsColor: color)
     }
   }
 

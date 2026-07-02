@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 /// The entire app surface: a pan/zoom board of text cards on a chromeless glass card, with a
 /// top tool toolbar and a left action rail floating in the gutters. Per-card editor chrome
@@ -17,8 +18,16 @@ struct ComposerCanvas: View {
   @State private var toast: Toast?
   @State private var lastViewportSize: CGSize = .zero
   @State private var selectionRect: CGRect?
+  /// True while an EXTERNAL image drag (Finder etc.) is hovering the canvas — drives the
+  /// drop-target treatment. In-canvas card drags never set this (onDrop's isTargeted only
+  /// fires for external content).
+  @State private var isImageDropTargeted = false
   @State private var freehandDraft: [CGPoint]?
   @State private var elementDraft: DragSegment?
+  /// While drawing a line/arrow, the card its live end will bind to on release — highlighted so the
+  /// bind is visible before commit. Shares `board.bindCandidate` with the commit path, so the
+  /// preview and the actual binding can never disagree.
+  @State private var bindTargetID: UUID?
   @State private var isSpacePressed = false
   @State private var viewportThrottle = ViewportEventThrottle()
   /// Observed for the agent's *coarse* state (isRunning / grounding) so the toolbar and ⌘K palette
@@ -38,10 +47,23 @@ struct ComposerCanvas: View {
   @State private var boardPickerOpen = false
   @State private var boardPickerPinned = false
   @State private var boardPickerCloseWork: DispatchWorkItem?
+  /// The export pill grows on hover into a list of export formats (same mechanic as the board
+  /// picker). Open immediate, close deferred so the glyph→row gap doesn't flicker.
+  @State private var exportMenuOpen = false
+  @State private var exportMenuCloseWork: DispatchWorkItem?
+  /// Measured rest-label width of the Export pill; its expanded list pins to this so hovering
+  /// only grows the surface downward, never sideways. (The board picker uses the fixed
+  /// `WindowChrome.boardPillWidth` instead — its label length varies with the board name.)
+  @State private var exportRestWidth: CGFloat = 0
+  /// Inline rename of the CURRENT board, entered from the title row's secondary-click menu.
+  /// While editing, the picker pins open so hover-out can't close it mid-edit.
+  @State private var renamingCurrentBoard = false
+  @State private var currentBoardDraft = ""
+  @FocusState private var currentBoardNameFocused: Bool
   /// The card that held the caret when the palette was summoned, captured before the palette's
   /// search field steals first responder — so a cancel can hand editing back to it.
   @State private var paletteReturnCardID: UUID?
-  /// Mirrors the agent's grounding folder so the toolbar reflects it reactively.
+  /// Mirrors the agent's grounding folder so the ⌘K palette reflects it reactively.
   @AppStorage("agent.groundingDirectory") private var groundingPath = ""
 
   // Board transform. Pointer locations are normalized back into board space so selection,
@@ -92,7 +114,14 @@ struct ComposerCanvas: View {
           currentTint: board.cards.first(where: { $0.id == editing.id })?.tint,
           onRefine: { refineSelection($0, card: editing) },
           onFormat: { editing.controller.applyMarkdown($0) },
-          onTint: { board.setTint($0, for: editing.id) },
+          onTint: { slot in
+            // A live text selection inks just that range; a bare caret falls back to whole-card tint.
+            if editing.controller.applyInk(slot) {
+              board.noteInkChanged(cardID: editing.id)
+            } else {
+              board.setTint(slot, for: editing.id)
+            }
+          },
           onApplyFix: { editing.controller.applyLintFix(range: $0.range, expecting: $0.phrase, with: $1) },
           askEngine: resolvedChatEngine(),
           onEscalate: { askAgent(about: $0, card: editing) }
@@ -101,7 +130,7 @@ struct ComposerCanvas: View {
       }
 
       // Floating chrome: board identity top-left (the pill IS the board manager), agent top-right,
-      // everything hands-on (tools, zoom, folder, settings) in one bottom command bar.
+      // everything hands-on (tools, zoom, settings) in one bottom command bar.
       boardSwitcherPill(in: proxy.size)
       boardActionsPill(in: proxy.size)
       bottomCommandBar(fit: inner)
@@ -231,7 +260,7 @@ struct ComposerCanvas: View {
   }
 
   private func selectTool(index: Int) {
-    let order: [CanvasTool] = [.select, .text, .rectangle, .ellipse, .diamond, .line, .arrow, .freehand]
+    let order: [CanvasTool] = [.select, .text, .rectangle, .ellipse, .diamond, .line, .arrow, .freehand, .equation]
     guard index >= 1, index <= order.count else { return }
     tool = order[index - 1]
   }
@@ -247,9 +276,9 @@ struct ComposerCanvas: View {
         onSelectionEnded: selectCards(inViewportRect:modifiers:),
         onFreehandChanged: { freehandDraft = $0 },
         onFreehandEnded: commitFreehandDraft,
-        onElementDraftChanged: { start, current in elementDraft = DragSegment(start: start, end: current) },
+        onElementDraftChanged: onElementDraftChanged,
         onElementDraftEnded: commitElementDraft,
-        onElementDraftCancelled: { elementDraft = nil },
+        onElementDraftCancelled: { elementDraft = nil; bindTargetID = nil },
         onPanChanged: { panLive = $0 },
         onPanEnded: { delta in
           pan.width += delta.width
@@ -294,13 +323,77 @@ struct ComposerCanvas: View {
       // toolbar, editing text view). Transparent to clicks; only listens for magnify.
       PinchZoomCatcher(onZoom: handleZoom)
         .allowsHitTesting(false)
+
+      imageDropTargetOverlay
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    // Accept image files dragged in from Finder etc. onto the board. The delegate's isTargeted
+    // only fires for EXTERNAL content, so this never fights in-canvas card drags or editor drops.
+    .onDrop(
+      of: [.fileURL],
+      delegate: ImageFileDropDelegate(
+        isTargeted: $isImageDropTargeted,
+        onDrop: handleImageFileDrop
+      )
+    )
+  }
+
+  /// The drop-target treatment shown while an external image drag hovers the canvas: a dashed
+  /// accent outline inset from the edges over a subtle accent wash, plus one centered chrome pill
+  /// prompting the drop. Pointer-transparent so it never eats the drop.
+  @ViewBuilder
+  private var imageDropTargetOverlay: some View {
+    if isImageDropTargeted {
+      ZStack {
+        RoundedRectangle(cornerRadius: WindowChrome.radius, style: .continuous)
+          .fill(Theme.Palette.accent.opacity(0.06))
+          .overlay(
+            RoundedRectangle(cornerRadius: WindowChrome.radius, style: .continuous)
+              .strokeBorder(
+                Theme.Palette.accent.opacity(0.55),
+                style: StrokeStyle(lineWidth: 2, dash: [8, 6])
+              )
+          )
+          .padding(WindowChrome.edgeInset)
+
+        HStack(spacing: WindowChrome.itemSpacing) {
+          Image(systemName: "photo.badge.plus")
+            .font(WindowChrome.iconFont)
+            .foregroundStyle(Theme.Palette.chromeGlyph)
+          Text("Drop to add")
+            .font(WindowChrome.labelFont)
+            .foregroundStyle(Theme.Palette.chromeText)
+            .padding(.trailing, WindowChrome.labelPadH)
+        }
+        .frame(height: WindowChrome.controlHeight)
+        .padding(.leading, WindowChrome.labelPadH)
+        .chromePill()
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .allowsHitTesting(false)
+      .transition(.opacity)
+      .animation(.easeOut(duration: 0.15), value: isImageDropTargeted)
+    }
   }
 
   @ViewBuilder
   private var elementDraftView: some View {
     if let draft = elementDraft, let kind = tool.elementKind {
+      // Highlight the card the arrow/line will bind to, drawn UNDER the draft segment so the segment
+      // stays crisp on top. The card frame is mapped into viewport space with the exact card-layer
+      // transform (frame × scale, offset by pan + panLive), so the ring lines up with the card.
+      if let target = bindTargetID, let card = board.cards.first(where: { $0.id == target }) {
+        let rect = CGRect(
+          x: card.frame.minX * effectiveScale + pan.width + panLive.width,
+          y: card.frame.minY * effectiveScale + pan.height + panLive.height,
+          width: card.frame.width * effectiveScale,
+          height: card.frame.height * effectiveScale)
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .strokeBorder(Theme.Palette.accent.opacity(0.8), lineWidth: 2)
+          .frame(width: rect.width, height: rect.height)
+          .position(x: rect.midX, y: rect.midY)
+          .allowsHitTesting(false)
+      }
       ElementDraftPreview(kind: kind, start: draft.start, end: draft.end)
         .allowsHitTesting(false)
     }
@@ -347,6 +440,10 @@ struct ComposerCanvas: View {
     }
 
     guard let kind = tool.elementKind else { return }
+    // A bare click with a line/arrow/freehand tool places nothing (no default diagonal shape drops
+    // out of nowhere) and keeps the tool active so the next drag draws. Only box shapes and text
+    // are click-to-place; lines are drawn by dragging start→end.
+    if kind == .line || kind == .arrow || kind == .freehand { return }
     let boardPoint = CGPoint(x: (point.x - pan.width) / effectiveScale,
                              y: (point.y - pan.height) / effectiveScale)
     let id = board.addElement(kind, at: boardPoint)
@@ -354,6 +451,13 @@ struct ComposerCanvas: View {
     if kind == .text {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
         board.interaction(for: id).controller.focus()
+      }
+    } else if kind == .equation {
+      // Mirror the text tool: a placed equation is empty and useless until you type LaTeX, so
+      // drop straight into edit mode. Its editor is the SwiftUI strip below the card (no NSTextView
+      // to focus), so the same post-place delay just lets the card mount before edit mode arms it.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+        board.beginEditing(id)
       }
     }
   }
@@ -366,9 +470,23 @@ struct ComposerCanvas: View {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.interaction(for: id).controller.focus() }
   }
 
+  /// The draft segment changed (viewport space). Store it, and for a line/arrow resolve the card its
+  /// live end would bind to — under the CURRENT drag endpoint, converted to board space — so the
+  /// highlight tracks the cursor and matches exactly what `bindArrowIfPossible` will do on commit.
+  private func onElementDraftChanged(_ start: CGPoint, _ current: CGPoint) {
+    elementDraft = DragSegment(start: start, end: current)
+    if tool == .line || tool == .arrow {
+      bindTargetID = board.bindCandidate(at: boardPoint(forViewport: current), excluding: [])
+    } else {
+      bindTargetID = nil
+    }
+  }
+
   /// Commit a shape/line drawn by dragging from `start` to `end` (viewport space → board space).
   private func commitElementDraft(_ start: CGPoint, _ end: CGPoint) {
-    defer { elementDraft = nil }
+    defer { elementDraft = nil; bindTargetID = nil }
+    // Esc mid-drag cleared the draft; the pending mouse-up must then commit nothing.
+    guard elementDraft != nil else { return }
     guard let kind = tool.elementKind else { return }
     if board.addDrawnElement(kind, from: boardPoint(forViewport: start), to: boardPoint(forViewport: end)) != nil {
       tool = .select
@@ -377,6 +495,8 @@ struct ComposerCanvas: View {
 
   private func commitFreehandDraft(_ viewportPoints: [CGPoint]) {
     defer { freehandDraft = nil }
+    // Esc mid-stroke cleared the draft; the pending mouse-up must then commit nothing.
+    guard freehandDraft != nil else { return }
     guard viewportPoints.count > 1 else { return }
     let boardPoints = viewportPoints.map(boardPoint(forViewport:))
     let minX = boardPoints.map(\.x).min() ?? 0
@@ -444,49 +564,112 @@ struct ComposerCanvas: View {
       .zIndex(60)
   }
 
-  /// The board picker is ONE glass container. At rest it is just the current board's name; on
-  /// hover the same surface grows downward into the board manager — every board with
-  /// rename/delete, plus a New board row. No second popover, no gap: the pill itself expands.
-  private var boardPickerMenu: some View {
-    VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
-      Text(currentBoardName)
+  /// "Welcome Board" (13 characters) is the cap for the rest label: longer names trim with an
+  /// ellipsis so the pill never grows past it.
+  private var boardPickerTitle: String {
+    let name = currentBoardName
+    return name.count > 13 ? String(name.prefix(13)) + "…" : name
+  }
+
+  /// The picker's title row: the current board's trimmed name. A secondary click pops the
+  /// management options — Rename swaps the label for an inline field; Delete removes the current
+  /// board (hidden while it's the only one). This is the ONLY home for current-board management:
+  /// the expanded list deliberately shows just the other boards.
+  @ViewBuilder
+  private func currentBoardTitleRow(canDelete: Bool) -> some View {
+    if renamingCurrentBoard {
+      TextField("Board name", text: $currentBoardDraft)
+        .textFieldStyle(.plain)
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .multilineTextAlignment(.center)
+        .focused($currentBoardNameFocused)
+        .onSubmit(commitCurrentBoardRename)
+        .onExitCommand(perform: cancelCurrentBoardRename)
+        .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.rowFill))
+        // Defer a runloop tick: focusing straight from onAppear can miss while the row swaps in.
+        .onAppear { DispatchQueue.main.async { currentBoardNameFocused = true } }
+        // Clicking away (focus leaves the field) commits, so the rename isn't lost.
+        .onChange(of: currentBoardNameFocused) { _, focused in if !focused { commitCurrentBoardRename() } }
+    } else {
+      Text(boardPickerTitle)
         .font(WindowChrome.labelFont)
         .foregroundStyle(Theme.Palette.body)
         .lineLimit(1)
-        .padding(.horizontal, WindowChrome.labelPadH)
-        .frame(height: WindowChrome.controlHeight)
+        .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
+        .contentShape(Rectangle())
+        .contextMenu {
+          Button("Rename Board") { beginCurrentBoardRename() }
+          if canDelete, let id = store.currentID {
+            Button("Delete Board", role: .destructive) { deleteBoard(id) }
+          }
+        }
+    }
+  }
+
+  private func beginCurrentBoardRename() {
+    currentBoardDraft = currentBoardName
+    renamingCurrentBoard = true
+    boardPickerPinned = true
+  }
+
+  private func commitCurrentBoardRename() {
+    guard renamingCurrentBoard else { return }   // guard so focus-loss doesn't re-fire after cancel
+    renamingCurrentBoard = false
+    boardPickerPinned = false
+    let name = currentBoardDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let id = store.currentID, !name.isEmpty { renameBoard(id, to: name) }
+  }
+
+  private func cancelCurrentBoardRename() {
+    renamingCurrentBoard = false
+    boardPickerPinned = false
+  }
+
+  /// The board picker is ONE glass container. At rest it is just the current board's name; on
+  /// hover the same surface grows downward into the board manager — the OTHER boards with
+  /// rename/delete (the title row already names the current one), plus a New board row. No second
+  /// popover, no gap: the pill itself expands. Pill and menu share ONE fixed width
+  /// (`boardPillWidth`, sized to the 13-char name cap), so a short name never crushes the menu
+  /// and hovering only ever grows the surface downward — never sideways.
+  private var boardPickerMenu: some View {
+    let others = store.dumps.filter { $0.persistentModelID != store.currentID }
+    return VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+      currentBoardTitleRow(canDelete: !others.isEmpty)
 
       if boardPickerOpen {
-        // The expanded manager keeps a fixed width — it must never inherit the window's.
+        // Same fixed width as the rest label so the surface only grows below.
         VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
           Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
 
-          ScrollView {
-            LazyVStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
-              ForEach(store.dumps, id: \.persistentModelID) { dump in
-                BoardPickerRow(
-                  title: dump.title.isEmpty ? "Untitled" : String(dump.title.prefix(40)),
-                  isCurrent: dump.persistentModelID == store.currentID,
-                  onPick: {
-                    Haptics.level()
-                    boardPickerOpen = false
-                    pickBoard(dump.persistentModelID)
-                  },
-                  onRename: { renameBoard(dump.persistentModelID, to: $0) },
-                  // The last board can't be deleted — it can still be renamed.
-                  onDelete: store.dumps.count > 1 ? { deleteBoard(dump.persistentModelID) } : nil,
-                  onManaging: { boardPickerPinned = $0 }
-                )
+          // Only the OTHER boards — the title row above already shows the current one.
+          if !others.isEmpty {
+            ScrollView {
+              LazyVStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+                ForEach(others, id: \.persistentModelID) { dump in
+                  BoardPickerRow(
+                    title: dump.title.isEmpty ? "Untitled" : String(dump.title.prefix(40)),
+                    isCurrent: false,
+                    onPick: {
+                      boardPickerOpen = false
+                      pickBoard(dump.persistentModelID)
+                    },
+                    onRename: { renameBoard(dump.persistentModelID, to: $0) },
+                    onDelete: { deleteBoard(dump.persistentModelID) },
+                    onManaging: { boardPickerPinned = $0 }
+                  )
+                }
               }
             }
-          }
-          .frame(maxHeight: 320)
-          .fixedSize(horizontal: false, vertical: true)
+            .frame(maxHeight: 320)
+            .fixedSize(horizontal: false, vertical: true)
 
-          Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+            Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+          }
           newBoardRow
         }
-        .frame(width: 248)
+        .frame(width: WindowChrome.boardPillWidth)
       }
     }
     .padding(.horizontal, WindowChrome.padH)
@@ -500,7 +683,6 @@ struct ComposerCanvas: View {
   /// Full-width "New board" action pinned under the list.
   private var newBoardRow: some View {
     Button {
-      Haptics.generic()
       boardPickerOpen = false
       newBoard()
     } label: {
@@ -524,6 +706,7 @@ struct ComposerCanvas: View {
     boardPickerCloseWork?.cancel()
     boardPickerCloseWork = nil
     if hovering {
+      if !boardPickerOpen { Haptics.hover() }
       boardPickerOpen = true
     } else {
       let work = DispatchWorkItem { if !boardPickerPinned { boardPickerOpen = false } }
@@ -532,25 +715,81 @@ struct ComposerCanvas: View {
     }
   }
 
-  /// The agent toggle floats as its own pill in the top-right. Board reading/exporting belongs to
-  /// the agent and the local Canvas API now — the old Describe/Copy buttons are gone.
+  /// The top-right chrome: an Export pill (hover-expands, like the board picker) to the LEFT of the
+  /// agent pill. `.top` alignment keeps the agent pill anchored while the export pill grows down.
   private func boardActionsPill(in size: CGSize) -> some View {
-    SidebarAgentButton(active: showAgent) { toggleAgent() }
-    .chromePill()
+    HStack(alignment: .top, spacing: WindowChrome.itemSpacing) {
+      exportMenu
+      SidebarAgentButton(active: showAgent) { toggleAgent() }
+        .chromePill()
+    }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     .padding(.top, WindowChrome.edgeInset)
     .padding(.trailing, WindowChrome.edgeInset)
   }
 
+  /// The export pill is ONE glass container. At rest it is the "Export" label; on hover the same
+  /// surface grows downward into a list of export formats — no popover, no gap, mirroring the board
+  /// picker's hover mechanic exactly. Width-locked to the rest label (like the picker), so the rows
+  /// are short format names: the pill only ever grows below.
+  private var exportMenu: some View {
+    let hasCards = !board.cards.isEmpty
+    return VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+      Text("Export")
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .lineLimit(1)
+        .padding(.horizontal, WindowChrome.labelPadH)
+        .frame(height: WindowChrome.controlHeight)
+        .background(GeometryReader { g in
+          Color.clear
+            .onAppear { exportRestWidth = g.size.width }
+            .onChange(of: g.size.width) { _, w in exportRestWidth = w }
+        })
+
+      if exportMenuOpen {
+        // Width-locked to the rest label so the surface only grows below.
+        VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+          Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+          ExportMenuRow(label: "PNG", help: "Export board as PNG", enabled: hasCards) {
+            exportMenuOpen = false
+            exportBoardAsPNG()
+          }
+        }
+        .frame(width: exportRestWidth > 0 ? exportRestWidth : nil)
+      }
+    }
+    .padding(.horizontal, WindowChrome.padH)
+    .padding(.vertical, WindowChrome.padV)
+    .composerPopupSurface()
+    .onHover { setExportMenuHover($0) }
+    .animation(.easeOut(duration: 0.16), value: exportMenuOpen)
+    .help(exportMenuOpen ? "" : "Export board")
+  }
+
+  /// Opening is immediate; closing waits a beat so crossing the glyph→row gap doesn't flicker —
+  /// identical to `setBoardPickerHover`.
+  private func setExportMenuHover(_ hovering: Bool) {
+    exportMenuCloseWork?.cancel()
+    exportMenuCloseWork = nil
+    if hovering {
+      if !exportMenuOpen { Haptics.hover() }
+      exportMenuOpen = true
+    } else {
+      let work = DispatchWorkItem { exportMenuOpen = false }
+      exportMenuCloseWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+    }
+  }
+
   /// Standard-window mode: ONE bottom-center command bar carrying everything hands-on —
-  /// zoom · tools · folder/settings — tldraw-style, so the top stays calm (identity left,
+  /// zoom · tools · settings — tldraw-style, so the top stays calm (identity left,
   /// AI actions right) and the bottom is a single strong grouping instead of scattered pills.
+  /// Grounding moved into the agent chat (AgentDock) and the ⌘K palette.
   private func bottomCommandBar(fit innerSize: CGSize) -> some View {
-    let grounded = !groundingPath.isEmpty
-    let folderName = grounded ? URL(fileURLWithPath: groundingPath).lastPathComponent : nil
     return HStack(spacing: WindowChrome.itemSpacing) {
       SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out") { zoom(0.8, anchoredAt: zoomAnchor) }
-      Button(action: { Haptics.tap(); withAnimation(Theme.Motion.accessory) { scale = 1 } }) {
+      Button(action: { withAnimation(Theme.Motion.accessory) { scale = 1 } }) {
         Text("\(Int((effectiveScale * 100).rounded()))%")
           .font(WindowChrome.labelFont.monospacedDigit())
           .foregroundStyle(Theme.Palette.chromeText)
@@ -574,18 +813,6 @@ struct ComposerCanvas: View {
 
       barDivider
 
-      SidebarButton(symbol: grounded ? "folder.fill" : "folder.badge.plus",
-                    help: folderName.map { "Agent grounded in \($0)  ·  click to change" }
-                      ?? "Ground the agent in a folder it can read",
-                    active: grounded) { agent.chooseDirectory() }
-        .contextMenu {
-          if grounded {
-            Button("Change Folder\u{2026}") { agent.chooseDirectory() }
-            Button("Remove Grounding", role: .destructive) { agent.setGroundingDirectory(nil) }
-          } else {
-            Button("Ground in Folder\u{2026}") { agent.chooseDirectory() }
-          }
-        }
       SidebarButton(symbol: "gearshape", help: "Settings  ⌘,",
                     active: store.isSettingsOpen) { toggleSettings() }
     }
@@ -605,7 +832,7 @@ struct ComposerCanvas: View {
   /// slot indexes, so they re-resolve when the theme changes.
   @ViewBuilder
   private var tintControl: some View {
-    Button(action: { Haptics.tap(); withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen.toggle() } }) {
+    Button(action: { withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen.toggle() } }) {
       tintSwatch(for: board.currentTint, diameter: 14)
         .frame(width: WindowChrome.controlHeight, height: WindowChrome.controlHeight)
         .background(
@@ -614,6 +841,7 @@ struct ComposerCanvas: View {
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .onHover { if $0 { Haptics.hover() } }
     .help("Element color — applies to new elements and the selection")
 
     if tintPickerOpen {
@@ -640,6 +868,7 @@ struct ComposerCanvas: View {
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .onHover { if $0 { Haptics.hover() } }
     .help(slot == nil ? "Default ink" : "Theme color \((slot ?? 0) + 1)")
   }
 
@@ -655,7 +884,6 @@ struct ComposerCanvas: View {
   }
 
   private func pickTint(_ slot: Int?) {
-    Haptics.tap()
     board.currentTint = slot
     board.setTintForSelection(slot)
     withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
@@ -897,6 +1125,21 @@ struct ComposerCanvas: View {
 
   private func resetView() { scale = 1; pan = .zero }
 
+  // MARK: Export
+
+  /// Render the whole board to a PNG and hand it to the save panel. The render is a real AppKit
+  /// pass (`BoardExporter.renderBoardImage`) hosting the live card layer at zoom 1 offscreen, so
+  /// `NSViewRepresentable`-backed card subviews draw properly and the canvas paints — the old
+  /// `ImageRenderer` bailed on both. Images resolve synchronously via `exportImageProvider`.
+  @MainActor
+  private func exportBoardAsPNG() {
+    guard let image = BoardExporter.renderBoardImage(cards: board.cards, board: board) else {
+      // renderBoardImage reports its own failure; an empty board simply returns nil.
+      return
+    }
+    BoardExporter.presentSavePanel(image: image, suggestedName: store.current?.title ?? "Board")
+  }
+
   // MARK: Board navigation (history stack)
 
   private var canNavigate: Bool {
@@ -922,6 +1165,15 @@ struct ComposerCanvas: View {
   private func handleEscapeBoard() {
     if focusedCardID != nil { closeFocus(); return }
     if board.editingInteraction != nil { return }
+    // Esc mid-draw abandons the in-flight shape/freehand: clear the preview state here (the
+    // InputView, listening for the same escape, drops its own drag so the pending mouse-up can't
+    // commit) and swallow the keystroke so it doesn't also revert the tool underneath the cancel.
+    if elementDraft != nil || freehandDraft != nil {
+      elementDraft = nil
+      freehandDraft = nil
+      bindTargetID = nil
+      return
+    }
     if tool != .select {
       tool = .select
     } else if !board.selectedCardIDs.isEmpty {
@@ -938,7 +1190,11 @@ struct ComposerCanvas: View {
   private func handleUnlockSelection() { if canEditBoard { board.lockSelection(false) } }
 
   private func handleSpaceKey(_ notification: Notification) {
-    isSpacePressed = (notification.userInfo?["down"] as? Bool) ?? false
+    let down = (notification.userInfo?["down"] as? Bool) ?? false
+    isSpacePressed = down
+    // Mirror into the shared latch the card catchers poll — they aren't rebuilt on a space press,
+    // so they can't read `isSpacePressed` through the view tree.
+    CanvasKeyState.shared.isSpaceDown = down
   }
 
   private func gotoOlder() { board.flushSave(); store.goOlder(); board.loadFromStore(); resetView() }
@@ -1229,8 +1485,8 @@ struct ComposerCanvas: View {
       }
       return
     }
-    if let image = firstImage(from: pasteboard), let url = ComposerTextView.savePNG(image) {
-      board.addImageObject(path: url.path, at: boardPoint(forViewport: viewportCenter))
+    if let image = firstImage(from: pasteboard), let filename = image.ingest() {
+      board.addImageObject(path: filename, at: boardPoint(forViewport: viewportCenter))
     }
   }
 
@@ -1269,6 +1525,81 @@ struct ComposerCanvas: View {
     }
   }
 
+  /// An external drag of image files landed on the canvas at `viewportLocation`. Resolve each
+  /// provider to a file URL, ingest it OFF the main thread (like AppDelegate.captureToBoard), then
+  /// drop the card on the MainActor. The first image lands at the drop point (converted to board
+  /// coordinates); subsequent images in a multi-drop stagger so they don't stack invisibly.
+  /// `addImageObject` registers its own undo.
+  @discardableResult
+  private func handleImageFileDrop(_ providers: [NSItemProvider], at viewportLocation: CGPoint) -> Bool {
+    // Snapshot the board-space drop point now, on the main thread, before any async hop.
+    let dropPoint = boardPoint(forViewport: viewportLocation)
+
+    // SwiftUI's NSItemProvider bridging is unreliable for Finder drags on macOS — providers can
+    // arrive with no registered type identifiers at all. The AppKit drag pasteboard always holds
+    // the real file URLs during performDrop, so read it directly; the provider dance below is
+    // only a fallback for drag sources that don't populate the pasteboard.
+    let pasteboardURLs = (NSPasteboard(name: .drag).readObjects(
+      forClasses: [NSURL.self],
+      options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+    if !pasteboardURLs.isEmpty {
+      for (index, url) in pasteboardURLs.enumerated() {
+        ingestDroppedImage(url, at: Self.staggered(dropPoint, index: index))
+      }
+      return true
+    }
+
+    guard !providers.isEmpty else { return false }
+    for (index, provider) in providers.enumerated() {
+      let point = Self.staggered(dropPoint, index: index)
+      Self.loadFileURL(from: provider) { url in
+        guard let url else { return }
+        ingestDroppedImage(url, at: point)
+      }
+    }
+    return true
+  }
+
+  /// Subsequent images in a multi-drop stagger so they don't stack invisibly.
+  private static func staggered(_ point: CGPoint, index: Int) -> CGPoint {
+    CGPoint(x: point.x + CGFloat(index) * 24, y: point.y + CGFloat(index) * 24)
+  }
+
+  /// Ingest one dropped file OFF the main thread (like AppDelegate.captureToBoard), then add the
+  /// card on the MainActor. Non-image files are ignored silently (no error UI) — the filter is the
+  /// same NSImage.imageTypes conformance set the paste path uses. `addImageObject` registers undo.
+  private func ingestDroppedImage(_ url: URL, at point: CGPoint) {
+    guard url.conformsToImageType else {
+      NSLog("Composer drop: ignoring non-image file %@", url.path)
+      return
+    }
+    Task.detached(priority: .userInitiated) {
+      // Finder URLs may be security-scoped even when we can already read them; start/stop is a
+      // harmless no-op when the app isn't sandboxed, and correct if it ever is.
+      let scoped = url.startAccessingSecurityScopedResource()
+      defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+      guard let filename = AssetStore.ingest(fileURL: url) else { return }
+      await MainActor.run {
+        _ = board.addImageObject(path: filename, at: point)
+      }
+    }
+  }
+
+  /// Resolve a dropped provider to a file URL. `loadObject(ofClass: URL.self)` is unreliable for
+  /// Finder drags on macOS (the provider surfaces `public.file-url` as raw data, which that
+  /// overload won't decode), so read the raw representation first and fall back through the
+  /// shapes it's known to arrive in.
+  private static func loadFileURL(from provider: NSItemProvider, completion: @escaping (URL?) -> Void) {
+    provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+      if let url = item as? URL { completion(url); return }
+      if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) { completion(url); return }
+      if let text = item as? String, let url = URL(string: text), url.isFileURL { completion(url); return }
+      NSLog("Composer drop: could not resolve a file URL from the dropped item (%@)",
+            error?.localizedDescription ?? "no underlying error")
+      completion(nil)
+    }
+  }
+
   private func dismiss() { NotificationCenter.default.post(name: .composerDismiss, object: nil) }
 
   private func boardPoint(forViewport point: CGPoint) -> CGPoint {
@@ -1276,19 +1607,31 @@ struct ComposerCanvas: View {
             y: (point.y - pan.height) / effectiveScale)
   }
 
-  private func firstImage(from pasteboard: NSPasteboard) -> NSImage? {
-    if pasteboard.canReadObject(forClasses: [NSImage.self], options: nil),
-       let images = pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
-       let first = images.first {
-      return first
+  private enum ImageInput {
+    case file(URL)
+    case image(NSImage)
+
+    func ingest() -> String? {
+      switch self {
+      case let .file(url): return AssetStore.ingest(fileURL: url)
+      case let .image(image): return AssetStore.ingest(image: image)
+      }
     }
+  }
+
+  private func firstImage(from pasteboard: NSPasteboard) -> ImageInput? {
     let options: [NSPasteboard.ReadingOptionKey: Any] = [
       .urlReadingFileURLsOnly: true,
       .urlReadingContentsConformToTypes: NSImage.imageTypes,
     ]
     if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL],
        let url = urls.first {
-      return NSImage(contentsOf: url)
+      return .file(url)
+    }
+    if pasteboard.canReadObject(forClasses: [NSImage.self], options: nil),
+       let images = pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+       let first = images.first {
+      return .image(first)
     }
     return nil
   }
@@ -1355,6 +1698,22 @@ private final class ViewportEventThrottle {
 }
 
 // MARK: - Native viewport input
+
+/// Shared, view-independent latch for the space-to-pan key. The board's viewport input owns the
+/// notification-driven state, but a card's own pointer catcher sits ABOVE the viewport in the card
+/// layer, so it must consult the same latch to know when to fall through — otherwise space-pan dies
+/// anywhere a card sits. AppKit re-creates neither NSView on a space press, so a plain singleton
+/// they both poll (in `hitTest` / `mouseDown`) keeps them in lockstep. The window resets it on
+/// losing key so a space held while focus leaves doesn't stick the board in pan mode.
+///
+/// Not `@MainActor`: it's a single `Bool` mutated and read only on the main thread (from
+/// notification handlers and AppKit's `hitTest`/`mouseDown`), and staying nonisolated lets the
+/// AppKit NSView overrides poll it without concurrency ceremony.
+final class CanvasKeyState: @unchecked Sendable {
+  static let shared = CanvasKeyState()
+  private init() {}
+  var isSpaceDown = false
+}
 
 private struct BoardViewportInput: NSViewRepresentable {
   let tool: CanvasTool
@@ -1432,25 +1791,69 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     var state = State() {
       didSet {
-        if state.isSpacePressed != oldValue.isSpacePressed { window?.invalidateCursorRects(for: self) }
+        if state.isSpacePressed != oldValue.isSpacePressed || state.tool != oldValue.tool {
+          window?.invalidateCursorRects(for: self)
+        }
       }
     }
     private var dragStart: CGPoint?
     private var dragModifiers: EventModifiers = []
-    private var dragMode: DragMode = .maybeTap
+    /// Refresh the cursor whenever the drag mode changes, so the open-hand grab flips to a closed
+    /// grab the moment a space-pan actually starts (and back when it ends).
+    private var dragMode: DragMode = .maybeTap {
+      didSet { if dragMode != oldValue { window?.invalidateCursorRects(for: self) } }
+    }
     private var dragClickCount = 1
     private var lastPan: CGSize = .zero
     private var freehandPoints: [CGPoint] = []
     /// Last raw drag point, kept so a Shift press/release with the mouse still (flagsChanged,
     /// no mouseDragged) can re-emit the draft with the new constraint immediately.
     private var lastDragPoint: CGPoint?
+    /// Set when Esc aborted the current placing/freehand drag: further mouse-drags stop emitting a
+    /// preview and the pending mouse-up commits nothing. Reset on the next `mouseDown`.
+    private var draftCancelled = false
+    private var escapeObserver: NSObjectProtocol?
+
+    override init(frame frameRect: NSRect) {
+      super.init(frame: frameRect)
+      // Esc while drawing abandons the in-flight shape/freehand: drop this drag so the pending
+      // mouse-up can't commit it. The canvas clears its preview state on the same notification.
+      escapeObserver = NotificationCenter.default.addObserver(
+        forName: .composerEscapeBoard, object: nil, queue: .main
+      ) { [weak self] _ in
+        MainActor.assumeIsolated { self?.cancelActiveDraft() }
+      }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit {
+      if let escapeObserver { NotificationCenter.default.removeObserver(escapeObserver) }
+    }
+
+    /// Abandon a placing/freehand drag in progress (Esc). Leaves the mode intact so the eventual
+    /// mouse-up still tears the gesture down cleanly, but flags it so nothing is committed.
+    private func cancelActiveDraft() {
+      guard dragMode == .placing || dragMode == .drawing else { return }
+      draftCancelled = true
+      freehandPoints = []
+      state.onFreehandChanged(nil)
+      state.onElementDraftCancelled()
+    }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
-    // Make space-to-pan discoverable: a grab cursor while space is held.
+    // Cursor feedback for the current mode: a closed grab while actually panning (space + drag), an
+    // open grab while space is merely held (pan is armed), and a crosshair for every drawing tool so
+    // the canvas reads as "ready to place". Select tool with no space held keeps the arrow.
     override func resetCursorRects() {
-      if state.isSpacePressed { addCursorRect(bounds, cursor: .openHand) }
+      if state.isSpacePressed {
+        addCursorRect(bounds, cursor: dragMode == .panning ? .closedHand : .openHand)
+      } else if state.tool.elementKind != nil {
+        addCursorRect(bounds, cursor: .crosshair)
+      }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1461,6 +1864,7 @@ private struct BoardViewportInput: NSViewRepresentable {
       dragClickCount = event.clickCount
       lastPan = .zero
       freehandPoints = []
+      draftCancelled = false
       dragMode = state.isSpacePressed ? .panning : .maybeTap
       state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
@@ -1469,6 +1873,8 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     override func mouseDragged(with event: NSEvent) {
       guard let start = dragStart else { return }
+      // Esc cancelled this placing/freehand drag — ignore the rest of it until mouse-up.
+      if draftCancelled { lastDragPoint = convert(event.locationInWindow, from: nil); return }
       let point = convert(event.locationInWindow, from: nil)
       let delta = CGSize(width: point.x - start.x, height: point.y - start.y)
       let distance = hypot(delta.width, delta.height)
@@ -1530,6 +1936,13 @@ private struct BoardViewportInput: NSViewRepresentable {
       let delta = CGSize(width: point.x - start.x, height: point.y - start.y)
       let distance = hypot(delta.width, delta.height)
 
+      // Esc already tore down this placing/freehand drag — commit nothing and reset cleanly, so the
+      // mouse-up neither drops a shape nor falls through to tap-to-place.
+      if draftCancelled {
+        resetDragState()
+        return
+      }
+
       switch dragMode {
       case .maybeTap:
         if dragClickCount >= 2 { state.onDoubleTap(start) } else { state.onTap(start, dragModifiers) }
@@ -1545,8 +1958,10 @@ private struct BoardViewportInput: NSViewRepresentable {
         state.onFreehandEnded(freehandPoints)
       case .placing:
         if distance < 5 {
+          // A bare click (no real drag). `onTap` → `handleTap` decides per tool whether to place:
+          // box/text tools place at the click, line/arrow place nothing (no default diagonal arrow).
           state.onElementDraftCancelled()
-          state.onTap(start, dragModifiers)   // a click (no real drag) still drops a default size
+          state.onTap(start, dragModifiers)
         } else {
           state.onElementDraftEnded(start, constrained(point, from: start, flags: event.modifierFlags))
         }
@@ -1554,17 +1969,26 @@ private struct BoardViewportInput: NSViewRepresentable {
         state.onPanEnded(lastPan)
       }
 
+      resetDragState()
+    }
+
+    private func resetDragState() {
       dragStart = nil
       dragModifiers = []
       dragMode = .maybeTap
       lastPan = .zero
       freehandPoints = []
       lastDragPoint = nil
+      draftCancelled = false
       state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
     }
 
     override func scrollWheel(with event: NSEvent) {
+      // Panning mid-draw would shift the board out from under a draft whose start point was captured
+      // at the old pan, so the committed shape lands away from the preview. Swallow scroll-pan while
+      // a shape/freehand drag is live; two-finger pan resumes the moment the draw ends.
+      if dragMode == .placing || dragMode == .drawing { return }
       state.onScroll(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY))
     }
 
@@ -1576,6 +2000,47 @@ private struct BoardViewportInput: NSViewRepresentable {
         height: abs(end.y - start.y)
       )
     }
+  }
+}
+
+// MARK: - External image-file drop
+
+/// Accepts EXTERNAL image-file drags (Finder etc.) onto the canvas, exposing both the hover state
+/// (for the drop-target treatment) and the drop location (for board-coordinate placement).
+/// SwiftUI's plain `.onDrop(of:isTargeted:)` gives one or the other; a DropDelegate gives both.
+private struct ImageFileDropDelegate: DropDelegate {
+  @Binding var isTargeted: Bool
+  /// Called with the item providers and the drop location in canvas viewport space. Returns
+  /// whether the drop was accepted.
+  let onDrop: ([NSItemProvider], CGPoint) -> Bool
+
+  func validateDrop(info: DropInfo) -> Bool {
+    info.hasItemsConforming(to: [.fileURL])
+  }
+
+  func dropEntered(info: DropInfo) {
+    withAnimation(.easeOut(duration: 0.15)) { isTargeted = true }
+  }
+
+  func dropExited(info: DropInfo) {
+    withAnimation(.easeOut(duration: 0.15)) { isTargeted = false }
+  }
+
+  func performDrop(info: DropInfo) -> Bool {
+    withAnimation(.easeOut(duration: 0.15)) { isTargeted = false }
+    return onDrop(info.itemProviders(for: [.fileURL]), info.location)
+  }
+}
+
+private extension URL {
+  /// True when the file's own content type conforms to any image type BonsAI accepts — the same
+  /// `NSImage.imageTypes` set the paste path filters on.
+  var conformsToImageType: Bool {
+    guard let type = (try? resourceValues(forKeys: [.contentTypeKey]))?.contentType else {
+      // No resolvable type (e.g. a file that no longer exists): fall back to the extension.
+      return NSImage.imageTypes.contains { UTType($0)?.preferredFilenameExtension == pathExtension.lowercased() }
+    }
+    return NSImage.imageTypes.contains { UTType($0).map { type.conforms(to: $0) } ?? false }
   }
 }
 
@@ -1804,7 +2269,7 @@ private struct ActiveCardOverlays: View {
 /// Each `BoardCardView` still observes its own `CardInteraction`, so editing/typing a card re-renders
 /// just that card even while this whole layer is skipped — the same way the capture overlay stays
 /// immediate.
-private struct BoardCardLayer: View, Equatable {
+struct BoardCardLayer: View, Equatable {
   let cards: [CardState]
   let board: BoardViewModel
   let selectedCardIDs: Set<UUID>
@@ -1875,6 +2340,7 @@ private struct BoardPickerRow: View {
     }
     .onHover { over in
       hovering = over
+      if over { Haptics.hover() }
       if !over { setConfirmingDelete(false) }
     }
     .animation(.easeOut(duration: 0.1), value: hovering)
@@ -1903,10 +2369,6 @@ private struct BoardPickerRow: View {
       }
       .padding(.horizontal, WindowChrome.labelPadH)
       .frame(height: 30)
-      .background(
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .fill(hovering ? Theme.Palette.hoverWash : Color.clear)
-      )
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -1938,7 +2400,7 @@ private struct BoardPickerRow: View {
   }
 
   private func rowIcon(_ symbol: String, help: String, tint: Color?, action: @escaping () -> Void) -> some View {
-    Button(action: { Haptics.tap(); action() }) {
+    Button(action: action) {
       Image(systemName: symbol)
         .font(.system(size: 10.5, weight: .semibold))
         .foregroundStyle(tint ?? Theme.Palette.title)
@@ -1975,6 +2437,33 @@ private struct BoardPickerRow: View {
   }
 }
 
+/// One row of the hover export menu: a short centered format name ("PNG"). The menu is
+/// width-locked to the "Export" rest label, so rows carry the format name only — the verbose
+/// action lives in `help`, and hover feedback is the trackpad tick. Structured so more formats
+/// slot in as sibling rows. When `enabled` is false (empty board) the row dims and is inert.
+private struct ExportMenuRow: View {
+  let label: String
+  let help: String
+  var enabled: Bool = true
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Text(label)
+        .font(WindowChrome.labelFont)
+        .lineLimit(1)
+        .foregroundStyle(enabled ? Theme.Palette.body : Theme.Palette.chromeGlyphDim)
+        .frame(maxWidth: .infinity)
+        .frame(height: 30)   // matches BoardPickerRow, not controlHeight — menu rows are denser
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(!enabled)
+    .onHover { if $0, enabled { Haptics.hover() } }
+    .help(help)
+  }
+}
+
 /// Live rubber-band preview shown while dragging out a shape/line with a placement tool.
 private struct ElementDraftPreview: View {
   let kind: CanvasElementKind
@@ -1994,7 +2483,24 @@ private struct ElementDraftPreview: View {
   private func path(in r: CGRect) -> Path {
     switch kind {
     case .line, .arrow:
-      return Path { p in p.move(to: start); p.addLine(to: end) }
+      return Path { p in
+        p.move(to: start)
+        p.addLine(to: end)
+        // Draw the same arrowhead the committed arrow uses (`LineShape`: head 15, splay ±0.82π), so
+        // the preview reads exactly as the final arrow instead of a bare segment.
+        if kind == .arrow {
+          let angle = atan2(end.y - start.y, end.x - start.x)
+          let head: CGFloat = 15
+          for side in [CGFloat.pi * 0.82, -CGFloat.pi * 0.82] {
+            p.move(to: end)
+            p.addLine(to: CGPoint(x: end.x + cos(angle + side) * head, y: end.y + sin(angle + side) * head))
+          }
+        }
+      }
+    case .equation:
+      // Equations never drag-place (click-to-place, like text), so this preview is only ever hit
+      // for exhaustiveness — a plain rounded box matches the card frame if it ever renders.
+      return Path(roundedRect: r, cornerRadius: 6)
     case .ellipse:
       return Path(ellipseIn: r)
     case .diamond:

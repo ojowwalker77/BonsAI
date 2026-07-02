@@ -68,6 +68,18 @@ final class FloatingPanel: NSPanel {
     (delegate as? PanelController)?.hide()
   }
 
+  /// Losing key status mid-press can swallow the space `keyUp`, which would otherwise leave the
+  /// board stuck in pan mode (open-hand cursor, cards non-interactive). Clear the space latch so it
+  /// resets — mirroring a `keyUp` — the moment focus leaves.
+  override func resignKey() {
+    super.resignKey()
+    NotificationCenter.default.post(
+      name: .composerSpaceKeyChanged,
+      object: nil,
+      userInfo: ["down": false]
+    )
+  }
+
   /// BonsAI has no menu bar, so app-menu shortcuts don't fire. Catch the board's
   /// shortcuts at the key-window level instead.
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -116,6 +128,16 @@ final class FloatingPanel: NSPanel {
         NotificationCenter.default.post(name: .composerDuplicateSelection, object: nil)
         return true
       }
+    }
+
+    // ⌃⌘1 / ⌃⌘2 / ⌃⌘3: pick the app-wide body font (San Francisco / Nohemi / Satoshi). An
+    // app-level combo, so it works regardless of text-editing state — the exact `[.control,
+    // .command]` flag match keeps it clear of the plain ⌘1–⌘8 tool switch below.
+    if flags == [.control, .command], let raw,
+       let family: ComposerFontFamily = raw == "1" ? .system : (raw == "2" ? .nohemi : (raw == "3" ? .satoshi : nil)) {
+      ComposerPreferences.appFontFamily = family
+      NotificationCenter.default.post(name: .composerFontFamilyChanged, object: nil)
+      return true
     }
 
     // ⇧⌘F: focus-write the current card (works while the editor has the keyboard).
@@ -170,8 +192,8 @@ final class FloatingPanel: NSPanel {
       NotificationCenter.default.post(name: .composerZoomReset, object: nil)
       return true
     }
-    // ⌘1–⌘8 pick a tool (select, text, rectangle, ellipse, diamond, line, arrow, freehand).
-    if flags == [.command], let raw, let index = Int(raw), (1...8).contains(index) {
+    // ⌘1–⌘9 pick a tool (select, text, rectangle, ellipse, diamond, line, arrow, freehand, equation).
+    if flags == [.command], let raw, let index = Int(raw), (1...9).contains(index) {
       NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["index": index])
       return true
     }

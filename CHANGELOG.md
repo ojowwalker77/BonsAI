@@ -12,6 +12,31 @@ under the new version heading.
 ## [Unreleased]
 
 
+## [1.3.1] - 2026-07-02
+
+### Added
+- **LaTeX equation cards.** The canvas now has an equation tool for native SwiftMath-rendered math
+  cards, with editable LaTeX source, theme-aware ink, copy/export support, and a readable fallback
+  when an expression does not parse.
+- **Canvas image intake and export.** Drag image files directly onto the board, keep them in a
+  compressed local asset store, and export a board to PNG with real image content instead of loading
+  placeholders.
+- **Selectable app fonts.** Appearance settings now include San Francisco, Nohemi, and Satoshi,
+  with the required font resources bundled into the app.
+
+### Changed
+- **Cleaner bottom command bar.** The grounding-folder control moved out of the bottom tool bar;
+  grounding remains available from the agent chat and command palette so the main canvas tools stay
+  focused.
+- **Hover polish and haptics.** Board menus and card affordances are quieter at rest, reveal on
+  hover, and only trigger haptic feedback for intentional hover transitions.
+
+### Fixed
+- **Canvas basics are sturdier.** Arrow drawing, zoomed text edits, Finder/iCloud image tagging,
+  and selection ink all behave consistently across the board interaction paths.
+- **Backspace routing stays scoped.** Regression coverage now protects the distinction between
+  deleting selected cards from the bare canvas and editing text inside AppKit or SwiftUI fields.
+
 ## [1.3.0] - 2026-07-01
 
 ### Added

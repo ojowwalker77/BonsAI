@@ -54,6 +54,13 @@ final class EditorController: ObservableObject {
     coordinator?.applyMarkdown(action)
   }
 
+  /// Ink the current selection with a theme tint slot (`nil` clears ink on the range). Returns
+  /// false when there's no selection so the caller can fall back to whole-card tinting.
+  @discardableResult
+  func applyInk(_ slot: Int?) -> Bool {
+    coordinator?.applyInk(slot) ?? false
+  }
+
   /// Self-contained plain text with mention tokens serialized back to "@name".
   var plainText: String {
     plainTextIfLoaded ?? ""
@@ -62,6 +69,13 @@ final class EditorController: ObservableObject {
   var plainTextIfLoaded: String? {
     guard let tv = coordinator?.textView else { return nil }
     return tv.attributedString().composerPlainText
+  }
+
+  /// Serialized text plus its ink runs, extracted from the same attributed string so their
+  /// offsets always agree. Nil while the heavy editor is unmounted.
+  var plainTextAndInkIfLoaded: (text: String, ink: [InkRun])? {
+    guard let tv = coordinator?.textView else { return nil }
+    return tv.attributedString().composerPlainTextAndInk
   }
 
   /// A lossless copy of the whole document (chips + attachments) for revert.
@@ -87,6 +101,9 @@ final class EditorController: ObservableObject {
 struct FreeWriteEditor: NSViewRepresentable {
   @Binding var text: String
   var initialAttributedText: NSAttributedString?
+  /// Persisted per-range ink for the serialized `text`, re-applied when the document is rebuilt
+  /// from plain text (a reloaded card with no in-session attributed snapshot).
+  var initialInk: [InkRun] = []
   var placeholder = "Start writing\u{2026}"
   var onCountChange: (Int) -> Void = { _ in }
   var onSelectionChange: (EditorSelection) -> Void = { _ in }
@@ -102,6 +119,9 @@ struct FreeWriteEditor: NSViewRepresentable {
   /// Board-scoped copy-time variable names, so a `$name` reference highlights even when its
   /// `name = …` definition lives in another card.
   var definedVariables: () -> Set<String> = { [] }
+  /// The editing card's whole-card tint slot, so clearing range ink restores the card tint's
+  /// color (not the flavor body ink) on the cleared span.
+  var cardTint: (() -> Int?)? = nil
   @ObservedObject var mentions: MentionState
   @ObservedObject var appSearch: AppSearchState
   @ObservedObject var controller: EditorController
@@ -179,7 +199,8 @@ struct FreeWriteEditor: NSViewRepresentable {
       // reloaded card edits with real chips, not raw tokens.
       tv.textStorage?.setAttributedString(
         ChipFactory.attributedDocument(fromPlainText: text, font: Theme.Typography.body,
-                                       paragraph: context.coordinator.paragraphStyle()))
+                                       paragraph: context.coordinator.paragraphStyle(),
+                                       ink: initialInk))
     }
     // Style what's already there (shell-token highlight, chip restyle) so a focused card shows
     // its tokens immediately, not only after the first keystroke.
@@ -202,7 +223,8 @@ struct FreeWriteEditor: NSViewRepresentable {
       let sel = tv.selectedRange()
       tv.textStorage?.setAttributedString(
         ChipFactory.attributedDocument(fromPlainText: text, font: Theme.Typography.body,
-                                       paragraph: context.coordinator.paragraphStyle()))
+                                       paragraph: context.coordinator.paragraphStyle(),
+                                       ink: initialInk))
       let length = (tv.string as NSString).length
       tv.setSelectedRange(NSRange(location: min(sel.location, length), length: 0))
     }
@@ -304,8 +326,14 @@ extension FreeWriteEditor {
       let full = NSRange(location: 0, length: storage.length)
       let attrs = bodyAttributes()
       var bodyRanges: [NSRange] = []
+      // Per-range ink slots survive the body reset: `setAttributes` replaces every attribute (so
+      // `.inkSlot` is wiped), so snapshot the inked spans here and re-apply them last — ink wins
+      // over markdown's body/marker colors on the colored characters, keeping the range colored
+      // as the user keeps typing.
+      var inkedSpans: [(range: NSRange, slot: Int)] = []
       storage.enumerateAttributes(in: full, options: []) { attributes, range, _ in
         guard attributes[.mentionToken] == nil, attributes[.attachment] == nil else { return }
+        if let slot = attributes[.inkSlot] as? Int { inkedSpans.append((range, slot)) }
         bodyRanges.append(range)
       }
       guard !bodyRanges.isEmpty else { return }
@@ -315,6 +343,10 @@ extension FreeWriteEditor {
       for range in bodyRanges { storage.setAttributes(attrs, range: range) }
       MarkdownStyle.apply(to: storage, baseFont: Theme.Typography.body)
       highlightShellTokens(in: storage)
+      for (range, slot) in inkedSpans {
+        storage.addAttribute(.inkSlot, value: slot, range: range)
+        if let color = Theme.tintColor(slot) { storage.addAttribute(.foregroundColor, value: color, range: range) }
+      }
       storage.endEditing()
       isNormalizingFormatting = false
       tv.typingAttributes = attrs
@@ -749,6 +781,35 @@ extension FreeWriteEditor {
       case .heading: cycleHeading(tv)
       }
       tv.window?.makeFirstResponder(tv)
+    }
+
+    /// Ink the current selection with a theme tint slot: set (or clear, when `slot` is nil) the
+    /// `.inkSlot` attribute and its resolved `.foregroundColor` on every non-chip run in the
+    /// selection. Chip runs keep their brand color. Serialized text is untouched — only display
+    /// attributes change — so `composerPlainTextAndInk` re-derives the runs from the storage.
+    /// Returns false with no selection so the caller can fall back to whole-card tinting.
+    @discardableResult
+    func applyInk(_ slot: Int?) -> Bool {
+      guard let tv = textView, let storage = tv.textStorage else { return false }
+      let range = tv.selectedRange()
+      guard range.length > 0 else { return false }
+      // Clearing falls back to the card's tint color (if any) so cleared text matches its
+      // untinted siblings, else the flavor's body ink.
+      let clearedColor = Theme.tintColor(parent.cardTint?()) ?? Theme.nsBodyText
+      let color = slot.flatMap { Theme.tintColor($0) } ?? clearedColor
+      storage.beginEditing()
+      storage.enumerateAttribute(.mentionToken, in: range) { value, sub, _ in
+        guard value == nil else { return }   // chips keep their own color
+        if let slot {
+          storage.addAttribute(.inkSlot, value: slot, range: sub)
+        } else {
+          storage.removeAttribute(.inkSlot, range: sub)
+        }
+        storage.addAttribute(.foregroundColor, value: color, range: sub)
+      }
+      storage.endEditing()
+      tv.didChangeText()
+      return true
     }
 
     private func toggleWrap(_ tv: NSTextView, marker: String) {

@@ -55,10 +55,14 @@ enum Theme {
   enum Typography {
     static var body: NSFont { ComposerPreferences.editorFont }
     static let bodyLineSpacing: CGFloat = 3
-    static let count = SwiftUI.Font.caption2
-    static let menuName = SwiftUI.Font.body
-    static let menuDesc = SwiftUI.Font.caption
-    static let actionLabel = SwiftUI.Font.body.weight(.medium)
+    // Text-bearing tokens route through the app-font resolver so the selected family carries into
+    // the word count, the @-mention list, and text action labels. Sizes mirror the SwiftUI text
+    // styles they replaced (caption2 ≈ 11, body ≈ 13, caption ≈ 12) so `.system` is unchanged.
+    static var count: SwiftUI.Font { ComposerPreferences.appSwiftUIFont(size: 11) }
+    static var menuName: SwiftUI.Font { ComposerPreferences.appSwiftUIFont(size: 13) }
+    static var menuDesc: SwiftUI.Font { ComposerPreferences.appSwiftUIFont(size: 12) }
+    static var actionLabel: SwiftUI.Font { ComposerPreferences.appSwiftUIFont(size: 13, weight: .medium) }
+    // Styles an SF Symbol glyph, not text — stays system so the symbol metrics never break.
     static let actionIcon = SwiftUI.Font.body.weight(.medium)
   }
 
@@ -168,13 +172,24 @@ enum WindowChrome {
   /// EVERY chrome glyph: one size, one weight. No inline `.font(.system(size: …))` in chrome views.
   static let iconSize: CGFloat = 17
   static var iconFont: Font { .system(size: iconSize, weight: .medium) }
-  /// EVERY chrome text label (board name, zoom %, chip text).
-  static var labelFont: Font { .system(size: 13, weight: .medium) }
+  /// EVERY chrome text label (board name, zoom %, chip text). Routes through the app-font resolver
+  /// so the selected family carries into the floating pills; stays a computed property so it
+  /// re-resolves after the canvas rebuild that follows a font-family switch.
+  static var labelFont: Font { ComposerPreferences.appSwiftUIFont(size: 13, weight: .medium) }
   /// Inner horizontal padding for a text-bearing control inside a pill (icons are square and
   /// need none).
   static let labelPadH: CGFloat = 10
   /// Spacing between sibling controls inside one pill/bar.
   static let itemSpacing: CGFloat = 4
+  /// Fixed footprint of the board-picker pill: sized to the 13-character display cap
+  /// ("Welcome Board") at `labelFont`, so short names never shrink the pill and its hover menu
+  /// only ever grows downward.
+  static let boardPillWidth: CGFloat = {
+    // labelFont's AppKit twin — keep in sync with `labelFont` above.
+    let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+    let text = ("Welcome Board" as NSString).size(withAttributes: [.font: font]).width
+    return (text + labelPadH * 2).rounded(.up)
+  }()
 }
 
 extension View {

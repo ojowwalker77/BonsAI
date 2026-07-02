@@ -38,15 +38,14 @@ private struct RefineMenuRow: View {
       }
       .padding(.horizontal, 12)
       .padding(.vertical, 7)
-      .background(
-        RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-          .fill(hovering ? Theme.Palette.selectedRowFill : Color.clear)
-          .padding(.horizontal, 6)
-      )
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .onHover { hovering = $0 }
+    // No hover background — the trackpad tick plus the icon's accent tint carry hover.
+    .onHover { over in
+      hovering = over
+      if over { Haptics.hover() }
+    }
   }
 }
 
@@ -79,7 +78,6 @@ private struct RefineBarButton: View {
   let title: String
   let prominent: Bool
   var action: () -> Void
-  @State private var hovering = false
 
   var body: some View {
     Button(action: action) {
@@ -88,14 +86,9 @@ private struct RefineBarButton: View {
         .foregroundStyle(prominent ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.body))
         .padding(.horizontal, 11)
         .frame(height: Theme.Size.actionBarItemHeight)
-        .background(
-          RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(hovering ? (prominent ? Theme.Palette.accentFill : Theme.Palette.buttonHover) : Color.clear)
-        )
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .onHover { hovering = $0 }
-    .animation(.easeOut(duration: 0.12), value: hovering)
+    .onHover { if $0 { Haptics.hover() } }
   }
 }

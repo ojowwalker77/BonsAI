@@ -17,13 +17,19 @@ let package = Package(
   dependencies: [
     // Sparkle drives the in-app auto-update (periodic check → download → install → relaunch). It is
     // bundled into the hand-staged .app by script/build_and_run.sh, which copies Sparkle.framework
-    // into Contents/Frameworks and adds the loader rpath. The only external dependency.
-    .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
+    // into Contents/Frameworks and adds the loader rpath.
+    .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
+    // SwiftMath is the native CoreText LaTeX math typesetter behind the equation canvas item — no
+    // web view. Its SwiftPM resource bundle is staged by script/build_and_run.sh with app resources.
+    .package(url: "https://github.com/mgriebling/SwiftMath", from: "1.7.0")
   ],
   targets: [
     .executableTarget(
       name: "ComposerApp",
-      dependencies: [.product(name: "Sparkle", package: "Sparkle")],
+      dependencies: [
+        .product(name: "Sparkle", package: "Sparkle"),
+        .product(name: "SwiftMath", package: "SwiftMath"),
+      ],
       path: "Sources/ComposerApp",
       resources: [.process("Resources")],
       // Tools-version 6 defaults to the Swift 6 language mode (strict

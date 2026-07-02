@@ -10,6 +10,7 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
   case arrow
   case freehand
   case image
+  case equation
 
   /// Box shapes constrain to a square while Shift is held (draw + resize) — rectangle→square,
   /// ellipse→circle, diamond→uniform. Lines, arrows, and freehand stay freeform.
@@ -60,6 +61,8 @@ struct CardState: Codable, Identifiable, Equatable {
   var groupID: UUID?
   var isLocked: Bool?
   var imagePath: String?
+  /// For `.equation` cards: raw LaTeX math-mode source, without surrounding `$` delimiters.
+  var latex: String?
   /// For `.image` cards: the on-device, agent-ready text read out of the screenshot (OCR + a short
   /// classification, e.g. "Terminal error: …"). This is what an image card contributes to the
   /// compiled prompt and to `CanvasBridge.snapshot()` — without it a screenshot is invisible to a
@@ -90,6 +93,7 @@ struct CardState: Codable, Identifiable, Equatable {
        groupID: UUID? = nil,
        isLocked: Bool = false,
        imagePath: String? = nil,
+       latex: String? = nil,
        imageUnderstanding: String? = nil,
        archived: Bool = false,
        whoWrote: Int? = nil,
@@ -109,6 +113,7 @@ struct CardState: Codable, Identifiable, Equatable {
     self.groupID = groupID
     self.isLocked = isLocked ? true : nil
     self.imagePath = imagePath
+    self.latex = latex
     self.imageUnderstanding = imageUnderstanding
     self.archived = archived ? true : nil
     self.whoWrote = whoWrote
@@ -119,6 +124,7 @@ struct CardState: Codable, Identifiable, Equatable {
   var elementKind: CanvasElementKind { kind ?? .text }
   var locked: Bool { isLocked ?? false }
   var isArchived: Bool { archived ?? false }
+  var resolvedImageURL: URL? { imagePath.flatMap(AssetStore.resolve) }
   /// 1 = human, 2 = agent, 0 = unknown/legacy.
   var author: Int { whoWrote ?? 0 }
 
@@ -140,11 +146,14 @@ struct CardState: Codable, Identifiable, Equatable {
   static let lineMinSize = CGSize(width: 24, height: 24)
   static let shapeSize = CGSize(width: 220, height: 140)
   static let lineSize = CGSize(width: 240, height: 96)
+  static let equationSize = CGSize(width: 220, height: 96)
 
   var minimumSize: CGSize {
     switch elementKind {
     case .text:
       CardState.textMinSize
+    case .equation:
+      CGSize(width: 100, height: 48)
     case .rectangle, .ellipse, .diamond, .image:
       CardState.shapeMinSize
     case .line, .arrow, .freehand:

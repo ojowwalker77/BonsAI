@@ -69,6 +69,7 @@ curl -s -X POST http://127.0.0.1:7337/canvas \
 | `op` | Purpose |
 |------|---------|
 | `add_text` | One text card (`text`, optional `x`/`y`) |
+| `add_equation` | One LaTeX math card (`latex`, optional `x`/`y`; no `$` delimiters needed) |
 | `create_diagram` | Nodes + edges (`nodes`, `edges`, optional `direction`) |
 | `relayout` | Tidy layout (`direction`: `TB` or `LR`) |
 | `update_text` | Replace card text (`id`, `text`) |

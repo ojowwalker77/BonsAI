@@ -16,6 +16,9 @@ final class PanelController: NSObject, NSWindowDelegate {
     NotificationCenter.default.addObserver(
       forName: .composerThemeChanged, object: nil, queue: .main
     ) { [weak self] _ in MainActor.assumeIsolated { self?.applyTheme() } }
+    NotificationCenter.default.addObserver(
+      forName: .composerFontFamilyChanged, object: nil, queue: .main
+    ) { [weak self] _ in MainActor.assumeIsolated { self?.rebuildCanvas() } }
   }
 
   @objc private func handleDismiss() { hide() }
@@ -50,6 +53,15 @@ final class PanelController: NSObject, NSWindowDelegate {
   private func applyTheme() {
     guard let panel else { return }
     panel.appearance = ComposerPreferences.theme.nsAppearance
+    rebuildCanvas()
+  }
+
+  /// Tear down and re-mount the canvas so every plain-value lookup captured at render (palette
+  /// tokens, the app-font resolver, measurement caches) re-resolves. Board content is store-backed
+  /// and the agent is a singleton, so nothing is lost. Font-family switches reuse this — same reason
+  /// as a theme switch, minus the appearance-class change.
+  private func rebuildCanvas() {
+    guard let panel else { return }
     installContent(ComposerCanvas(), in: panel)
     panel.layoutWindowChromeButtons()
   }

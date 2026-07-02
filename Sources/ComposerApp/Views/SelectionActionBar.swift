@@ -6,7 +6,8 @@ struct SelectionActionBar: View {
   var onRefine: (HeadlessEngine) -> Void
   /// Markdown formatting for the selection (heading/bold/italic/code/quote).
   var onFormat: (MarkdownStyle.Action) -> Void
-  /// The editing card's current tint slot; picking a swatch re-inks the whole card.
+  /// The editing card's current tint slot. Picking a swatch inks the selected range (a live text
+  /// selection); with only a caret it falls back to tinting the whole card. `nil` clears.
   var currentTint: Int?
   var onTint: (Int?) -> Void
 
@@ -72,7 +73,7 @@ struct SelectionActionBar: View {
             tintSwatch(slot)
           }
         } else {
-          Button(action: { Haptics.tap(); withAnimation(.easeOut(duration: 0.14)) { tintExpanded = true } }) {
+          Button(action: { withAnimation(.easeOut(duration: 0.14)) { tintExpanded = true } }) {
             swatchCircle(for: currentTint, selected: false)
               .frame(width: 26, height: Theme.Size.actionBarItemHeight)
               .contentShape(Rectangle())
@@ -130,7 +131,6 @@ struct SelectionActionBar: View {
 
   private func tintSwatch(_ slot: Int?) -> some View {
     Button(action: {
-      Haptics.tap()
       onTint(slot)
       withAnimation(.easeOut(duration: 0.14)) { tintExpanded = false }
     }) {
@@ -156,16 +156,15 @@ struct SelectionActionBar: View {
   }
 }
 
-/// A soft hover wash for the bar's buttons.
+/// Bar buttons: a trackpad tick on hover (no wash — hover backgrounds are banned from the
+/// chrome), a soft fill only while pressed.
 struct HoverButtonStyle: ButtonStyle {
-  @State private var hovering = false
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .background(
         RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .fill(hovering || configuration.isPressed ? Theme.Palette.buttonHover : Color.clear)
+          .fill(configuration.isPressed ? Theme.Palette.buttonHover : Color.clear)
       )
-      .onHover { hovering = $0 }
-      .animation(.easeOut(duration: 0.12), value: hovering)
+      .onHover { if $0 { Haptics.hover() } }
   }
 }
