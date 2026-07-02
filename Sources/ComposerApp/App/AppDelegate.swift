@@ -60,13 +60,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   @objc private func captureToBoard() {
     Task { @MainActor in
       guard let cgImage = await ScreenCaptureService.shared.capture() else { return }
-      // Encode the PNG off the main thread (a retina region is multi-MB); the board reuses the
+      // Encode the image off the main thread (a retina region is multi-MB); the board reuses the
       // in-memory image for OCR, so it never re-decodes this file.
-      guard let url = await Task.detached(priority: .userInitiated, operation: { saveCapturedPNG(cgImage) }).value else { return }
-      CapturedShotStore.shared.stash(cgImage, for: url.path)
+      guard let filename = await Task.detached(priority: .userInitiated, operation: { saveCapturedImage(cgImage) }).value else { return }
+      CapturedShotStore.shared.stash(cgImage, for: filename)
       panelController.show()
       NotificationCenter.default.post(
-        name: .composerCaptureCompleted, object: nil, userInfo: ["path": url.path])
+        name: .composerCaptureCompleted, object: nil, userInfo: ["path": filename])
     }
   }
 

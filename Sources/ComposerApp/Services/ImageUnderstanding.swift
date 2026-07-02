@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 import ImageIO
-import Vision
+@preconcurrency import Vision
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -54,7 +54,8 @@ enum ImageUnderstanding {
   }
 
   private static func loadCGImage(path: String) -> CGImage? {
-    guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+    guard let url = AssetStore.resolve(path),
+          let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
     return CGImageSourceCreateImageAtIndex(source, 0, nil)
   }
 

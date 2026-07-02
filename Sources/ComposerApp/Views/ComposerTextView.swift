@@ -181,29 +181,48 @@ final class ComposerTextView: NSTextView {
     ]
   }
 
-  // MARK: Extract an image — raw data first, then an image file URL.
+  // MARK: Extract an image.
 
-  private func firstImage(from pboard: NSPasteboard) -> NSImage? {
-    if pboard.canReadObject(forClasses: [NSImage.self], options: nil),
-       let images = pboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
-       let first = images.first, first.size.width > 0 {
-      return first
+  private enum ImageInput {
+    case file(URL, NSImage)
+    case image(NSImage)
+
+    var preview: NSImage {
+      switch self {
+      case let .file(_, image), let .image(image): image
+      }
     }
+
+    func ingest() -> String? {
+      switch self {
+      case let .file(url, _): return AssetStore.ingest(fileURL: url)
+      case let .image(image): return AssetStore.ingest(image: image)
+      }
+    }
+  }
+
+  private func firstImage(from pboard: NSPasteboard) -> ImageInput? {
     let options: [NSPasteboard.ReadingOptionKey: Any] = [
       .urlReadingFileURLsOnly: true,
       .urlReadingContentsConformToTypes: NSImage.imageTypes,
     ]
     if let urls = pboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL],
        let url = urls.first, let image = NSImage(contentsOf: url) {
-      return image
+      return .file(url, image)
+    }
+    if pboard.canReadObject(forClasses: [NSImage.self], options: nil),
+       let images = pboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+       let first = images.first, first.size.width > 0 {
+      return .image(first)
     }
     return nil
   }
 
   // MARK: Build + insert the attachment, undo-safely.
 
-  private func insertImageAttachment(_ image: NSImage) {
-    guard let url = ComposerTextView.savePNG(image) else { return }
+  private func insertImageAttachment(_ input: ImageInput) {
+    let image = input.preview
+    guard let filename = input.ingest() else { return }
     let target = scaledSize(for: image, maxWidth: contentWidth())
 
     let attachment = NSTextAttachment()
@@ -211,7 +230,7 @@ final class ComposerTextView: NSTextView {
     attachment.bounds = CGRect(origin: .zero, size: target)   // required, else full Retina size
 
     let run = NSMutableAttributedString(attributedString: NSAttributedString(attachment: attachment))
-    run.addAttribute(.imageAttachmentPath, value: url.path, range: NSRange(location: 0, length: run.length))
+    run.addAttribute(.imageAttachmentPath, value: filename, range: NSRange(location: 0, length: run.length))
 
     let range = selectedRange()
     guard shouldChangeText(in: range, replacementString: run.string) else { return }
@@ -256,26 +275,11 @@ final class ComposerTextView: NSTextView {
     return out
   }
 
-  // MARK: Persist a PNG copy.
+  // MARK: Persist an owned image copy.
 
   static func savePNG(_ image: NSImage) -> URL? {
-    guard let tiff = image.tiffRepresentation,
-          let rep = NSBitmapImageRep(data: tiff),
-          let png = rep.representation(using: .png, properties: [:]) else {
-      UserFacingError.report("Composer could not convert the pasted image into PNG data. The image was not added.")
-      return nil
-    }
-    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    let dir = base.appendingPathComponent("Composer/Attachments", isDirectory: true)
-    let url = dir.appendingPathComponent("\(UUID().uuidString).png")
-    do {
-      try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-      try png.write(to: url)
-      return url
-    } catch {
-      UserFacingError.report(error, while: "Saving the pasted image")
-      return nil
-    }
+    guard let filename = AssetStore.ingest(image: image) else { return nil }
+    return AssetStore.resolve(filename)
   }
 
   // MARK: Hover reporting for the semantic linter

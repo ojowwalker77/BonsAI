@@ -136,7 +136,7 @@ final class BoardViewModel: ObservableObject {
   func plainText(for card: CardState) -> String {
     // An image card contributes its file path so Copy, Compile, and Describe emit a concrete
     // reference the reader (or a coding agent) can open. An image with no path yet contributes nothing.
-    if card.elementKind == .image { return card.imagePath ?? "" }
+    if card.elementKind == .image { return card.resolvedImageURL?.path ?? card.imagePath ?? "" }
     return interactions[card.id]?.plainText ?? card.text
   }
 
@@ -251,9 +251,13 @@ final class BoardViewModel: ObservableObject {
   private func snapshot() -> [CardState] {
     cards.map { card in
       var copy = card
-      copy.text = plainText(for: card)
+      copy.text = persistedText(for: card)
       return copy
     }
+  }
+
+  private func persistedText(for card: CardState) -> String {
+    card.elementKind == .image ? card.text : plainText(for: card)
   }
 
   /// Build the persistence snapshot only when the debounce actually fires. This avoids cloning
@@ -445,7 +449,8 @@ final class BoardViewModel: ObservableObject {
   @discardableResult
   func addImageObject(path: String, at center: CGPoint) -> UUID {
     registerUndo()
-    let size = Self.imageCardSize(forPath: path)
+    let storedPath = Self.storedImagePath(for: path)
+    let size = Self.imageCardSize(forPath: storedPath)
     let card = CardState(
       kind: .image,
       text: "",
@@ -454,7 +459,7 @@ final class BoardViewModel: ObservableObject {
       w: Double(size.width),
       h: Double(size.height),
       z: nextZ,
-      imagePath: path,
+      imagePath: storedPath,
       whoWrote: nextAuthor
     )
     nextZ += 1
@@ -473,7 +478,8 @@ final class BoardViewModel: ObservableObject {
   /// footprint; falls back to the shape default if the file can't be read.
   private static func imageCardSize(forPath path: String) -> CGSize {
     guard
-      let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+      let url = AssetStore.resolve(path),
+      let source = CGImageSourceCreateWithURL(url as CFURL, nil),
       let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
       let pixelWidth = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
       let pixelHeight = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
@@ -486,6 +492,17 @@ final class BoardViewModel: ObservableObject {
       ? CGSize(width: maxSide, height: maxSide / aspect)
       : CGSize(width: maxSide * aspect, height: maxSide)
     return CGSize(width: size.width.rounded(), height: size.height.rounded())
+  }
+
+  private static func storedImagePath(for path: String) -> String {
+    if let url = AssetStore.resolve(path) {
+      return AssetStore.ingest(fileURL: url) ?? url.lastPathComponent
+    }
+    if path.hasPrefix("/") {
+      let url = URL(fileURLWithPath: path)
+      return AssetStore.ingest(fileURL: url) ?? url.lastPathComponent
+    }
+    return path
   }
 
   // MARK: Programmatic mutations (canvas API / external agents)
@@ -884,7 +901,7 @@ final class BoardViewModel: ObservableObject {
     let selected = cards.filter { selectedCardIDs.contains($0.id) }
     return selected.map { card in
       var copy = card
-      copy.text = plainText(for: card)
+      copy.text = persistedText(for: card)
       return copy
     }
   }
@@ -912,6 +929,9 @@ final class BoardViewModel: ObservableObject {
       copy.whoWrote = nextAuthor
       copy.startBindingID = nil
       copy.endBindingID = nil
+      if copy.elementKind == .image, let path = copy.imagePath {
+        copy.imagePath = Self.storedImagePath(for: path)
+      }
       nextZ += 1
       cards.append(copy)
       interactions[copy.id] = CardInteraction(copy)
