@@ -7,7 +7,8 @@ whose canvas fills it edge to edge. ALL chrome floats over the canvas as Liquid 
 
 - Top-left: `+` pill and the hover board picker (after the repositioned traffic lights).
 - Top-right: AI actions (Describe Board · Copy Board · agent toggle).
-- Bottom-center: ONE command bar — zoom · the eight tools · grounding folder · Settings.
+- Bottom-center: ONE command bar — zoom · the eight tools · Settings. (Grounding lives in the
+  agent chat and the ⌘K palette, not the bar.)
 - Agent and Settings are SwiftUI glass overlays inside the canvas (`dockOverlay`), NOT separate
   windows. There are no auxiliary panels.
 

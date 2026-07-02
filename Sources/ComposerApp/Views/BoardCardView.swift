@@ -860,7 +860,7 @@ private final class CanvasImageCache {
   }
 
   private static func decodeThumbnail(at path: String) -> (image: NSImage, cost: Int)? {
-    let url = URL(fileURLWithPath: path)
+    guard let url = AssetStore.resolve(path) else { return nil }
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
     let options: [CFString: Any] = [
       kCGImageSourceCreateThumbnailFromImageAlways: true,

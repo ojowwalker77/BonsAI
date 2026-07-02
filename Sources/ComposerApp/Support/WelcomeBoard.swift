@@ -2,16 +2,13 @@ import Foundation
 
 /// The board users see as the bundled onboarding canvas. The exact board is shipped in the app
 /// bundle as `WelcomeBoard.json` (a serialized `[CardState]`). The mascot image card stores a
-/// `bundle:` sentinel in the JSON because its real path is per-machine - on install we materialize
-/// the bundled PNG into Attachments (where user images live) and point the card at that copy.
+/// `bundle:` sentinel in the JSON because its real attachment filename is per-machine.
 enum WelcomeBoard {
   static let title = "Welcome Canvas"
 
   private static let mascotSentinel = "bundle:welcome-companion.png"
-  private static let mascotFileName = "welcome-companion.png"
-
   /// The welcome board's cards, with the mascot installed and its image card repointed at the
-  /// on-disk copy. Returns nil if the bundled resource is missing/unreadable — the caller then
+  /// attachment copy. Returns nil if the bundled resource is missing/unreadable — the caller then
   /// just falls back to a blank first board.
   static func seedCards() -> [CardState]? {
     guard let url = Bundle.appResources.url(forResource: "WelcomeBoard", withExtension: "json") else {
@@ -40,29 +37,9 @@ enum WelcomeBoard {
     }
   }
 
-  /// Copy the bundled mascot into Attachments and return its on-disk path.
-  /// Always refresh the copy: older welcome boards may point at a stale or missing attachment.
+  /// Copy the bundled mascot into Attachments and return its stored filename.
   private static func installMascot() -> String? {
     guard let source = Bundle.appResources.url(forResource: "welcome-companion", withExtension: "png") else { return nil }
-    let directory = attachmentsDirectory
-    let destination = directory.appendingPathComponent(mascotFileName)
-    let temporary = directory.appendingPathComponent("\(mascotFileName).tmp")
-    do {
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      if FileManager.default.fileExists(atPath: temporary.path) { try FileManager.default.removeItem(at: temporary) }
-      try FileManager.default.copyItem(at: source, to: temporary)
-      if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
-      try FileManager.default.moveItem(at: temporary, to: destination)
-    } catch {
-      UserFacingError.report(error, while: "Installing Composer’s welcome-board image")
-      return nil
-    }
-    return FileManager.default.fileExists(atPath: destination.path) ? destination.path : nil
-  }
-
-  /// Same Attachments directory user-dropped images use (`Application Support/Composer/Attachments`).
-  private static var attachmentsDirectory: URL {
-    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("Composer/Attachments", isDirectory: true)
+    return AssetStore.ingest(fileURL: source)
   }
 }
