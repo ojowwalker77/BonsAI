@@ -776,8 +776,8 @@ private extension CGFloat {
 }
 
 /// Hands the just-captured pixels from the capture flow to the board without a disk round-trip: the
-/// card still references a saved PNG, but OCR reads this in-memory `CGImage` instead of re-decoding
-/// the file. Keyed by the PNG path so the board takes exactly the shot it's adding.
+/// card still references a saved attachment, but OCR reads this in-memory `CGImage` instead of
+/// re-decoding the file. Keyed by the stored filename so the board takes exactly the shot it's adding.
 @MainActor
 final class CapturedShotStore {
   static let shared = CapturedShotStore()
@@ -788,26 +788,8 @@ final class CapturedShotStore {
   func take(_ path: String) -> CGImage? { images.removeValue(forKey: path) }
 }
 
-/// Encode a captured `CGImage` straight to a PNG file via ImageIO. Free function (no actor) so it can
-/// run off the main thread — encoding a retina region on the main actor would jank the summon.
-func saveCapturedPNG(_ cgImage: CGImage) -> URL? {
-  let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-  let dir = base.appendingPathComponent("Composer/Attachments", isDirectory: true)
-  let url = dir.appendingPathComponent("\(UUID().uuidString).png")
-  do {
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-  } catch {
-    UserFacingError.report(error, while: "Saving the captured screenshot")
-    return nil
-  }
-  guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
-    UserFacingError.report("Saving the captured screenshot failed: couldn't create the PNG encoder.")
-    return nil
-  }
-  CGImageDestinationAddImage(destination, cgImage, nil)
-  guard CGImageDestinationFinalize(destination) else {
-    UserFacingError.report("Saving the captured screenshot failed while writing the PNG to disk.")
-    return nil
-  }
-  return url
+/// Encode a captured `CGImage` into the attachment store. Free function (no actor) so it can run off
+/// the main thread — encoding a retina region on the main actor would jank the summon.
+func saveCapturedImage(_ cgImage: CGImage) -> String? {
+  AssetStore.ingest(cgImage: cgImage)
 }
