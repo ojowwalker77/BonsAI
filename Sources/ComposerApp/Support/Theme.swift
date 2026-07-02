@@ -175,6 +175,15 @@ enum WindowChrome {
   static let labelPadH: CGFloat = 10
   /// Spacing between sibling controls inside one pill/bar.
   static let itemSpacing: CGFloat = 4
+  /// Fixed footprint of the board-picker pill: sized to the 13-character display cap
+  /// ("Welcome Board") at `labelFont`, so short names never shrink the pill and its hover menu
+  /// only ever grows downward.
+  static let boardPillWidth: CGFloat = {
+    // labelFont's AppKit twin — keep in sync with `labelFont` above.
+    let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+    let text = ("Welcome Board" as NSString).size(withAttributes: [.font: font]).width
+    return (text + labelPadH * 2).rounded(.up)
+  }()
 }
 
 extension View {

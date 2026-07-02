@@ -413,14 +413,14 @@ private struct AgentTranscriptView: View {
   }
 }
 
-/// One tappable starter prompt on the empty state.
+/// One tappable starter prompt on the empty state. Hover feedback is the trackpad tick — the
+/// chip's quiet row fill never changes.
 private struct SuggestionChip: View {
   let text: String
   var onSuggest: (String) -> Void
-  @State private var hovering = false
 
   var body: some View {
-    Button { Haptics.tap(); onSuggest(text) } label: {
+    Button { onSuggest(text) } label: {
       HStack(spacing: 7) {
         Image(systemName: "arrow.up.right")
           .font(.system(size: 9, weight: .semibold))
@@ -428,12 +428,11 @@ private struct SuggestionChip: View {
         Text(text).font(.caption).foregroundStyle(Theme.Palette.body).lineLimit(1)
       }
       .padding(.horizontal, 10).frame(height: 28)
-      .background(Capsule().fill(hovering ? Theme.Palette.buttonHover : Theme.Palette.rowFill))
+      .background(Capsule().fill(Theme.Palette.rowFill))
       .overlay(Capsule().strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
       .contentShape(Capsule())
     }
     .buttonStyle(.plain)
-    .onHover { hovering = $0 }
-    .animation(.easeOut(duration: 0.1), value: hovering)
+    .onHover { if $0 { Haptics.hover() } }
   }
 }

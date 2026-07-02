@@ -116,8 +116,11 @@ final class BoardViewModel: ObservableObject {
   private var undoCache: [PersistentIdentifier: (undo: [HistorySnapshot], redo: [HistorySnapshot])] = [:]
   private var currentBoardID: PersistentIdentifier?
 
-  init() {
-    self.store = DumpStore.shared
+  /// The injectable store exists for tests (an in-memory `DumpStore`); the app always uses shared.
+  /// (`nil` default rather than `= .shared`: a default-argument expression is nonisolated, so it
+  /// can't touch the main-actor singleton.)
+  init(store: DumpStore? = nil) {
+    self.store = store ?? DumpStore.shared
     loadFromStore()
   }
 

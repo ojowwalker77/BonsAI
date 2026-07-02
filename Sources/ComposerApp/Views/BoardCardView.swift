@@ -738,10 +738,21 @@ private struct FreehandShape: View {
 private struct ImageObjectPlaceholder: View {
   let path: String?
   @State private var image: NSImage?
+  /// When set (offscreen PNG export), image decoding is synchronous: `ImageRenderer` never runs
+  /// the async `.task`, so the on-canvas placeholder would be captured instead of the picture.
+  /// The provider hands back a fully-decoded `NSImage` for `path` on the spot.
+  @Environment(\.exportImageProvider) private var exportImageProvider
+
+  /// The image to draw. During export it resolves synchronously from the provider; on the live
+  /// canvas it's the async-loaded thumbnail held in `@State`.
+  private var resolvedImage: NSImage? {
+    if let exportImageProvider, let path { return exportImageProvider(path) }
+    return image
+  }
 
   var body: some View {
     Group {
-      if let image {
+      if let image = resolvedImage {
       Image(nsImage: image)
         .resizable()
         .scaledToFill()
@@ -775,12 +786,28 @@ private struct ImageObjectPlaceholder: View {
     // card reloaded from a saved board (or culled and re-added while panning) reliably re-decodes,
     // instead of the old `.onAppear` + stored-path guard silently dropping the result.
     .task(id: path) {
+      // Export resolves synchronously through the provider — no async decode needed.
+      guard exportImageProvider == nil else { return }
       guard let path else { image = nil; return }
       let loaded: NSImage? = await withCheckedContinuation { continuation in
         CanvasImageCache.shared.load(path: path) { continuation.resume(returning: $0) }
       }
       if !Task.isCancelled { image = loaded }
     }
+  }
+}
+
+/// Offscreen-export hook: when present, image cards resolve their picture synchronously from this
+/// closure instead of the async `CanvasImageCache`, so a one-shot `ImageRenderer` capture shows the
+/// real image rather than the loading placeholder. Nil on the live canvas — normal async loading.
+private struct ExportImageProviderKey: EnvironmentKey {
+  static let defaultValue: ((String) -> NSImage?)? = nil
+}
+
+extension EnvironmentValues {
+  var exportImageProvider: ((String) -> NSImage?)? {
+    get { self[ExportImageProviderKey.self] }
+    set { self[ExportImageProviderKey.self] = newValue }
   }
 }
 

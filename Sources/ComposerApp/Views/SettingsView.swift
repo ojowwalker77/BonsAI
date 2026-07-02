@@ -64,7 +64,6 @@ struct SettingsOverlay: View {
       HStack(spacing: 5) {
         ForEach(SettingsDestination.allCases) { item in
           SettingsTab(item: item, selected: destination == item) {
-            Haptics.tap()
             destination = item
           }
         }
@@ -94,11 +93,12 @@ private struct SettingsTab: View {
       .padding(.horizontal, 10)
       .frame(height: 26)
       .background(
-        Capsule().fill(selected ? Theme.Palette.keycapFill : (hovering ? Theme.Palette.rowFill : Color.clear))
+        Capsule().fill(selected ? Theme.Palette.keycapFill : Color.clear)
       )
       .contentShape(Capsule())
     }
     .buttonStyle(.plain)
+    // No hover background (and no hover haptics in Settings) — label brightening carries hover.
     .onHover { hovering = $0 }
     .help(item.title)
     .animation(.easeOut(duration: 0.12), value: hovering)
@@ -605,7 +605,6 @@ private struct SettingsContent: View {
       LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
         ForEach(ComposerTheme.allCases) { theme in
           ThemePreviewCard(theme: theme, selected: themeRaw == theme.rawValue) {
-            Haptics.level()
             themeRaw = theme.rawValue
           }
         }
