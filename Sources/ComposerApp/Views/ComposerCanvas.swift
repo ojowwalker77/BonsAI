@@ -47,6 +47,19 @@ struct ComposerCanvas: View {
   @State private var boardPickerOpen = false
   @State private var boardPickerPinned = false
   @State private var boardPickerCloseWork: DispatchWorkItem?
+  /// The export pill grows on hover into a list of export formats (same mechanic as the board
+  /// picker). Open immediate, close deferred so the glyph→row gap doesn't flicker.
+  @State private var exportMenuOpen = false
+  @State private var exportMenuCloseWork: DispatchWorkItem?
+  /// Measured rest-label width of the Export pill; its expanded list pins to this so hovering
+  /// only grows the surface downward, never sideways. (The board picker uses the fixed
+  /// `WindowChrome.boardPillWidth` instead — its label length varies with the board name.)
+  @State private var exportRestWidth: CGFloat = 0
+  /// Inline rename of the CURRENT board, entered from the title row's secondary-click menu.
+  /// While editing, the picker pins open so hover-out can't close it mid-edit.
+  @State private var renamingCurrentBoard = false
+  @State private var currentBoardDraft = ""
+  @FocusState private var currentBoardNameFocused: Bool
   /// The card that held the caret when the palette was summoned, captured before the palette's
   /// search field steals first responder — so a cancel can hand editing back to it.
   @State private var paletteReturnCardID: UUID?
@@ -544,49 +557,112 @@ struct ComposerCanvas: View {
       .zIndex(60)
   }
 
-  /// The board picker is ONE glass container. At rest it is just the current board's name; on
-  /// hover the same surface grows downward into the board manager — every board with
-  /// rename/delete, plus a New board row. No second popover, no gap: the pill itself expands.
-  private var boardPickerMenu: some View {
-    VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
-      Text(currentBoardName)
+  /// "Welcome Board" (13 characters) is the cap for the rest label: longer names trim with an
+  /// ellipsis so the pill never grows past it.
+  private var boardPickerTitle: String {
+    let name = currentBoardName
+    return name.count > 13 ? String(name.prefix(13)) + "…" : name
+  }
+
+  /// The picker's title row: the current board's trimmed name. A secondary click pops the
+  /// management options — Rename swaps the label for an inline field; Delete removes the current
+  /// board (hidden while it's the only one). This is the ONLY home for current-board management:
+  /// the expanded list deliberately shows just the other boards.
+  @ViewBuilder
+  private func currentBoardTitleRow(canDelete: Bool) -> some View {
+    if renamingCurrentBoard {
+      TextField("Board name", text: $currentBoardDraft)
+        .textFieldStyle(.plain)
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .multilineTextAlignment(.center)
+        .focused($currentBoardNameFocused)
+        .onSubmit(commitCurrentBoardRename)
+        .onExitCommand(perform: cancelCurrentBoardRename)
+        .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.rowFill))
+        // Defer a runloop tick: focusing straight from onAppear can miss while the row swaps in.
+        .onAppear { DispatchQueue.main.async { currentBoardNameFocused = true } }
+        // Clicking away (focus leaves the field) commits, so the rename isn't lost.
+        .onChange(of: currentBoardNameFocused) { _, focused in if !focused { commitCurrentBoardRename() } }
+    } else {
+      Text(boardPickerTitle)
         .font(WindowChrome.labelFont)
         .foregroundStyle(Theme.Palette.body)
         .lineLimit(1)
-        .padding(.horizontal, WindowChrome.labelPadH)
-        .frame(height: WindowChrome.controlHeight)
+        .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
+        .contentShape(Rectangle())
+        .contextMenu {
+          Button("Rename Board") { beginCurrentBoardRename() }
+          if canDelete, let id = store.currentID {
+            Button("Delete Board", role: .destructive) { deleteBoard(id) }
+          }
+        }
+    }
+  }
+
+  private func beginCurrentBoardRename() {
+    currentBoardDraft = currentBoardName
+    renamingCurrentBoard = true
+    boardPickerPinned = true
+  }
+
+  private func commitCurrentBoardRename() {
+    guard renamingCurrentBoard else { return }   // guard so focus-loss doesn't re-fire after cancel
+    renamingCurrentBoard = false
+    boardPickerPinned = false
+    let name = currentBoardDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let id = store.currentID, !name.isEmpty { renameBoard(id, to: name) }
+  }
+
+  private func cancelCurrentBoardRename() {
+    renamingCurrentBoard = false
+    boardPickerPinned = false
+  }
+
+  /// The board picker is ONE glass container. At rest it is just the current board's name; on
+  /// hover the same surface grows downward into the board manager — the OTHER boards with
+  /// rename/delete (the title row already names the current one), plus a New board row. No second
+  /// popover, no gap: the pill itself expands. Pill and menu share ONE fixed width
+  /// (`boardPillWidth`, sized to the 13-char name cap), so a short name never crushes the menu
+  /// and hovering only ever grows the surface downward — never sideways.
+  private var boardPickerMenu: some View {
+    let others = store.dumps.filter { $0.persistentModelID != store.currentID }
+    return VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+      currentBoardTitleRow(canDelete: !others.isEmpty)
 
       if boardPickerOpen {
-        // The expanded manager keeps a fixed width — it must never inherit the window's.
+        // Same fixed width as the rest label so the surface only grows below.
         VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
           Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
 
-          ScrollView {
-            LazyVStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
-              ForEach(store.dumps, id: \.persistentModelID) { dump in
-                BoardPickerRow(
-                  title: dump.title.isEmpty ? "Untitled" : String(dump.title.prefix(40)),
-                  isCurrent: dump.persistentModelID == store.currentID,
-                  onPick: {
-                    Haptics.level()
-                    boardPickerOpen = false
-                    pickBoard(dump.persistentModelID)
-                  },
-                  onRename: { renameBoard(dump.persistentModelID, to: $0) },
-                  // The last board can't be deleted — it can still be renamed.
-                  onDelete: store.dumps.count > 1 ? { deleteBoard(dump.persistentModelID) } : nil,
-                  onManaging: { boardPickerPinned = $0 }
-                )
+          // Only the OTHER boards — the title row above already shows the current one.
+          if !others.isEmpty {
+            ScrollView {
+              LazyVStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+                ForEach(others, id: \.persistentModelID) { dump in
+                  BoardPickerRow(
+                    title: dump.title.isEmpty ? "Untitled" : String(dump.title.prefix(40)),
+                    isCurrent: false,
+                    onPick: {
+                      boardPickerOpen = false
+                      pickBoard(dump.persistentModelID)
+                    },
+                    onRename: { renameBoard(dump.persistentModelID, to: $0) },
+                    onDelete: { deleteBoard(dump.persistentModelID) },
+                    onManaging: { boardPickerPinned = $0 }
+                  )
+                }
               }
             }
-          }
-          .frame(maxHeight: 320)
-          .fixedSize(horizontal: false, vertical: true)
+            .frame(maxHeight: 320)
+            .fixedSize(horizontal: false, vertical: true)
 
-          Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+            Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+          }
           newBoardRow
         }
-        .frame(width: 248)
+        .frame(width: WindowChrome.boardPillWidth)
       }
     }
     .padding(.horizontal, WindowChrome.padH)
@@ -600,7 +676,6 @@ struct ComposerCanvas: View {
   /// Full-width "New board" action pinned under the list.
   private var newBoardRow: some View {
     Button {
-      Haptics.generic()
       boardPickerOpen = false
       newBoard()
     } label: {
@@ -624,6 +699,7 @@ struct ComposerCanvas: View {
     boardPickerCloseWork?.cancel()
     boardPickerCloseWork = nil
     if hovering {
+      if !boardPickerOpen { Haptics.hover() }
       boardPickerOpen = true
     } else {
       let work = DispatchWorkItem { if !boardPickerPinned { boardPickerOpen = false } }
@@ -632,14 +708,71 @@ struct ComposerCanvas: View {
     }
   }
 
-  /// The agent toggle floats as its own pill in the top-right. Board reading/exporting belongs to
-  /// the agent and the local Canvas API now — the old Describe/Copy buttons are gone.
+  /// The top-right chrome: an Export pill (hover-expands, like the board picker) to the LEFT of the
+  /// agent pill. `.top` alignment keeps the agent pill anchored while the export pill grows down.
   private func boardActionsPill(in size: CGSize) -> some View {
-    SidebarAgentButton(active: showAgent) { toggleAgent() }
-    .chromePill()
+    HStack(alignment: .top, spacing: WindowChrome.itemSpacing) {
+      exportMenu
+      SidebarAgentButton(active: showAgent) { toggleAgent() }
+        .chromePill()
+    }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     .padding(.top, WindowChrome.edgeInset)
     .padding(.trailing, WindowChrome.edgeInset)
+  }
+
+  /// The export pill is ONE glass container. At rest it is the "Export" label; on hover the same
+  /// surface grows downward into a list of export formats — no popover, no gap, mirroring the board
+  /// picker's hover mechanic exactly. Width-locked to the rest label (like the picker), so the rows
+  /// are short format names: the pill only ever grows below.
+  private var exportMenu: some View {
+    let hasCards = !board.cards.isEmpty
+    return VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+      Text("Export")
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .lineLimit(1)
+        .padding(.horizontal, WindowChrome.labelPadH)
+        .frame(height: WindowChrome.controlHeight)
+        .background(GeometryReader { g in
+          Color.clear
+            .onAppear { exportRestWidth = g.size.width }
+            .onChange(of: g.size.width) { _, w in exportRestWidth = w }
+        })
+
+      if exportMenuOpen {
+        // Width-locked to the rest label so the surface only grows below.
+        VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+          Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+          ExportMenuRow(label: "PNG", help: "Export board as PNG", enabled: hasCards) {
+            exportMenuOpen = false
+            exportBoardAsPNG()
+          }
+        }
+        .frame(width: exportRestWidth > 0 ? exportRestWidth : nil)
+      }
+    }
+    .padding(.horizontal, WindowChrome.padH)
+    .padding(.vertical, WindowChrome.padV)
+    .composerPopupSurface()
+    .onHover { setExportMenuHover($0) }
+    .animation(.easeOut(duration: 0.16), value: exportMenuOpen)
+    .help(exportMenuOpen ? "" : "Export board")
+  }
+
+  /// Opening is immediate; closing waits a beat so crossing the glyph→row gap doesn't flicker —
+  /// identical to `setBoardPickerHover`.
+  private func setExportMenuHover(_ hovering: Bool) {
+    exportMenuCloseWork?.cancel()
+    exportMenuCloseWork = nil
+    if hovering {
+      if !exportMenuOpen { Haptics.hover() }
+      exportMenuOpen = true
+    } else {
+      let work = DispatchWorkItem { exportMenuOpen = false }
+      exportMenuCloseWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+    }
   }
 
   /// Standard-window mode: ONE bottom-center command bar carrying everything hands-on —
@@ -649,7 +782,7 @@ struct ComposerCanvas: View {
   private func bottomCommandBar(fit innerSize: CGSize) -> some View {
     return HStack(spacing: WindowChrome.itemSpacing) {
       SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out") { zoom(0.8, anchoredAt: zoomAnchor) }
-      Button(action: { Haptics.tap(); withAnimation(Theme.Motion.accessory) { scale = 1 } }) {
+      Button(action: { withAnimation(Theme.Motion.accessory) { scale = 1 } }) {
         Text("\(Int((effectiveScale * 100).rounded()))%")
           .font(WindowChrome.labelFont.monospacedDigit())
           .foregroundStyle(Theme.Palette.chromeText)
@@ -692,7 +825,7 @@ struct ComposerCanvas: View {
   /// slot indexes, so they re-resolve when the theme changes.
   @ViewBuilder
   private var tintControl: some View {
-    Button(action: { Haptics.tap(); withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen.toggle() } }) {
+    Button(action: { withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen.toggle() } }) {
       tintSwatch(for: board.currentTint, diameter: 14)
         .frame(width: WindowChrome.controlHeight, height: WindowChrome.controlHeight)
         .background(
@@ -701,6 +834,7 @@ struct ComposerCanvas: View {
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .onHover { if $0 { Haptics.hover() } }
     .help("Element color — applies to new elements and the selection")
 
     if tintPickerOpen {
@@ -727,6 +861,7 @@ struct ComposerCanvas: View {
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .onHover { if $0 { Haptics.hover() } }
     .help(slot == nil ? "Default ink" : "Theme color \((slot ?? 0) + 1)")
   }
 
@@ -742,7 +877,6 @@ struct ComposerCanvas: View {
   }
 
   private func pickTint(_ slot: Int?) {
-    Haptics.tap()
     board.currentTint = slot
     board.setTintForSelection(slot)
     withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
@@ -983,6 +1117,21 @@ struct ComposerCanvas: View {
 
 
   private func resetView() { scale = 1; pan = .zero }
+
+  // MARK: Export
+
+  /// Render the whole board to a PNG and hand it to the save panel. The render is a real AppKit
+  /// pass (`BoardExporter.renderBoardImage`) hosting the live card layer at zoom 1 offscreen, so
+  /// `NSViewRepresentable`-backed card subviews draw properly and the canvas paints — the old
+  /// `ImageRenderer` bailed on both. Images resolve synchronously via `exportImageProvider`.
+  @MainActor
+  private func exportBoardAsPNG() {
+    guard let image = BoardExporter.renderBoardImage(cards: board.cards, board: board) else {
+      // renderBoardImage reports its own failure; an empty board simply returns nil.
+      return
+    }
+    BoardExporter.presentSavePanel(image: image, suggestedName: store.current?.title ?? "Board")
+  }
 
   // MARK: Board navigation (history stack)
 
@@ -2113,7 +2262,7 @@ private struct ActiveCardOverlays: View {
 /// Each `BoardCardView` still observes its own `CardInteraction`, so editing/typing a card re-renders
 /// just that card even while this whole layer is skipped — the same way the capture overlay stays
 /// immediate.
-private struct BoardCardLayer: View, Equatable {
+struct BoardCardLayer: View, Equatable {
   let cards: [CardState]
   let board: BoardViewModel
   let selectedCardIDs: Set<UUID>
@@ -2184,6 +2333,7 @@ private struct BoardPickerRow: View {
     }
     .onHover { over in
       hovering = over
+      if over { Haptics.hover() }
       if !over { setConfirmingDelete(false) }
     }
     .animation(.easeOut(duration: 0.1), value: hovering)
@@ -2212,10 +2362,6 @@ private struct BoardPickerRow: View {
       }
       .padding(.horizontal, WindowChrome.labelPadH)
       .frame(height: 30)
-      .background(
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .fill(hovering ? Theme.Palette.hoverWash : Color.clear)
-      )
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -2247,7 +2393,7 @@ private struct BoardPickerRow: View {
   }
 
   private func rowIcon(_ symbol: String, help: String, tint: Color?, action: @escaping () -> Void) -> some View {
-    Button(action: { Haptics.tap(); action() }) {
+    Button(action: action) {
       Image(systemName: symbol)
         .font(.system(size: 10.5, weight: .semibold))
         .foregroundStyle(tint ?? Theme.Palette.title)
@@ -2281,6 +2427,33 @@ private struct BoardPickerRow: View {
     guard confirmingDelete != value else { return }
     confirmingDelete = value
     onManaging(value)
+  }
+}
+
+/// One row of the hover export menu: a short centered format name ("PNG"). The menu is
+/// width-locked to the "Export" rest label, so rows carry the format name only — the verbose
+/// action lives in `help`, and hover feedback is the trackpad tick. Structured so more formats
+/// slot in as sibling rows. When `enabled` is false (empty board) the row dims and is inert.
+private struct ExportMenuRow: View {
+  let label: String
+  let help: String
+  var enabled: Bool = true
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Text(label)
+        .font(WindowChrome.labelFont)
+        .lineLimit(1)
+        .foregroundStyle(enabled ? Theme.Palette.body : Theme.Palette.chromeGlyphDim)
+        .frame(maxWidth: .infinity)
+        .frame(height: 30)   // matches BoardPickerRow, not controlHeight — menu rows are denser
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(!enabled)
+    .onHover { if $0, enabled { Haptics.hover() } }
+    .help(help)
   }
 }
 

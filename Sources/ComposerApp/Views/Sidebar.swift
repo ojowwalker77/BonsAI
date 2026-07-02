@@ -12,21 +12,21 @@ struct SidebarButton: View {
   @State private var hovering = false
 
   var body: some View {
-    Button(action: { Haptics.tap(); action() }) {
+    Button(action: action) {
       Image(systemName: symbol)
         .font(WindowChrome.iconFont)
         .foregroundStyle(foreground)
         .frame(width: side, height: side)
-        .background(
-          // Active reads through the accent-tinted icon (below) — no blue fill, just a neutral
-          // hover wash so the control still feels live.
-          Circle().fill(hovering && !disabled ? Theme.Palette.hoverWash : Color.clear)
-        )
         .contentShape(Circle())
     }
     .buttonStyle(.plain)
     .disabled(disabled)
-    .onHover { hovering = $0 }
+    // No hover background anywhere in the chrome — the trackpad tick is the hover feedback,
+    // plus the glyph brightening below.
+    .onHover { over in
+      hovering = over
+      if over, !disabled { Haptics.hover() }
+    }
     .help(help)
     .animation(.easeOut(duration: 0.12), value: hovering)
   }
@@ -39,26 +39,26 @@ struct SidebarButton: View {
   }
 }
 
-/// The agent toggle — shows the active engine's brand mark. There's no active ring or fill;
-/// open/closed reads from the dock itself, and the mark just brightens on hover or when the dock
-/// is open. Lives on the rail in floating mode, in the top-right actions pill in window mode.
+/// The agent toggle — a word-mark pill matching the Export pill's rest label: flat `body` ink,
+/// hover feedback is the trackpad tick. There's no active ring or fill; open/closed reads
+/// from the dock itself. Lives in the top-right actions pill.
 struct SidebarAgentButton: View {
   var active: Bool
   var side: CGFloat = WindowChrome.controlHeight
   var action: () -> Void
-  @State private var hovering = false
 
   var body: some View {
-    Button(action: { Haptics.tap(); action() }) {
-      AgentEngineIcon(size: 18)
-        .frame(width: side, height: side)
-        .opacity(active ? 1 : (hovering ? 0.95 : 0.78))
-        .background(Circle().fill(hovering ? Theme.Palette.hoverWash : Color.clear))
-        .contentShape(Circle())
+    Button(action: action) {
+      Text("AI Agent")
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .lineLimit(1)
+        .padding(.horizontal, WindowChrome.labelPadH)
+        .frame(height: side)
+        .contentShape(Capsule())
     }
     .buttonStyle(.plain)
-    .onHover { hovering = $0 }
+    .onHover { if $0 { Haptics.hover() } }
     .help("Chat with the agent on this board  ⌘J")
-    .animation(.easeOut(duration: 0.12), value: hovering)
   }
 }

@@ -87,7 +87,7 @@ private struct ToolButton: View {
   @State private var hovering = false
 
   var body: some View {
-    Button(action: { Haptics.tap(); action() }) {
+    Button(action: action) {
       Group {
         if busy {
           ProgressView()
@@ -100,12 +100,8 @@ private struct ToolButton: View {
         }
       }
       .frame(width: ToolMetrics.side, height: ToolMetrics.side)
-      // No blue fill for the active state — the accent-tinted glyph is the signal; the only
-      // background is a neutral hover wash.
-      .background(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(hovering && !disabled && !busy ? Theme.Palette.hoverWash : Color.clear)
-      )
+      // No blue fill for the active state — the accent-tinted glyph is the signal. No hover
+      // background either: the trackpad tick plus glyph brightening carry hover.
       .overlay(alignment: .bottomTrailing) {
         if let shortcut, !busy {
           Text("\(shortcut)")
@@ -118,7 +114,10 @@ private struct ToolButton: View {
     }
     .buttonStyle(.plain)
     .disabled(disabled || busy)
-    .onHover { hovering = $0 }
+    .onHover { over in
+      hovering = over
+      if over, !disabled, !busy { Haptics.hover() }
+    }
     .help(help)
     .animation(.easeOut(duration: 0.12), value: hovering)
   }

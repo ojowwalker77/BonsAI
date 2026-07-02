@@ -93,9 +93,14 @@ final class DumpStore: ObservableObject {
   /// here so the editor coordinator's Esc chain can dismiss it like the other overlays.
   @Published var compiledDraft: String?
 
-  init() {
+  /// `inMemoryOnly` exists for tests: `swift test` runs unsandboxed, so the default on-disk
+  /// configuration resolves to the user's REAL `Composer.store` — a test that touched it could
+  /// persist junk cards into a real board.
+  init(inMemoryOnly: Bool = false) {
     let schema = Schema([Dump.self])
-    let config = ModelConfiguration("Composer", schema: schema)
+    let config = inMemoryOnly
+      ? ModelConfiguration(isStoredInMemoryOnly: true)
+      : ModelConfiguration("Composer", schema: schema)
     do {
       container = try ModelContainer(for: schema, configurations: config)
     } catch {
