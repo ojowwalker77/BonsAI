@@ -10,6 +10,15 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
   case arrow
   case freehand
   case image
+
+  /// Box shapes constrain to a square while Shift is held (draw + resize) — rectangle→square,
+  /// ellipse→circle, diamond→uniform. Lines, arrows, and freehand stay freeform.
+  var constrainsToSquare: Bool {
+    switch self {
+    case .rectangle, .ellipse, .diamond: true
+    default: false
+    }
+  }
 }
 
 struct CanvasPoint: Codable, Equatable {
@@ -52,6 +61,9 @@ struct CardState: Codable, Identifiable, Equatable {
   /// Who last authored this card: 1 = human, 2 = agent. Nil on legacy cards (treated as unknown).
   /// Lets an agent reading the board tell its own work from what the human wrote or changed.
   var whoWrote: Int?
+  /// Element tint as a SLOT INDEX into the active theme's `ThemeFlavor.tints` (nil = default
+  /// ink). Semantic, not a color value — the same element re-resolves per theme.
+  var tint: Int?
 
   init(id: UUID = UUID(),
        kind: CanvasElementKind = .text,
@@ -69,7 +81,8 @@ struct CardState: Codable, Identifiable, Equatable {
        imagePath: String? = nil,
        imageUnderstanding: String? = nil,
        archived: Bool = false,
-       whoWrote: Int? = nil) {
+       whoWrote: Int? = nil,
+       tint: Int? = nil) {
     self.id = id
     self.kind = kind == .text ? nil : kind
     self.text = text
@@ -87,6 +100,7 @@ struct CardState: Codable, Identifiable, Equatable {
     self.imageUnderstanding = imageUnderstanding
     self.archived = archived ? true : nil
     self.whoWrote = whoWrote
+    self.tint = tint
   }
 
   var elementKind: CanvasElementKind { kind ?? .text }

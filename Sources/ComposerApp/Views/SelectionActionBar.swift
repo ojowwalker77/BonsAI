@@ -4,6 +4,9 @@ import SwiftUI
 struct SelectionActionBar: View {
   var isWorking: Bool
   var onRefine: (HeadlessEngine) -> Void
+  /// The editing card's current tint slot; picking a swatch re-inks the whole card.
+  var currentTint: Int?
+  var onTint: (Int?) -> Void
 
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
   @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
@@ -42,6 +45,13 @@ struct SelectionActionBar: View {
             .frame(height: Theme.Size.actionBarItemHeight)
         }
         Divider().frame(height: 16).opacity(0.35)
+
+        // Text ink: the default plus the theme's tint slots. Stored as a slot index, so the
+        // color re-resolves when the theme changes.
+        tintSwatch(nil)
+        ForEach(Theme.flavor.tints.indices, id: \.self) { slot in
+          tintSwatch(slot)
+        }
       }
     }
     .padding(.horizontal, 5)
@@ -75,6 +85,26 @@ struct SelectionActionBar: View {
     }
     .buttonStyle(HoverButtonStyle())
     .foregroundStyle(Theme.Palette.body)
+  }
+
+  private func tintSwatch(_ slot: Int?) -> some View {
+    let color = Theme.tintColor(slot).map { Color(nsColor: $0) } ?? Theme.Palette.body
+    let selected = currentTint == slot
+    return Button(action: { Haptics.tap(); onTint(slot) }) {
+      Circle()
+        .fill(color)
+        .frame(width: 13, height: 13)
+        .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
+        .overlay(
+          Circle()
+            .strokeBorder(selected ? Theme.Palette.accent : Color.clear, lineWidth: 1.5)
+            .frame(width: 19, height: 19)
+        )
+        .frame(width: 22, height: Theme.Size.actionBarItemHeight)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(HoverButtonStyle())
+    .help(slot == nil ? "Default ink" : "Theme color \((slot ?? 0) + 1)")
   }
 
   @ViewBuilder

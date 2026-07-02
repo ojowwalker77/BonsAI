@@ -35,6 +35,9 @@ enum CanvasTool: Equatable {
     default: false
     }
   }
+
+  /// Shift constrains box-shape drags to a square (see `CanvasElementKind.constrainsToSquare`).
+  var constrainsToSquare: Bool { elementKind?.constrainsToSquare ?? false }
 }
 
 /// The canvas tool cluster — the eight placement/selection tools, rendered bare so the bottom

@@ -363,7 +363,8 @@ final class BoardViewModel: ObservableObject {
       h: Double(size.height),
       z: nextZ,
       points: initialPoints,
-      whoWrote: nextAuthor
+      whoWrote: nextAuthor,
+      tint: kind == .image ? nil : currentTint
     )
     nextZ += 1
     cards.append(card)
@@ -396,7 +397,7 @@ final class BoardViewModel: ObservableObject {
     let card = CardState(
       kind: kind, text: "",
       x: Double(frame.minX), y: Double(frame.minY), w: Double(frame.width), h: Double(frame.height),
-      z: nextZ, points: points, whoWrote: nextAuthor)
+      z: nextZ, points: points, whoWrote: nextAuthor, tint: currentTint)
     nextZ += 1
     cards.append(card)
     if kind == .arrow { bindArrowIfPossible(card.id) }
@@ -428,7 +429,8 @@ final class BoardViewModel: ObservableObject {
       h: Double(normalized.height),
       z: nextZ,
       points: points,
-      whoWrote: nextAuthor
+      whoWrote: nextAuthor,
+      tint: currentTint
     )
     nextZ += 1
     cards.append(card)
@@ -986,6 +988,32 @@ final class BoardViewModel: ObservableObject {
     for i in cards.indices where cards[i].groupID.map({ selectedGroups.contains($0) }) ?? false {
       cards[i].groupID = nil
     }
+    scheduleSave()
+  }
+
+  /// The tint newly drawn elements take (nil = default ink). Set from the bottom bar's tint
+  /// control; also mirrored there as the current swatch.
+  @Published var currentTint: Int?
+
+  /// Tint every selected element (shapes, lines, arrows, freehand, and text ink) with the slot
+  /// index — nil restores the default ink. Image cards are untouched.
+  func setTintForSelection(_ tint: Int?) {
+    let tintable = cards.contains {
+      selectedCardIDs.contains($0.id) && $0.elementKind != .image && $0.tint != tint
+    }
+    guard tintable else { return }
+    registerUndo()
+    for i in cards.indices where selectedCardIDs.contains(cards[i].id) && cards[i].elementKind != .image {
+      cards[i].tint = tint
+    }
+    scheduleSave()
+  }
+
+  /// Tint one card (the text-selection action bar's color control targets the editing card).
+  func setTint(_ tint: Int?, for id: UUID) {
+    guard let index = cards.firstIndex(where: { $0.id == id }), cards[index].tint != tint else { return }
+    registerUndo()
+    cards[index].tint = tint
     scheduleSave()
   }
 

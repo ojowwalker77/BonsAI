@@ -39,6 +39,9 @@ struct BoardCardView: View {
     default: 6
     }
   }
+  /// The card's tint slot resolved against the ACTIVE flavor.
+  private var tint: Color? { Theme.tintColor(card.tint).map { Color(nsColor: $0) } }
+
   private var minW: CGFloat { card.minimumSize.width }
   private var minH: CGFloat { card.minimumSize.height }
   private var zoom: CGFloat { max(scale, 0.01) }
@@ -72,6 +75,12 @@ struct BoardCardView: View {
         // static cards and persistence read it without materializing an NSTextView controller.
         interaction.cachePlainText(newValue)
         board.noteEdited(cardID: card.id, previousText: oldValue)
+      }
+      .onChange(of: card.tint) { _, _ in applyEditorTint() }
+      .onChange(of: isEditing) { _, editing in
+        // Re-apply on mount: the editor builds its attributes with the default ink; a tinted card
+        // must recolor once the text view exists.
+        if editing { DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { applyEditorTint() } }
       }
   }
 
@@ -155,11 +164,27 @@ struct BoardCardView: View {
     }
   }
 
+  /// Recolor the LIVE editor's text to the card's tint: every run except chips (marked with
+  /// `.mentionToken`) takes the ink, and the typing attributes follow so new text matches.
+  private func applyEditorTint() {
+    guard isEditing, isTextElement,
+          let tv = interaction.controller.coordinator?.textView, let storage = tv.textStorage else { return }
+    let color = Theme.tintColor(card.tint) ?? Theme.nsBodyText
+    let full = NSRange(location: 0, length: storage.length)
+    storage.beginEditing()
+    storage.enumerateAttribute(.mentionToken, in: full) { value, range, _ in
+      if value == nil { storage.addAttribute(.foregroundColor, value: color, range: range) }
+    }
+    storage.endEditing()
+    tv.typingAttributes[.foregroundColor] = color
+    tv.insertionPointColor = Theme.tintColor(card.tint) ?? Theme.Palette.nsAccent
+  }
+
   private var shapeLabelEditor: some View {
     TextField("Label", text: $interaction.text)
       .textFieldStyle(.plain)
       .font(.system(size: 15, weight: .medium))
-      .foregroundStyle(Theme.Palette.body)
+      .foregroundStyle(tint ?? Theme.Palette.body)
       .multilineTextAlignment(.center)
       .padding(.horizontal, 10)
       .padding(.vertical, 7)
@@ -308,6 +333,18 @@ struct BoardCardView: View {
     if maxY - minY < minH {
       if corner == .topLeading || corner == .topTrailing { minY = maxY - minH } else { maxY = minY + minH }
     }
+    // Shift constrains box shapes to a square: grow the smaller side to match the larger, anchored
+    // at the corner opposite the handle. Read live off the current flags, so pressing/releasing
+    // Shift mid-resize snaps the very next update.
+    if card.elementKind.constrainsToSquare, NSEvent.modifierFlags.contains(.shift) {
+      let side = max(maxX - minX, maxY - minY)
+      switch corner {
+      case .topLeading: minX = maxX - side; minY = maxY - side
+      case .topTrailing: maxX = minX + side; minY = maxY - side
+      case .bottomLeading: minX = maxX - side; maxY = minY + side
+      case .bottomTrailing: maxX = minX + side; maxY = minY + side
+      }
+    }
     return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
   }
 
@@ -366,6 +403,13 @@ private struct CanvasElementContent: View {
   /// Board zoom — fonts scale by it so text is laid out (and stays crisp) at screen size.
   var zoom: CGFloat = 1
 
+  /// The card's tint slot resolved against the ACTIVE flavor — semantic, so the same element
+  /// re-colors when the theme changes.
+  private var tint: Color? {
+    guard let slot = card.tint, Theme.flavor.tints.indices.contains(slot) else { return nil }
+    return Color(nsColor: Theme.flavor.tints[slot])
+  }
+
   var body: some View {
     ZStack {
       Group {
@@ -378,23 +422,23 @@ private struct CanvasElementContent: View {
                 .lineSpacing(Theme.Typography.bodyLineSpacing * zoom)
                 .foregroundStyle(Theme.Palette.placeholder)
             } else {
-              ComposerChipText(plain: text, definedVars: definedVars, failedCommands: failedCommands, zoom: zoom)
+              ComposerChipText(tint: tint, plain: text, definedVars: definedVars, failedCommands: failedCommands, zoom: zoom)
             }
           }
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
           .clipped()
         case .rectangle:
-          ShapeBox(kind: .rectangle)
+          ShapeBox(kind: .rectangle, tint: tint)
         case .ellipse:
-          ShapeBox(kind: .ellipse)
+          ShapeBox(kind: .ellipse, tint: tint)
         case .diamond:
-          ShapeBox(kind: .diamond)
+          ShapeBox(kind: .diamond, tint: tint)
         case .line:
-          LineShape(arrow: false, points: card.points ?? CardState.defaultLinePoints())
+          LineShape(arrow: false, points: card.points ?? CardState.defaultLinePoints(), tint: tint)
         case .arrow:
-          LineShape(arrow: true, points: card.points ?? CardState.defaultLinePoints())
+          LineShape(arrow: true, points: card.points ?? CardState.defaultLinePoints(), tint: tint)
         case .freehand:
-          FreehandShape(points: card.points ?? CardState.defaultFreehandPoints())
+          FreehandShape(points: card.points ?? CardState.defaultFreehandPoints(), tint: tint)
         case .image:
           ImageObjectPlaceholder(path: card.imagePath)
             .overlay(alignment: .bottomTrailing) {
@@ -417,7 +461,7 @@ private struct CanvasElementContent: View {
         switch card.elementKind {
         case .rectangle, .ellipse, .diamond:
           // A diagram node: the label fills the box (the box is the boundary).
-          NodeLabel(text: text.trimmed, zoom: zoom)
+          NodeLabel(text: text.trimmed, zoom: zoom, tint: tint)
         case .arrow, .line:
           // A connector label: a floating pill so it stays legible over the canvas.
           CanvasLabel(text: text.trimmed, zoom: zoom)
@@ -434,6 +478,7 @@ private struct CanvasElementContent: View {
 private struct NodeLabel: View {
   let text: String
   var zoom: CGFloat = 1
+  var tint: Color?
 
   var body: some View {
     Text(text)
@@ -441,8 +486,9 @@ private struct NodeLabel: View {
       .multilineTextAlignment(.center)
       .lineLimit(5)
       .minimumScaleFactor(0.82)
-      // Board ink, not white — and ink on paper casts no shadow (elementShadow is clear in light).
-      .foregroundStyle(Theme.Palette.body)
+      // Board ink (or the element's tint) — ink on paper casts no shadow (elementShadow is clear
+      // on light themes).
+      .foregroundStyle(tint ?? Theme.Palette.body)
       .shadow(color: Theme.Palette.elementShadow, radius: 3, y: 1)
       .padding(.horizontal, 12 * zoom)
       .padding(.vertical, 8 * zoom)
@@ -458,6 +504,8 @@ private struct NodeLabel: View {
 /// being edited. Built as concatenated `Text` runs so it wraps natively and stays cheap; image
 /// placeholders show a small inline glyph (the real attachment only lives in the live editor).
 private struct ComposerChipText: View {
+  /// Base ink override (the card's tint); chips keep their brand colors.
+  var tint: Color? = nil
   let plain: String
   /// Board-scoped variable names, so a `$name` reference styles even when defined in another card.
   var definedVars: Set<String> = []
@@ -470,7 +518,7 @@ private struct ComposerChipText: View {
     composed
       .font(.system(size: Theme.Typography.body.pointSize * zoom))
       .lineSpacing(Theme.Typography.bodyLineSpacing * zoom)
-      .foregroundStyle(Theme.Palette.body)
+      .foregroundStyle(tint ?? Theme.Palette.body)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 
@@ -590,11 +638,12 @@ private struct CanvasLabel: View {
 
 private struct ShapeBox: View {
   let kind: BoxShapeKind
+  var tint: Color?
 
   var body: some View {
     BoxShape(kind: kind)
-      .fill(Theme.Palette.elementFill)
-      .overlay(BoxShape(kind: kind).stroke(Theme.Palette.elementStroke, lineWidth: 2))
+      .fill(tint.map { $0.opacity(Theme.flavor.isDark ? 0.16 : 0.10) } ?? Theme.Palette.elementFill)
+      .overlay(BoxShape(kind: kind).stroke(tint ?? Theme.Palette.elementStroke, lineWidth: 2))
       .shadow(color: Theme.Palette.elementShadow, radius: 10, y: 4)
       .padding(2)
   }
@@ -630,6 +679,7 @@ private struct BoxShape: Shape {
 private struct LineShape: View {
   let arrow: Bool
   let points: [CanvasPoint]
+  var tint: Color?
 
   var body: some View {
     GeometryReader { geo in
@@ -653,7 +703,7 @@ private struct LineShape: View {
           }
         }
       }
-      .stroke(Theme.Palette.elementStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      .stroke(tint ?? Theme.Palette.elementStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
       .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
     }
   }
@@ -661,6 +711,7 @@ private struct LineShape: View {
 
 private struct FreehandShape: View {
   let points: [CanvasPoint]
+  var tint: Color?
 
   var body: some View {
     GeometryReader { geo in
@@ -670,7 +721,7 @@ private struct FreehandShape: View {
         path.move(to: first)
         for point in mapped.dropFirst() { path.addLine(to: point) }
       }
-      .stroke(Theme.Palette.elementStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      .stroke(tint ?? Theme.Palette.elementStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
       .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
     }
   }

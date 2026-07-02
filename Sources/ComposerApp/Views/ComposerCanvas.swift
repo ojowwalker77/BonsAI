@@ -28,6 +28,8 @@ struct ComposerCanvas: View {
   @State private var showAgent = false
   /// The ⌘K command palette (board switcher + buried board-level actions) is showing.
   @State private var showPalette = false
+  /// The tint swatch row in the bottom bar is expanded.
+  @State private var tintPickerOpen = false
   /// The board picker opens on hover; a short grace timer stops it flickering while the pointer
   /// crosses the gap between the pill and the list. While a row is renaming or confirming a
   /// delete, the panel is pinned open regardless of hover.
@@ -85,7 +87,9 @@ struct ComposerCanvas: View {
           card: editing,
           size: proxy.size,
           isWorking: isWorking,
+          currentTint: board.cards.first(where: { $0.id == editing.id })?.tint,
           onRefine: { refineSelection($0, card: editing) },
+          onTint: { board.setTint($0, for: editing.id) },
           onApplyFix: { editing.controller.applyLintFix(range: $0.range, expecting: $0.phrase, with: $1) },
           onAskClaude: { askClaude(about: $0, card: editing) }
         )
@@ -315,10 +319,16 @@ struct ComposerCanvas: View {
         path.move(to: first)
         for point in points.dropFirst() { path.addLine(to: point) }
       }
-      .stroke(Theme.Palette.inkStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      .stroke(currentTintColor ?? Theme.Palette.inkStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
       .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
       .allowsHitTesting(false)
     }
+  }
+
+  /// The active tint resolved against the current flavor (nil = default ink).
+  private var currentTintColor: Color? {
+    guard let slot = board.currentTint, Theme.flavor.tints.indices.contains(slot) else { return nil }
+    return Color(nsColor: Theme.flavor.tints[slot])
   }
 
   /// A tap on empty board: place a card (Text tool) or clear selection (Select tool).
@@ -552,6 +562,10 @@ struct ComposerCanvas: View {
 
       barDivider
 
+      tintControl
+
+      barDivider
+
       SidebarButton(symbol: grounded ? "folder.fill" : "folder.badge.plus",
                     help: folderName.map { "Agent grounded in \($0)  ·  click to change" }
                       ?? "Ground the agent in a folder it can read",
@@ -576,6 +590,67 @@ struct ComposerCanvas: View {
     Rectangle().fill(Theme.Palette.chromeDivider)
       .frame(width: 1, height: 20)
       .padding(.horizontal, 4)
+  }
+
+  /// The element tint: a swatch of the current color that expands into the theme's tint row.
+  /// Picking a slot colors NEW elements and re-tints the current selection; tints are stored as
+  /// slot indexes, so they re-resolve when the theme changes.
+  @ViewBuilder
+  private var tintControl: some View {
+    Button(action: { Haptics.tap(); withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen.toggle() } }) {
+      tintSwatch(for: board.currentTint, diameter: 14)
+        .frame(width: WindowChrome.controlHeight, height: WindowChrome.controlHeight)
+        .background(
+          Circle().fill(tintPickerOpen ? Theme.Palette.hoverWash : Color.clear)
+        )
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help("Element color — applies to new elements and the selection")
+
+    if tintPickerOpen {
+      HStack(spacing: 5) {
+        tintOption(nil)
+        ForEach(Theme.flavor.tints.indices, id: \.self) { slot in
+          tintOption(slot)
+        }
+      }
+      .transition(.opacity)
+    }
+  }
+
+  private func tintOption(_ slot: Int?) -> some View {
+    let selected = board.currentTint == slot
+    return Button(action: { pickTint(slot) }) {
+      tintSwatch(for: slot, diameter: 16)
+        .overlay(
+          Circle()
+            .strokeBorder(selected ? Theme.Palette.accent : Color.clear, lineWidth: 2)
+            .frame(width: 22, height: 22)
+        )
+        .frame(width: 26, height: WindowChrome.controlHeight)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(slot == nil ? "Default ink" : "Theme color \((slot ?? 0) + 1)")
+  }
+
+  private func tintSwatch(for slot: Int?, diameter: CGFloat) -> some View {
+    let color: Color = {
+      guard let slot, Theme.flavor.tints.indices.contains(slot) else { return Theme.Palette.elementStroke }
+      return Color(nsColor: Theme.flavor.tints[slot])
+    }()
+    return Circle()
+      .fill(color)
+      .frame(width: diameter, height: diameter)
+      .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
+  }
+
+  private func pickTint(_ slot: Int?) {
+    Haptics.tap()
+    board.currentTint = slot
+    board.setTintForSelection(slot)
+    withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
   }
 
   /// Agent and Settings float over the canvas as glass panels (top-right, full-height).
@@ -1275,6 +1350,9 @@ private struct BoardViewportInput: NSViewRepresentable {
     private var dragClickCount = 1
     private var lastPan: CGSize = .zero
     private var freehandPoints: [CGPoint] = []
+    /// Last raw drag point, kept so a Shift press/release with the mouse still (flagsChanged,
+    /// no mouseDragged) can re-emit the draft with the new constraint immediately.
+    private var lastDragPoint: CGPoint?
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -1329,11 +1407,30 @@ private struct BoardViewportInput: NSViewRepresentable {
           state.onFreehandChanged(freehandPoints)
         }
       case .placing:
-        state.onElementDraftChanged(start, point)
+        state.onElementDraftChanged(start, constrained(point, from: start, flags: event.modifierFlags))
       case .panning:
         lastPan = delta
         state.onPanChanged(delta)
       }
+      lastDragPoint = point
+    }
+
+    /// Shift squares the drag for box shapes: the end point snaps so |dx| == |dy| == the larger
+    /// side, keeping the dragged direction. Freeform for every other tool.
+    private func constrained(_ end: CGPoint, from start: CGPoint, flags: NSEvent.ModifierFlags) -> CGPoint {
+      guard flags.contains(.shift), state.tool.constrainsToSquare else { return end }
+      let dx = end.x - start.x, dy = end.y - start.y
+      let side = max(abs(dx), abs(dy))
+      return CGPoint(x: start.x + (dx < 0 ? -side : side), y: start.y + (dy < 0 ? -side : side))
+    }
+
+    /// Pressing/releasing Shift mid-drag updates the draft immediately, without waiting for the
+    /// next mouse movement.
+    override func flagsChanged(with event: NSEvent) {
+      if dragMode == .placing, let start = dragStart, let current = lastDragPoint {
+        state.onElementDraftChanged(start, constrained(current, from: start, flags: event.modifierFlags))
+      }
+      super.flagsChanged(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -1360,7 +1457,7 @@ private struct BoardViewportInput: NSViewRepresentable {
           state.onElementDraftCancelled()
           state.onTap(start, dragModifiers)   // a click (no real drag) still drops a default size
         } else {
-          state.onElementDraftEnded(start, point)
+          state.onElementDraftEnded(start, constrained(point, from: start, flags: event.modifierFlags))
         }
       case .panning:
         state.onPanEnded(lastPan)
@@ -1371,6 +1468,7 @@ private struct BoardViewportInput: NSViewRepresentable {
       dragMode = .maybeTap
       lastPan = .zero
       freehandPoints = []
+      lastDragPoint = nil
       state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
     }
@@ -1455,12 +1553,16 @@ private struct ActiveCardOverlays: View {
   @ObservedObject var lint: LintState
   let size: CGSize
   let isWorking: Bool
+  let currentTint: Int?
   let onRefine: (HeadlessEngine) -> Void
+  let onTint: (Int?) -> Void
   let onApplyFix: (LintFlag, String) -> Void
   let onAskClaude: (LintFlag) -> Void
 
   init(card: CardInteraction, size: CGSize, isWorking: Bool,
+       currentTint: Int?,
        onRefine: @escaping (HeadlessEngine) -> Void,
+       onTint: @escaping (Int?) -> Void,
        onApplyFix: @escaping (LintFlag, String) -> Void,
        onAskClaude: @escaping (LintFlag) -> Void) {
     self.card = card
@@ -1469,7 +1571,9 @@ private struct ActiveCardOverlays: View {
     self.lint = card.lint
     self.size = size
     self.isWorking = isWorking
+    self.currentTint = currentTint
     self.onRefine = onRefine
+    self.onTint = onTint
     self.onApplyFix = onApplyFix
     self.onAskClaude = onAskClaude
   }
@@ -1491,7 +1595,7 @@ private struct ActiveCardOverlays: View {
   @ViewBuilder
   private var selectionBar: some View {
     if !card.selection.isEmpty, !mentions.isOpen, !appSearch.isOpen, let rect = card.selection.rectInView {
-      SelectionActionBar(isWorking: isWorking, onRefine: onRefine)
+      SelectionActionBar(isWorking: isWorking, onRefine: onRefine, currentTint: currentTint, onTint: onTint)
         .fixedSize()
         .position(x: clamp(rect.midX, 120, max(120, size.width - 120)),
                   y: clamp(rect.minY - 22, 30, max(30, size.height - 28)))

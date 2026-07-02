@@ -11,6 +11,12 @@ enum Theme {
   /// The active flavor (Settings ▸ Appearance ▸ Theme).
   static var flavor: ThemeFlavor { ComposerPreferences.theme.flavor }
 
+  /// Resolve an element tint slot against the active flavor (nil slot or out of range = nil).
+  static func tintColor(_ slot: Int?) -> NSColor? {
+    guard let slot, flavor.tints.indices.contains(slot) else { return nil }
+    return flavor.tints[slot]
+  }
+
   static var nsBodyText: NSColor { flavor.text }
 
   static var nsPlaceholderText: NSColor { flavor.overlay1 }
