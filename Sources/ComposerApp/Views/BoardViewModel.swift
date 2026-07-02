@@ -21,6 +21,7 @@ final class CardInteraction: ObservableObject, Identifiable {
   lazy var lint = LintState()
   lazy var refine = RefineState()
   private var plainTextCache: String
+  private var inkCache: [InkRun] = []
   private var attributedCache: NSAttributedString?
 
   /// The visible string (`tv.string`) — drives count/placeholder/change-detection. NOT the
@@ -35,6 +36,7 @@ final class CardInteraction: ObservableObject, Identifiable {
     self.text = card.text
     self.count = card.text.count
     self.plainTextCache = card.text
+    self.inkCache = card.ink ?? []
   }
 
   /// Self-contained plain text (mention tokens serialized back to `@name`). Falls back to
@@ -47,18 +49,40 @@ final class CardInteraction: ObservableObject, Identifiable {
 
   var attributedSnapshot: NSAttributedString? { attributedCache }
 
+  /// Per-range text ink for the current serialized text — always extracted alongside the
+  /// plain-text cache from the same attributed string, so offsets agree even mid-edit.
+  var ink: [InkRun] { inkCache }
+
   func captureEditorState() {
     if let snapshot = controller.attributedSnapshot {
       attributedCache = snapshot
-      plainTextCache = snapshot.composerPlainText
-      count = snapshot.string.count
-    } else if let plain = controller.plainTextIfLoaded {
+      let (plain, runs) = snapshot.composerPlainTextAndInk
       plainTextCache = plain
+      inkCache = runs
+      count = snapshot.string.count
+    } else if let (plain, runs) = controller.plainTextAndInkIfLoaded {
+      plainTextCache = plain
+      inkCache = runs
     }
   }
 
   func cachePlainText(_ value: String) {
     plainTextCache = value
+    // Ink offsets are over the serialized text — re-extract from the live editor (loaded while
+    // editing) so a run and its offsets always match this exact serialization.
+    if let (_, runs) = controller.plainTextAndInkIfLoaded { inkCache = runs }
+  }
+
+  /// The ink runs currently in the live editor (peeked, not cached) — nil coalesces to the cache
+  /// when the editor is unmounted. Lets the board diff a fresh inking against the committed cache.
+  var editorInk: [InkRun] {
+    controller.plainTextAndInkIfLoaded?.ink ?? inkCache
+  }
+
+  /// Refresh the ink cache from the live editor after an inking action that leaves the
+  /// serialized text unchanged (so `cachePlainText` didn't fire).
+  func refreshInkFromEditor() {
+    if let (_, runs) = controller.plainTextAndInkIfLoaded { inkCache = runs }
   }
 }
 
@@ -139,8 +163,15 @@ final class BoardViewModel: ObservableObject {
   func plainText(for card: CardState) -> String {
     // An image card contributes its file path so Copy, Compile, and Describe emit a concrete
     // reference the reader (or a coding agent) can open. An image with no path yet contributes nothing.
-    if card.elementKind == .image { return card.imagePath ?? "" }
+    if card.elementKind == .image { return card.resolvedImageURL?.path ?? card.imagePath ?? "" }
     return interactions[card.id]?.plainText ?? card.text
+  }
+
+  /// The card's per-range ink, read from the live runtime bundle when present (so an unsaved
+  /// inking is captured) and falling back to the persisted runs. Offsets always match
+  /// `plainText(for:)` — both come from the same cache refresh.
+  func ink(for card: CardState) -> [InkRun] {
+    interactions[card.id]?.ink ?? card.ink ?? []
   }
 
   var selectedInteraction: CardInteraction? { selectedCardID.flatMap { interactions[$0] } }
@@ -196,11 +227,19 @@ final class BoardViewModel: ObservableObject {
     editingCardID = id
   }
 
-  /// The editor lost first responder.
+  /// The editor lost first responder (a click-away). This is the user-driven end of an edit, so an
+  /// empty text card typed into nothing is abandoned — delete it (undoably, through the shared
+  /// delete path so bound arrows refresh) instead of leaving a stray writing spot on the board.
   func endEditing(_ id: UUID) {
     interactions[id]?.captureEditorState()
     textEditBaselines[id] = nil
     if editingCardID == id { editingCardID = nil }
+    // `captureEditorState()` above refreshed the plain-text cache, so this reads what the user
+    // actually left in the editor — not the stale seed snapshot in `cards[i].text`.
+    if let i = index(for: id), cards[i].elementKind == .text,
+       plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      delete(id)
+    }
   }
 
   /// Click on empty board: drop selection and leave text edit (resigning the editor).
@@ -254,9 +293,17 @@ final class BoardViewModel: ObservableObject {
   private func snapshot() -> [CardState] {
     cards.map { card in
       var copy = card
-      copy.text = plainText(for: card)
+      copy.text = persistedText(for: card)
+      if card.elementKind == .text {
+        let runs = ink(for: card)
+        copy.ink = runs.isEmpty ? nil : runs
+      }
       return copy
     }
+  }
+
+  private func persistedText(for card: CardState) -> String {
+    card.elementKind == .image ? card.text : plainText(for: card)
   }
 
   /// Build the persistence snapshot only when the debounce actually fires. This avoids cloning
@@ -448,7 +495,8 @@ final class BoardViewModel: ObservableObject {
   @discardableResult
   func addImageObject(path: String, at center: CGPoint) -> UUID {
     registerUndo()
-    let size = Self.imageCardSize(forPath: path)
+    let storedPath = Self.storedImagePath(for: path)
+    let size = Self.imageCardSize(forPath: storedPath)
     let card = CardState(
       kind: .image,
       text: "",
@@ -457,7 +505,7 @@ final class BoardViewModel: ObservableObject {
       w: Double(size.width),
       h: Double(size.height),
       z: nextZ,
-      imagePath: path,
+      imagePath: storedPath,
       whoWrote: nextAuthor
     )
     nextZ += 1
@@ -476,7 +524,8 @@ final class BoardViewModel: ObservableObject {
   /// footprint; falls back to the shape default if the file can't be read.
   private static func imageCardSize(forPath path: String) -> CGSize {
     guard
-      let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+      let url = AssetStore.resolve(path),
+      let source = CGImageSourceCreateWithURL(url as CFURL, nil),
       let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
       let pixelWidth = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
       let pixelHeight = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
@@ -489,6 +538,17 @@ final class BoardViewModel: ObservableObject {
       ? CGSize(width: maxSide, height: maxSide / aspect)
       : CGSize(width: maxSide * aspect, height: maxSide)
     return CGSize(width: size.width.rounded(), height: size.height.rounded())
+  }
+
+  private static func storedImagePath(for path: String) -> String {
+    if let url = AssetStore.resolve(path) {
+      return AssetStore.ingest(fileURL: url) ?? url.lastPathComponent
+    }
+    if path.hasPrefix("/") {
+      let url = URL(fileURLWithPath: path)
+      return AssetStore.ingest(fileURL: url) ?? url.lastPathComponent
+    }
+    return path
   }
 
   // MARK: Programmatic mutations (canvas API / external agents)
@@ -887,7 +947,7 @@ final class BoardViewModel: ObservableObject {
     let selected = cards.filter { selectedCardIDs.contains($0.id) }
     return selected.map { card in
       var copy = card
-      copy.text = plainText(for: card)
+      copy.text = persistedText(for: card)
       return copy
     }
   }
@@ -915,6 +975,9 @@ final class BoardViewModel: ObservableObject {
       copy.whoWrote = nextAuthor
       copy.startBindingID = nil
       copy.endBindingID = nil
+      if copy.elementKind == .image, let path = copy.imagePath {
+        copy.imagePath = Self.storedImagePath(for: path)
+      }
       nextZ += 1
       cards.append(copy)
       interactions[copy.id] = CardInteraction(copy)
@@ -1020,6 +1083,20 @@ final class BoardViewModel: ObservableObject {
     scheduleSave()
   }
 
+  /// The selection bar inked a text range in the live editor (serialized text unchanged). Arm an
+  /// undo baseline from the pre-ink cache, then refresh the cache so the new runs persist. Must run
+  /// AFTER the editor storage was mutated but the interaction cache still holds the old runs.
+  func noteInkChanged(cardID: UUID) {
+    guard let interaction = interactions[cardID] else { return }
+    // Re-applying the same color is a no-op — don't burn an undo step or a save on it.
+    guard interaction.editorInk != interaction.ink else { return }
+    // Baseline = the board as it was before this inking: the cache still holds the old runs at
+    // `registerUndo` time, so the undo snapshot captures the pre-ink state. Then commit the new runs.
+    registerUndo()
+    interaction.refreshInkFromEditor()
+    scheduleSave()
+  }
+
   func lockSelection(_ locked: Bool) {
     guard !selectedCardIDs.isEmpty else { return }
     guard cards.contains(where: { selectedCardIDs.contains($0.id) && $0.locked != locked }) else { return }
@@ -1080,8 +1157,20 @@ final class BoardViewModel: ObservableObject {
     }
   }
 
+  /// Read-only mirror of `nearestConnectable` returning just the id, so the canvas can preview the
+  /// bind target under the live drag endpoint. Preview and commit share the exact same rule, so what
+  /// the user sees highlighted before releasing is always what actually binds.
+  func bindCandidate(at boardPoint: CGPoint, excluding: Set<UUID>) -> UUID? {
+    nearestConnectable(to: boardPoint, excluding: excluding)?.id
+  }
+
+  /// The card an arrow/line endpoint should bind to. Excalidraw-style proximity: an endpoint only
+  /// grabs a node it lands ON or hugs — inside the node's frame, or within `edgeSlop` points of its
+  /// frame rectangle (distance to the RECT, not to the far-off center). This kills the old behavior
+  /// where any card whose center sat within 220pt silently swallowed the endpoint. Among qualifying
+  /// nodes the closest rect wins, tie-broken by nearest center.
   private func nearestConnectable(to point: CGPoint, excluding excluded: Set<UUID>) -> CardState? {
-    let maxDistance: CGFloat = 220
+    let edgeSlop: CGFloat = 16
     return cards
       .filter { card in
         !excluded.contains(card.id) &&
@@ -1090,13 +1179,23 @@ final class BoardViewModel: ObservableObject {
         card.elementKind != .arrow &&
         card.elementKind != .freehand
       }
-      .compactMap { card -> (CardState, CGFloat)? in
+      .compactMap { card -> (card: CardState, rectDistance: CGFloat, centerDistance: CGFloat)? in
+        let rect = card.frame
+        // Distance from the point to the rectangle: 0 when inside, otherwise the hypot of how far
+        // outside each axis it sits (max(0, …) drops the axes the point is already within).
+        let dx = max(rect.minX - point.x, point.x - rect.maxX, 0)
+        let dy = max(rect.minY - point.y, point.y - rect.maxY, 0)
+        let rectDistance = hypot(dx, dy)
+        guard rectDistance <= edgeSlop else { return nil }
         let center = center(of: card)
-        let distance = hypot(center.x - point.x, center.y - point.y)
-        return distance <= maxDistance ? (card, distance) : nil
+        return (card, rectDistance, hypot(center.x - point.x, center.y - point.y))
       }
-      .min(by: { $0.1 < $1.1 })?
-      .0
+      .min(by: { lhs, rhs in
+        lhs.rectDistance != rhs.rectDistance
+          ? lhs.rectDistance < rhs.rectDistance
+          : lhs.centerDistance < rhs.centerDistance
+      })?
+      .card
   }
 
   private func updateBoundArrowGeometry(at index: Int) {

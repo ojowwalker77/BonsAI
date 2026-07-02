@@ -16,6 +16,10 @@ struct FinderService {
     if let fd = await fdBinary() {
       let includeHidden = trimmed.hasPrefix(".")
       async let exact = fdMatches(fd, pattern: trimmed, fixed: true, limit: maxExactRows, includeHidden: includeHidden)
+      // An evicted iCloud file exists on disk only as a hidden ".name.icloud" placeholder, which
+      // the normal (non-hidden) pass never sees — sweep just the iCloud root with --hidden so a
+      // not-yet-downloaded file is still findable by name.
+      async let cloudPlaceholders = iCloudPlaceholderMatches(fd, query: trimmed, includeHiddenAlready: includeHidden)
       if let fuzzy = fuzzyRegexPattern(for: trimmed) {
         async let fuzzyMatches = fdMatches(fd, pattern: fuzzy, fixed: false, limit: maxFuzzyRows, includeHidden: includeHidden)
         let (exactPaths, fuzzyPaths) = try await (exact, fuzzyMatches)
@@ -24,6 +28,7 @@ struct FinderService {
       } else {
         paths.append(contentsOf: try await exact)
       }
+      paths.append(contentsOf: await cloudPlaceholders)
     } else {
       paths.append(contentsOf: try await findFallback(trimmed, limit: maxExactRows))
     }
@@ -62,24 +67,25 @@ struct FinderService {
     guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else { return nil }
 
     let url = URL(fileURLWithPath: path)
+    let resultPath = logicalPathForICloudPlaceholder(path) ?? path
     let title = displayName(url)
     let isDirectPath = existingExpandedPath(query).map { URL(fileURLWithPath: $0).standardizedFileURL.path == path } ?? false
     let nameScore = fuzzyScore(title, query: query)
-    let pathScore = fuzzyScore(abbreviatedPath(path), query: query).map { max(0, $0 - 900) }
+    let pathScore = fuzzyScore(abbreviatedPath(resultPath), query: query).map { max(0, $0 - 900) }
     guard let baseScore = [isDirectPath ? 20_000 : nil, nameScore, pathScore, path.localizedCaseInsensitiveContains(query) ? 3_000 : nil].compactMap({ $0 }).max() else {
       return nil
     }
     let score = baseScore + pathScoreAdjustment(for: path)
 
     let kind = isDirectory.boolValue ? "Folder" : "File"
-    let subtitle = [kind, abbreviatedPath(path), lightMetadata(for: url)].filter { !$0.isEmpty }.joined(separator: " · ")
+    let subtitle = [kind, abbreviatedPath(resultPath), lightMetadata(for: url)].filter { !$0.isEmpty }.joined(separator: " · ")
     return SearchHit(
       score: score,
       result: AppSearchResult(
-        id: path,
+        id: resultPath,
         title: title,
         subtitle: subtitle,
-        selection: .finder(FinderReference(path: path, isDirectory: isDirectory.boolValue))))
+        selection: .finder(FinderReference(path: resultPath, isDirectory: isDirectory.boolValue))))
   }
 
   private func fdBinary() async -> String? {
@@ -91,7 +97,19 @@ struct FinderService {
       .first
   }
 
-  private func fdMatches(_ fd: String, pattern: String, fixed: Bool, limit: Int, includeHidden: Bool) async throws -> [String] {
+  private func iCloudPlaceholderMatches(_ fd: String, query: String, includeHiddenAlready: Bool) async -> [String] {
+    guard !includeHiddenAlready else { return [] }
+    let root = "\(NSHomeDirectory())/Library/Mobile Documents/com~apple~CloudDocs"
+    guard FileManager.default.fileExists(atPath: root) else { return [] }
+    // The query matches the placeholder's full path (".report.pdf.icloud" contains "report"), so
+    // the plain fixed-string pattern is enough. Best-effort: a failure here must not sink the
+    // primary search.
+    return (try? await fdMatches(fd, pattern: query, fixed: true, limit: maxExactRows,
+                                 includeHidden: true, roots: [root])) ?? []
+  }
+
+  private func fdMatches(_ fd: String, pattern: String, fixed: Bool, limit: Int, includeHidden: Bool,
+                         roots: [String]? = nil) async throws -> [String] {
     var args = [
       fd,
       "--full-path",
@@ -112,7 +130,7 @@ struct FinderService {
     if fixed { args.append("--fixed-strings") }
     args.append("--")
     args.append(pattern)
-    args.append(contentsOf: searchRoots())
+    args.append(contentsOf: roots ?? searchRoots())
 
     let result = try await Shell.run(args)
     guard result.status == 0 else {
@@ -157,6 +175,8 @@ struct FinderService {
       "\(home)/Desktop",
       "\(home)/Documents",
       "\(home)/Downloads",
+      "\(home)/Library/Mobile Documents/com~apple~CloudDocs",
+      "\(home)/Library/CloudStorage",
       home,
     ]
     var seen = Set<String>()
@@ -258,6 +278,11 @@ struct FinderService {
     let path = url.path
     var isDirectory = ObjCBool(false)
     guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+      if let placeholder = iCloudPlaceholderURL(forLogicalURL: url),
+         FileManager.default.fileExists(atPath: placeholder.path) {
+        _ = try? FileManager.default.startDownloadingUbiquitousItem(at: placeholder)
+        return "## Finder — \(displayName(url))\nPath: \(path)\nStatus: Downloading from iCloud — try again in a moment."
+      }
       return "## Finder — \(displayName(url))\nPath: \(path)\nStatus: Not found on this Mac."
     }
 
@@ -341,6 +366,10 @@ struct FinderService {
   }
 
   private static func readTextPrefix(_ url: URL) -> FileTextRead {
+    if let reason = iCloudDownloadReason(for: url) {
+      return .unavailable(reason)
+    }
+
     let handle: FileHandle
     do {
       handle = try FileHandle(forReadingFrom: url)
@@ -373,6 +402,20 @@ struct FinderService {
     return .text((text, truncatedByBytes || truncatedByChars))
   }
 
+  private static func iCloudDownloadReason(for url: URL) -> String? {
+    if isICloudPlaceholder(url) {
+      _ = try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+      return "Downloading from iCloud — try again in a moment."
+    }
+
+    guard let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
+          values.isUbiquitousItem == true,
+          let status = values.ubiquitousItemDownloadingStatus,
+          status != .current else { return nil }
+    _ = try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+    return "Downloading from iCloud — try again in a moment."
+  }
+
   private static func languageHint(forExtension ext: String) -> String {
     switch ext.lowercased() {
     case "swift": return "swift"
@@ -397,12 +440,39 @@ struct FinderService {
 
 private func displayName(_ url: URL) -> String {
   let name = url.lastPathComponent
+  if let logicalName = logicalNameForICloudPlaceholder(name) { return logicalName }
   return name.isEmpty ? url.path : name
 }
 
 private func abbreviatedPath(_ path: String) -> String {
+  let path = logicalPathForICloudPlaceholder(path) ?? path
   let home = NSHomeDirectory()
+  let iCloudDrive = "\(home)/Library/Mobile Documents/com~apple~CloudDocs"
+  if path == iCloudDrive { return "iCloud Drive" }
+  if path.hasPrefix(iCloudDrive + "/") { return "iCloud Drive/" + path.dropFirst(iCloudDrive.count + 1) }
   if path == home { return "~" }
   if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
   return path
+}
+
+private func isICloudPlaceholder(_ url: URL) -> Bool {
+  logicalNameForICloudPlaceholder(url.lastPathComponent) != nil
+}
+
+private func logicalNameForICloudPlaceholder(_ name: String) -> String? {
+  let suffix = ".icloud"
+  guard name.hasPrefix("."), name.hasSuffix(suffix), name.count > suffix.count + 1 else { return nil }
+  return String(name.dropFirst().dropLast(suffix.count))
+}
+
+private func logicalPathForICloudPlaceholder(_ path: String) -> String? {
+  let url = URL(fileURLWithPath: path)
+  guard let name = logicalNameForICloudPlaceholder(url.lastPathComponent) else { return nil }
+  return url.deletingLastPathComponent().appendingPathComponent(name).standardizedFileURL.path
+}
+
+private func iCloudPlaceholderURL(forLogicalURL url: URL) -> URL? {
+  let name = url.lastPathComponent
+  guard !name.isEmpty else { return nil }
+  return url.deletingLastPathComponent().appendingPathComponent(".\(name).icloud")
 }

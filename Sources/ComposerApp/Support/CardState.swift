@@ -119,6 +119,7 @@ struct CardState: Codable, Identifiable, Equatable {
   var elementKind: CanvasElementKind { kind ?? .text }
   var locked: Bool { isLocked ?? false }
   var isArchived: Bool { archived ?? false }
+  var resolvedImageURL: URL? { imagePath.flatMap(AssetStore.resolve) }
   /// 1 = human, 2 = agent, 0 = unknown/legacy.
   var author: Int { whoWrote ?? 0 }
 

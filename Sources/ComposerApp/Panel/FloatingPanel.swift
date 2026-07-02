@@ -68,6 +68,18 @@ final class FloatingPanel: NSPanel {
     (delegate as? PanelController)?.hide()
   }
 
+  /// Losing key status mid-press can swallow the space `keyUp`, which would otherwise leave the
+  /// board stuck in pan mode (open-hand cursor, cards non-interactive). Clear the space latch so it
+  /// resets — mirroring a `keyUp` — the moment focus leaves.
+  override func resignKey() {
+    super.resignKey()
+    NotificationCenter.default.post(
+      name: .composerSpaceKeyChanged,
+      object: nil,
+      userInfo: ["down": false]
+    )
+  }
+
   /// BonsAI has no menu bar, so app-menu shortcuts don't fire. Catch the board's
   /// shortcuts at the key-window level instead.
   override func performKeyEquivalent(with event: NSEvent) -> Bool {

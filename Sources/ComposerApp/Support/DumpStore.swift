@@ -139,13 +139,42 @@ final class DumpStore: ObservableObject {
     if let data = dump.cardsData {
       do {
         let decoded = try JSONDecoder().decode([CardState].self, from: data)
-        if !decoded.isEmpty { return decoded }
+        if !decoded.isEmpty { return migrateImagePaths(in: decoded, for: dump) }
         reportUnreadableBoard(dump, message: "A saved board contained no cards. Composer loaded its text fallback instead.")
       } catch {
         reportUnreadableBoard(dump, message: UserFacingError.message(for: error, while: "Reading this saved board"))
       }
     }
     return [CardState.firstCard(text: dump.text)]
+  }
+
+  private func migrateImagePaths(in cards: [CardState], for dump: Dump) -> [CardState] {
+    var changed = false
+    let migrated = cards.map { card -> CardState in
+      guard let path = card.imagePath, path.hasPrefix("/") else { return card }
+      let url = URL(fileURLWithPath: path).standardizedFileURL
+      let replacement: String?
+      if let filename = AssetStore.filenameIfInsideStore(url) {
+        replacement = filename
+      } else if FileManager.default.fileExists(atPath: url.path) {
+        replacement = AssetStore.ingest(fileURL: url)
+      } else {
+        replacement = nil
+      }
+      guard let replacement, replacement != path else { return card }
+      var updated = card
+      updated.imagePath = replacement
+      changed = true
+      return updated
+    }
+    guard changed else { return cards }
+    do {
+      dump.cardsData = try JSONEncoder().encode(migrated)
+      _ = save("Migrating board image attachments")
+    } catch {
+      UserFacingError.report(error, while: "Encoding migrated board image attachments")
+    }
+    return migrated
   }
 
   /// Cards for the current board (always ≥ 1).
