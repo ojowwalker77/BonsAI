@@ -354,20 +354,51 @@ private struct SettingsContent: View {
     claudeModel: Binding<ClaudeModel>, codexModel: Binding<String>, opencodeModel: Binding<String>
   ) -> some View {
     let engine = resolvedEngine(engineRaw.wrappedValue)
-    HStack(spacing: 10) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
-        Text(subtitle)
-          .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
-          .fixedSize(horizontal: false, vertical: true)
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .center, spacing: 14) {
+        surfaceCopy(title: title, subtitle: subtitle)
+          .frame(minWidth: 190, maxWidth: .infinity, alignment: .leading)
+          .layoutPriority(1)
+        if let engine {
+          surfacePickers(engine: engine, engineRaw: engineRaw, claudeModel: claudeModel, codexModel: codexModel, opencodeModel: opencodeModel)
+            .fixedSize()
+        }
       }
-      Spacer(minLength: 8)
-      if let engine {
-        providerPicker(engineRaw, resolved: engine)
-        modelPicker(for: engine, claudeModel: claudeModel, codexModel: codexModel, opencodeModel: opencodeModel)
+
+      VStack(alignment: .leading, spacing: 12) {
+        surfaceCopy(title: title, subtitle: subtitle)
+        if let engine {
+          surfacePickers(engine: engine, engineRaw: engineRaw, claudeModel: claudeModel, codexModel: codexModel, opencodeModel: opencodeModel)
+        }
       }
     }
     .padding(.vertical, 11)
+  }
+
+  private func surfaceCopy(title: String, subtitle: String) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(title)
+        .font(.callout.weight(.medium))
+        .foregroundStyle(Theme.Palette.body)
+        .lineLimit(2)
+      Text(subtitle)
+        .font(.caption)
+        .foregroundStyle(Theme.Palette.menuDesc)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  private func surfacePickers(
+    engine: HeadlessEngine,
+    engineRaw: Binding<String>,
+    claudeModel: Binding<ClaudeModel>,
+    codexModel: Binding<String>,
+    opencodeModel: Binding<String>
+  ) -> some View {
+    HStack(spacing: 10) {
+      providerPicker(engineRaw, resolved: engine)
+      modelPicker(for: engine, claudeModel: claudeModel, codexModel: codexModel, opencodeModel: opencodeModel)
+    }
   }
 
   /// Provider (engine) menu, listing every ready engine.
