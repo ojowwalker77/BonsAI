@@ -102,6 +102,9 @@ struct ComposerCanvas: View {
 
       // Floating chrome: board identity top-left (the pill IS the board manager), agent top-right,
       // everything hands-on (tools, zoom, folder, settings) in one bottom command bar.
+      // Decor sits under the chrome: at narrow widths the centered command bar can reach into the
+      // bonsai's corner, and the bar must win both paint order and hit testing.
+      bonsaiOverlay(in: proxy.size)
       boardSwitcherPill(in: proxy.size)
       boardActionsPill(in: proxy.size)
       bottomCommandBar(fit: inner)
@@ -540,6 +543,15 @@ struct ComposerCanvas: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     .padding(.top, WindowChrome.edgeInset)
     .padding(.trailing, WindowChrome.edgeInset)
+  }
+
+  /// The ambient bonsai: pure decoration in the bottom-left corner that grows with total open
+  /// time. Not a control, so it takes no `.chromePill()` — it floats bare over the canvas.
+  private func bonsaiOverlay(in size: CGSize) -> some View {
+    BonsaiTreeOverlay()
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+      .padding(.bottom, WindowChrome.edgeInset)
+      .padding(.leading, WindowChrome.edgeInset)
   }
 
   /// Standard-window mode: ONE bottom-center command bar carrying everything hands-on —

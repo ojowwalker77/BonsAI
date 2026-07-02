@@ -167,6 +167,15 @@ private struct SettingsContent: View {
   @AppStorage(ModelPreferences.chatModelKey) private var chatModel: ClaudeModel = ModelPreferences.defaultChatModel
   @AppStorage(ComposerPreferences.themeKey) private var themeRaw = ComposerTheme.bonsaiDark.rawValue
   @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
+  // Dev-only growth speed for the corner bonsai. The engine reads this key live each tick, so the
+  // segmented control takes effect without a relaunch. UI is #if DEBUG-gated below.
+  @AppStorage(ComposerPreferences.bonsaiDevSpeedKey) private var bonsaiDevSpeed = 1.0
+  /// The user's chosen cultivated bonsai form. Shared with the corner overlay's own @AppStorage, so
+  /// tapping a preview tile re-renders the canvas tree live.
+  @AppStorage(ComposerPreferences.bonsaiStyleKey) private var bonsaiStyleRaw = BonsaiStyle.moyogi.rawValue
+  /// Local mirror of the bonsai age scrub (0…1 progress) so the slider tracks smoothly while the
+  /// engine persists absolute seconds. Seeded from the engine when the card appears.
+  @State private var bonsaiScrub = BonsaiGrowth.shared.progress
   /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
   /// visibility. Refreshed in `onAppear`; flipped false the moment the user resets.
   @State private var agentHasGrants = false
@@ -561,8 +570,90 @@ private struct SettingsContent: View {
     VStack(alignment: .leading, spacing: 20) {
       themeCard
       canvasGlassCard
+      bonsaiCard
+      #if DEBUG
+      bonsaiDevCard
+      #endif
     }
   }
+
+  /// The bonsai style gallery: four live-rendered preview tiles, each a real `BonsaiTreeView` at a
+  /// recognizable growth (0.85) scaled into a fixed slot. Tapping writes the shared style key, which
+  /// re-renders the corner tree live. Selection rings in the accent, matching the theme tiles.
+  private var bonsaiCard: some View {
+    let selected = BonsaiStyle(rawValue: bonsaiStyleRaw) ?? .moyogi
+    return VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Bonsai", "The little tree in the corner — choose its cultivated form.")
+      HStack(spacing: 8) {
+        ForEach(BonsaiStyle.allCases) { style in
+          BonsaiStyleTile(style: style, selected: selected == style) {
+            Haptics.level()
+            bonsaiStyleRaw = style.rawValue
+          }
+        }
+      }
+      .padding(14)
+      .settingsCard()
+    }
+  }
+
+  #if DEBUG
+  /// Dev-only controls for the corner bonsai's growth clock. Scrubbing the age slider morphs the
+  /// tree on the canvas live; the speed picker changes how fast open time accrues.
+  private var bonsaiDevCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Bonsai (dev)", "Growth clock controls for testing")
+      VStack(alignment: .leading, spacing: 14) {
+        // Speed
+        HStack(alignment: .firstTextBaseline) {
+          Text("Growth speed").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+          Spacer(minLength: 12)
+        }
+        Picker("Growth speed", selection: $bonsaiDevSpeed) {
+          Text("1×").tag(1.0)
+          Text("2×").tag(2.0)
+          Text("5×").tag(5.0)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+
+        // Age scrub
+        HStack(alignment: .firstTextBaseline) {
+          Text("Age").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+          Spacer(minLength: 12)
+          Text(String(format: "%.1fh", pow(bonsaiScrub, 2) * BonsaiGrowth.maturityHours))
+            .font(.callout.monospacedDigit().weight(.semibold))
+            .foregroundStyle(Theme.Palette.body)
+        }
+        Slider(value: $bonsaiScrub, in: 0...1) { editing in
+          if !editing { bonsaiScrub = BonsaiGrowth.shared.progress }
+        }
+        .tint(Theme.Palette.accent)
+        .onChange(of: bonsaiScrub) { _, p in
+          BonsaiGrowth.shared.setGrownSeconds(pow(p, 2) * BonsaiGrowth.maturityHours * 3600)
+        }
+
+        HStack {
+          Spacer()
+          Button {
+            BonsaiGrowth.shared.resetGrowth()
+            bonsaiScrub = 0
+          } label: {
+            Text("Reset growth")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+              .padding(.horizontal, 11)
+              .frame(height: 26)
+          }
+          .buttonStyle(SettingsPillButtonStyle())
+        }
+      }
+      .padding(14)
+      .settingsCard()
+    }
+    .onAppear { bonsaiScrub = BonsaiGrowth.shared.progress }
+  }
+  #endif
 
   /// Canvas background transparency — solid by default; the board behind this panel updates live
   /// as the slider moves, so it is its own preview.
@@ -998,6 +1089,59 @@ private struct ThemePreviewCard: View {
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
     .help(theme.title)
+    .animation(.easeOut(duration: 0.12), value: hovering)
+    .animation(.easeOut(duration: 0.12), value: selected)
+  }
+}
+
+// MARK: - Bonsai style tile
+
+/// One tappable preview tile in the bonsai gallery: a live-rendered `BonsaiTreeView` at progress
+/// 0.85 (recognizable regardless of the user's real growth), scaled into a fixed slot so the card
+/// height is stable and the tree is never clipped. Selection rings in the accent, like theme tiles.
+private struct BonsaiStyleTile: View {
+  let style: BonsaiStyle
+  let selected: Bool
+  var action: () -> Void
+  @State private var hovering = false
+
+  // The tree's natural footprint (from BonsaiTreeOverlay.footprint) scaled to fit the slot.
+  private let treeSize = CGSize(width: 128, height: 140)
+  private let slot = CGSize(width: 64, height: 70)
+
+  var body: some View {
+    let scale = min(slot.width / treeSize.width, slot.height / treeSize.height)
+    Button(action: action) {
+      VStack(spacing: 6) {
+        BonsaiTreeView(progress: 0.85, style: style)
+          .frame(width: treeSize.width, height: treeSize.height)
+          .scaleEffect(scale)
+          .frame(width: slot.width, height: slot.height)
+          .clipped()
+
+        Text(style.displayName)
+          .font(.caption2.weight(.medium))
+          .foregroundStyle(selected ? Theme.Palette.accent : Theme.Palette.body)
+          .lineLimit(1)
+      }
+      .frame(maxWidth: .infinity)
+      .padding(.vertical, 8)
+      .background(
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .fill(Theme.Palette.rowFill)
+      )
+      .overlay(
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .strokeBorder(
+            selected ? Theme.Palette.accent : (hovering ? Theme.Palette.panelInnerLine : Theme.Palette.panelHairline),
+            lineWidth: selected ? 2 : 1
+          )
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+    .help("\(style.displayName) · \(style.subtitle)")
     .animation(.easeOut(duration: 0.12), value: hovering)
     .animation(.easeOut(duration: 0.12), value: selected)
   }

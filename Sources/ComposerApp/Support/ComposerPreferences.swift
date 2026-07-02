@@ -43,6 +43,13 @@ enum ComposerPreferences {
   /// through the board surface.
   static let canvasTransparencyKey = "composer.canvas.backgroundTransparency"
   static let maxCanvasTransparency = 0.72
+  /// Total effective seconds the app has been open (the bonsai's grown age). Accrues at
+  /// `bonsaiDevSpeedKey`× while the app runs; see `BonsaiGrowth`.
+  static let bonsaiGrownSecondsKey = "composer.bonsai.grownSeconds"
+  /// Dev-only growth speed multiplier (1, 2, or 5). The engine reads it live each tick.
+  static let bonsaiDevSpeedKey = "composer.bonsai.devSpeedMultiplier"
+  /// The bonsai's cultivated form (`BonsaiStyle` raw value). User-facing, Settings ▸ Appearance.
+  static let bonsaiStyleKey = "composer.bonsai.style"
 
   static let minEditorFontSize: CGFloat = 11
   static let maxEditorFontSize: CGFloat = 28

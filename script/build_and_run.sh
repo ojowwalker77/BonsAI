@@ -17,7 +17,7 @@ BUILD_CONFIGURATION="release"
 
 # Normal launches should exercise the same optimized, compact binary users get. Keep an explicit
 # debug lane for LLDB without quietly shipping or profiling the much larger Debug product.
-if [[ "$MODE" == "--debug" || "$MODE" == "debug" ]]; then
+if [[ "$MODE" == "--debug" || "$MODE" == "debug" || "$MODE" == "--debug-run" || "$MODE" == "debug-run" ]]; then
   BUILD_CONFIGURATION="debug"
 fi
 
@@ -226,6 +226,10 @@ case "$MODE" in
   --debug|debug)
     lldb -- "$APP_BINARY"
     ;;
+  --debug-run|debug-run)
+    # Debug build launched like a normal run — for exercising #if DEBUG-only UI without lldb.
+    open_app
+    ;;
   --logs|logs)
     open_app
     /usr/bin/log stream --info --style compact --predicate "process == \"$APP_NAME\""
@@ -240,7 +244,7 @@ case "$MODE" in
     pgrep -x "$APP_NAME" >/dev/null
     ;;
   *)
-    echo "usage: $0 [run|bundle|--debug|--logs|--telemetry|--verify]" >&2
+    echo "usage: $0 [run|bundle|--debug|--debug-run|--logs|--telemetry|--verify]" >&2
     exit 2
     ;;
 esac

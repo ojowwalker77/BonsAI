@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     _ = UpdaterController.shared
     MentionStyleCache.shared.preload()
     CanvasServer.shared.start()
+    BonsaiGrowth.shared.start()
     promptForAgentSkillsIfNeeded()
     installSigtermHandler()
 
@@ -40,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// lost because the pending save's timer never gets to fire.
   func applicationWillTerminate(_ notification: Notification) {
     CanvasBridge.shared.flush()
+    BonsaiGrowth.shared.flush()
   }
 
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
