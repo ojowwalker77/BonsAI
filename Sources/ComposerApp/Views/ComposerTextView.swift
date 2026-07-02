@@ -37,7 +37,39 @@ final class ComposerTextView: NSTextView {
       onChipClick?(range)
       return
     }
+    if toggleCheckbox(at: event) { return }
     super.mouseDown(with: event)
+  }
+
+  /// A click on a markdown checkbox toggles `[ ]` ↔ `[x]` instead of placing the caret.
+  private func toggleCheckbox(at event: NSEvent) -> Bool {
+    guard let lm = layoutManager, let container = textContainer, let storage = textStorage,
+          storage.length > 0 else { return false }
+    let point = convert(event.locationInWindow, from: nil)
+    let origin = textContainerOrigin
+    let inContainer = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+    var fraction: CGFloat = 0
+    let glyphIndex = lm.glyphIndex(for: inContainer, in: container, fractionOfDistanceThroughGlyph: &fraction)
+    let charIndex = lm.characterIndexForGlyph(at: glyphIndex)
+    guard charIndex < storage.length else { return false }
+
+    let ns = storage.string as NSString
+    let lineRange = ns.lineRange(for: NSRange(location: charIndex, length: 0))
+    let line = ns.substring(with: lineRange)
+    guard let checkbox = MarkdownStyle.checkboxBox(in: line) else { return false }
+    let boxRange = NSRange(location: lineRange.location + checkbox.box.location, length: checkbox.box.length)
+    guard charIndex >= boxRange.location, charIndex < boxRange.location + boxRange.length else { return false }
+
+    // Reject clicks past the line's glyphs (whitespace to the right of a short line).
+    let glyphRange = lm.glyphRange(forCharacterRange: boxRange, actualCharacterRange: nil)
+    let rect = lm.boundingRect(forGlyphRange: glyphRange, in: container).offsetBy(dx: origin.x, dy: origin.y)
+    guard rect.insetBy(dx: -2, dy: -2).contains(point) else { return false }
+
+    let replacement = checkbox.checked ? "[ ]" : "[x]"
+    guard shouldChangeText(in: boxRange, replacementString: replacement) else { return true }
+    storage.replaceCharacters(in: boxRange, with: replacement)
+    didChangeText()
+    return true
   }
 
   /// The full `.mentionToken` run under the click, but only for interactive app tokens

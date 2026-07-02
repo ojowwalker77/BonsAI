@@ -255,25 +255,53 @@ enum ChipFactory {
   /// recoverable from the serialized text).
   @MainActor
   static func attributedDocument(fromPlainText plain: String, font: NSFont,
-                                 paragraph: NSParagraphStyle) -> NSAttributedString {
+                                 paragraph: NSParagraphStyle,
+                                 ink: [InkRun] = []) -> NSAttributedString {
     let body: [NSAttributedString.Key: Any] = [
       .font: font, .foregroundColor: Theme.nsBodyText, .paragraphStyle: paragraph]
     let result = NSMutableAttributedString()
     let ns = plain as NSString
+    let sortedInk = ink.sorted { $0.loc < $1.loc }
+
+    // A plain segment, split by any ink runs that overlap it (offsets are serialized space,
+    // which is exactly what `plain` is).
+    func appendBody(_ segment: NSRange) {
+      var cursor = segment.location
+      let end = segment.location + segment.length
+      for run in sortedInk {
+        let start = max(run.loc, cursor)
+        let stop = min(run.loc + run.len, end)
+        guard stop > start else { continue }
+        if start > cursor {
+          result.append(NSAttributedString(
+            string: ns.substring(with: NSRange(location: cursor, length: start - cursor)),
+            attributes: body))
+        }
+        var attrs = body
+        attrs[.inkSlot] = run.slot
+        if let color = Theme.tintColor(run.slot) { attrs[.foregroundColor] = color }
+        result.append(NSAttributedString(
+          string: ns.substring(with: NSRange(location: start, length: stop - start)),
+          attributes: attrs))
+        cursor = stop
+      }
+      if cursor < end {
+        result.append(NSAttributedString(
+          string: ns.substring(with: NSRange(location: cursor, length: end - cursor)),
+          attributes: body))
+      }
+    }
+
     var cursor = 0
     for range in mentionTokenRanges(in: plain) {
       if range.location > cursor {
-        result.append(NSAttributedString(
-          string: ns.substring(with: NSRange(location: cursor, length: range.location - cursor)),
-          attributes: body))
+        appendBody(NSRange(location: cursor, length: range.location - cursor))
       }
       result.append(make(token: ns.substring(with: range), font: font))
       cursor = range.location + range.length
     }
     if cursor < ns.length {
-      result.append(NSAttributedString(
-        string: ns.substring(with: NSRange(location: cursor, length: ns.length - cursor)),
-        attributes: body))
+      appendBody(NSRange(location: cursor, length: ns.length - cursor))
     }
     return result
   }

@@ -118,6 +118,12 @@ final class FloatingPanel: NSPanel {
       }
     }
 
+    // ⇧⌘F: focus-write the current card (works while the editor has the keyboard).
+    if flags == [.command, .shift], raw == "f" {
+      NotificationCenter.default.post(name: .composerToggleFocus, object: nil)
+      return true
+    }
+
     // Compile the whole board into one paste-ready draft: ⌘R (refine→compile) or ⌘↩.
     if flags == [.command], raw == "r" || raw == "\r" {
       NotificationCenter.default.post(name: .composerCompileBoard, object: nil)

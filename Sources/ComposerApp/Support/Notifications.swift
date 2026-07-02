@@ -44,6 +44,8 @@ extension Notification.Name {
   static let composerToggleAgent = Notification.Name("composerToggleAgent")
   /// ⌘K toggles the command palette (board switcher + buried board-level actions).
   static let composerTogglePalette = Notification.Name("composerTogglePalette")
+  /// ⇧⌘F expands the current text card into the centered focus-writing sheet (and back).
+  static let composerToggleFocus = Notification.Name("composerToggleFocus")
   /// Opens the separate Settings panel (sidebar gear, ⌘, or the menu-bar item).
   static let composerShowSettings = Notification.Name("composerShowSettings")
   /// Fires after ⌘+/⌘− or Settings changes the editor point size.

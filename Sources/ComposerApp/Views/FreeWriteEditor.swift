@@ -49,6 +49,11 @@ final class EditorController: ObservableObject {
     coordinator?.applyLintFix(range: range, expecting: phrase, with: replacement)
   }
 
+  /// Apply a markdown formatting action (selection bar) to the current selection/line.
+  func applyMarkdown(_ action: MarkdownStyle.Action) {
+    coordinator?.applyMarkdown(action)
+  }
+
   /// Self-contained plain text with mention tokens serialized back to "@name".
   var plainText: String {
     plainTextIfLoaded ?? ""
@@ -308,6 +313,7 @@ extension FreeWriteEditor {
       isNormalizingFormatting = true
       storage.beginEditing()
       for range in bodyRanges { storage.setAttributes(attrs, range: range) }
+      MarkdownStyle.apply(to: storage, baseFont: Theme.Typography.body)
       highlightShellTokens(in: storage)
       storage.endEditing()
       isNormalizingFormatting = false
@@ -701,6 +707,10 @@ extension FreeWriteEditor {
         else { parent.onEscape() }
         return true
       }
+      if selector == #selector(NSResponder.insertNewline(_:)), !parent.mentions.isOpen,
+         handleMarkdownNewline(tv) {
+        return true
+      }
       guard parent.mentions.isOpen else { return false }
       switch selector {
       case #selector(NSResponder.moveUp(_:)): move(-1); return true
@@ -710,6 +720,124 @@ extension FreeWriteEditor {
       default: return false
       }
     }
+    // MARK: Markdown formatting actions (selection bar)
+
+    /// Wrap/unwrap the selection or toggle line prefixes with literal markdown syntax. Every
+    /// mutation routes through shouldChangeText/didChangeText, so undo and restyling just work.
+    func applyMarkdown(_ action: MarkdownStyle.Action) {
+      guard let tv = textView else { return }
+      switch action {
+      case .bold: toggleWrap(tv, marker: "**")
+      case .italic: toggleWrap(tv, marker: "*")
+      case .code: toggleWrap(tv, marker: "`")
+      case .quote: toggleLinePrefix(tv, prefix: "> ")
+      case .heading: cycleHeading(tv)
+      }
+      tv.window?.makeFirstResponder(tv)
+    }
+
+    private func toggleWrap(_ tv: NSTextView, marker: String) {
+      guard let storage = tv.textStorage else { return }
+      let ns = storage.string as NSString
+      let sel = tv.selectedRange()
+      let markerLength = (marker as NSString).length
+
+      // Already wrapped (markers just outside the selection)? Unwrap.
+      if sel.location >= markerLength,
+         sel.location + sel.length + markerLength <= ns.length,
+         ns.substring(with: NSRange(location: sel.location - markerLength, length: markerLength)) == marker,
+         ns.substring(with: NSRange(location: sel.location + sel.length, length: markerLength)) == marker {
+        let outer = NSRange(location: sel.location - markerLength, length: sel.length + markerLength * 2)
+        let inner = ns.substring(with: sel)
+        guard tv.shouldChangeText(in: outer, replacementString: inner) else { return }
+        storage.replaceCharacters(in: outer, with: NSAttributedString(string: inner, attributes: bodyAttributes()))
+        tv.didChangeText()
+        tv.setSelectedRange(NSRange(location: outer.location, length: sel.length))
+        return
+      }
+
+      let wrapped = marker + ns.substring(with: sel) + marker
+      guard tv.shouldChangeText(in: sel, replacementString: wrapped) else { return }
+      storage.replaceCharacters(in: sel, with: NSAttributedString(string: wrapped, attributes: bodyAttributes()))
+      tv.didChangeText()
+      tv.setSelectedRange(NSRange(location: sel.location + markerLength, length: sel.length))
+    }
+
+    private func toggleLinePrefix(_ tv: NSTextView, prefix: String) {
+      guard let storage = tv.textStorage else { return }
+      let ns = storage.string as NSString
+      let lines = ns.lineRange(for: tv.selectedRange())
+      let block = ns.substring(with: lines)
+      let hasNewline = block.hasSuffix("\n")
+      var rows = block.components(separatedBy: "\n")
+      if hasNewline { rows.removeLast() }
+      guard !rows.isEmpty else { return }
+      let allPrefixed = rows.allSatisfy { $0.hasPrefix(prefix) || $0.trimmingCharacters(in: .whitespaces).isEmpty }
+      let toggled = rows.map { row -> String in
+        if allPrefixed { return row.hasPrefix(prefix) ? String(row.dropFirst(prefix.count)) : row }
+        return row.trimmingCharacters(in: .whitespaces).isEmpty ? row : prefix + row
+      }.joined(separator: "\n") + (hasNewline ? "\n" : "")
+      guard tv.shouldChangeText(in: lines, replacementString: toggled) else { return }
+      storage.replaceCharacters(in: lines, with: NSAttributedString(string: toggled, attributes: bodyAttributes()))
+      tv.didChangeText()
+      tv.setSelectedRange(NSRange(location: lines.location, length: (toggled as NSString).length))
+    }
+
+    private func cycleHeading(_ tv: NSTextView) {
+      guard let storage = tv.textStorage else { return }
+      let ns = storage.string as NSString
+      let line = ns.lineRange(for: NSRange(location: tv.selectedRange().location, length: 0))
+      let text = ns.substring(with: line)
+      let current: Int = {
+        if text.hasPrefix("### ") { return 3 }
+        if text.hasPrefix("## ") { return 2 }
+        if text.hasPrefix("# ") { return 1 }
+        return 0
+      }()
+      let stripped = current > 0 ? String(text.dropFirst(current + 1)) : text
+      let next = (current + 1) % 4
+      let replacement = (next > 0 ? String(repeating: "#", count: next) + " " : "") + stripped
+      guard tv.shouldChangeText(in: line, replacementString: replacement) else { return }
+      storage.replaceCharacters(in: line, with: NSAttributedString(string: replacement, attributes: bodyAttributes()))
+      tv.didChangeText()
+      let caret = min(line.location + (replacement as NSString).length, storage.length)
+      tv.setSelectedRange(NSRange(location: caret, length: 0))
+    }
+
+    /// Lists write themselves: Enter at the end of a list/checkbox line starts the next item
+    /// (numbers increment, checkboxes reset); Enter on an EMPTY item removes the marker and
+    /// exits the list — the universal editor convention.
+    private func handleMarkdownNewline(_ tv: NSTextView) -> Bool {
+      guard let storage = tv.textStorage else { return false }
+      let sel = tv.selectedRange()
+      guard sel.length == 0 else { return false }
+      let ns = storage.string as NSString
+      let caret = min(sel.location, ns.length)
+      let lineRange = ns.lineRange(for: NSRange(location: caret, length: 0))
+      let line = ns.substring(with: lineRange).trimmingCharacters(in: .newlines)
+      guard let continuation = MarkdownStyle.listContinuation(of: line) else { return false }
+      // Only continue when the caret sits at/after the prefix — Enter inside the marker itself
+      // should just break the line.
+      guard caret >= lineRange.location + continuation.prefixLength else { return false }
+
+      let content = (line as NSString).substring(from: continuation.prefixLength)
+      if content.trimmingCharacters(in: .whitespaces).isEmpty {
+        // Empty item: strip the marker, leaving a plain empty line (exit the list).
+        let prefixRange = NSRange(location: lineRange.location, length: continuation.prefixLength)
+        guard tv.shouldChangeText(in: prefixRange, replacementString: "") else { return true }
+        storage.replaceCharacters(in: prefixRange, with: "")
+        tv.didChangeText()
+        return true
+      }
+
+      let insertion = "\n" + continuation.next
+      guard tv.shouldChangeText(in: sel, replacementString: insertion) else { return true }
+      storage.replaceCharacters(in: sel, with: NSAttributedString(string: insertion, attributes: bodyAttributes()))
+      tv.didChangeText()
+      tv.setSelectedRange(NSRange(location: sel.location + (insertion as NSString).length, length: 0))
+      return true
+    }
+
     private func move(_ delta: Int) {
       let count = parent.mentions.items.count
       guard count > 0 else { return }

@@ -21,6 +21,15 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
   }
 }
 
+/// One colored span of a text card's ink, measured in UTF-16 offsets of the SERIALIZED plain
+/// text (`composerPlainText`). `slot` indexes the active theme's `ThemeFlavor.tints`, so ranges
+/// re-resolve per theme exactly like element tints.
+struct InkRun: Codable, Equatable {
+  var loc: Int
+  var len: Int
+  var slot: Int
+}
+
 struct CanvasPoint: Codable, Equatable {
   var x: Double
   var y: Double
@@ -64,6 +73,8 @@ struct CardState: Codable, Identifiable, Equatable {
   /// Element tint as a SLOT INDEX into the active theme's `ThemeFlavor.tints` (nil = default
   /// ink). Semantic, not a color value — the same element re-resolves per theme.
   var tint: Int?
+  /// Per-range text ink (text cards): colored spans over the serialized plain text.
+  var ink: [InkRun]?
 
   init(id: UUID = UUID(),
        kind: CanvasElementKind = .text,
@@ -82,7 +93,8 @@ struct CardState: Codable, Identifiable, Equatable {
        imageUnderstanding: String? = nil,
        archived: Bool = false,
        whoWrote: Int? = nil,
-       tint: Int? = nil) {
+       tint: Int? = nil,
+       ink: [InkRun]? = nil) {
     self.id = id
     self.kind = kind == .text ? nil : kind
     self.text = text
@@ -101,6 +113,7 @@ struct CardState: Codable, Identifiable, Equatable {
     self.archived = archived ? true : nil
     self.whoWrote = whoWrote
     self.tint = tint
+    self.ink = ink
   }
 
   var elementKind: CanvasElementKind { kind ?? .text }

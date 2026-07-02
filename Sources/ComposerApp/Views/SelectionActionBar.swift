@@ -4,9 +4,14 @@ import SwiftUI
 struct SelectionActionBar: View {
   var isWorking: Bool
   var onRefine: (HeadlessEngine) -> Void
+  /// Markdown formatting for the selection (heading/bold/italic/code/quote).
+  var onFormat: (MarkdownStyle.Action) -> Void
   /// The editing card's current tint slot; picking a swatch re-inks the whole card.
   var currentTint: Int?
   var onTint: (Int?) -> Void
+
+  /// The color picker rides collapsed (one swatch) and expands in place on click.
+  @State private var tintExpanded = false
 
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
   @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
@@ -46,11 +51,29 @@ struct SelectionActionBar: View {
         }
         Divider().frame(height: 16).opacity(0.35)
 
-        // Text ink: the default plus the theme's tint slots. Stored as a slot index, so the
-        // color re-resolves when the theme changes.
-        tintSwatch(nil)
-        ForEach(Theme.flavor.tints.indices, id: \.self) { slot in
-          tintSwatch(slot)
+        // Markdown formatting — literal syntax in the plain text, styled live.
+        iconAction(icon: "textformat.size", help: "Heading  ·  cycles # / ## / ###") { onFormat(.heading) }
+        iconAction(icon: "bold", help: "Bold  ·  **text**") { onFormat(.bold) }
+        iconAction(icon: "italic", help: "Italic  ·  *text*") { onFormat(.italic) }
+        iconAction(icon: "chevron.left.forwardslash.chevron.right", help: "Code  ·  `text`") { onFormat(.code) }
+        iconAction(icon: "text.quote", help: "Quote  ·  > line") { onFormat(.quote) }
+
+        Divider().frame(height: 16).opacity(0.35)
+
+        // Text ink: collapsed to the current swatch; expands to the theme's slots on click.
+        if tintExpanded {
+          tintSwatch(nil)
+          ForEach(Theme.flavor.tints.indices, id: \.self) { slot in
+            tintSwatch(slot)
+          }
+        } else {
+          Button(action: { Haptics.tap(); withAnimation(.easeOut(duration: 0.14)) { tintExpanded = true } }) {
+            swatchCircle(for: currentTint, selected: false)
+              .frame(width: 26, height: Theme.Size.actionBarItemHeight)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(HoverButtonStyle())
+          .help("Text color")
         }
       }
     }
@@ -87,19 +110,26 @@ struct SelectionActionBar: View {
     .foregroundStyle(Theme.Palette.body)
   }
 
-  private func tintSwatch(_ slot: Int?) -> some View {
+  private func swatchCircle(for slot: Int?, selected: Bool) -> some View {
     let color = Theme.tintColor(slot).map { Color(nsColor: $0) } ?? Theme.Palette.body
-    let selected = currentTint == slot
-    return Button(action: { Haptics.tap(); onTint(slot) }) {
-      Circle()
-        .fill(color)
-        .frame(width: 13, height: 13)
-        .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
-        .overlay(
-          Circle()
-            .strokeBorder(selected ? Theme.Palette.accent : Color.clear, lineWidth: 1.5)
-            .frame(width: 19, height: 19)
-        )
+    return Circle()
+      .fill(color)
+      .frame(width: 13, height: 13)
+      .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
+      .overlay(
+        Circle()
+          .strokeBorder(selected ? Theme.Palette.accent : Color.clear, lineWidth: 1.5)
+          .frame(width: 19, height: 19)
+      )
+  }
+
+  private func tintSwatch(_ slot: Int?) -> some View {
+    Button(action: {
+      Haptics.tap()
+      onTint(slot)
+      withAnimation(.easeOut(duration: 0.14)) { tintExpanded = false }
+    }) {
+      swatchCircle(for: slot, selected: currentTint == slot)
         .frame(width: 22, height: Theme.Size.actionBarItemHeight)
         .contentShape(Rectangle())
     }

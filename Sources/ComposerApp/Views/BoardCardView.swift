@@ -147,13 +147,20 @@ struct BoardCardView: View {
           onPress: { modifiers in
             let extending = modifiers.contains(.shift)
             let toggling = modifiers.contains(.command)
-            // A plain press selects (if needed) AND arms the move, so one click + drag moves the
-            // card in a single gesture; a click with no drag just selects. The 4px drag dead-zone
-            // keeps a plain click from nudging it.
+            // A plain press selects (if needed) AND arms the move, so one press + drag moves the
+            // card in a single gesture. The 4px drag dead-zone keeps a plain click from nudging it.
             armedForMove = !extending && !toggling
             if extending || toggling || !isSelected {
               board.select(card.id, extending: extending, toggling: toggling)
             }
+          },
+          onClick: { modifiers in
+            // Writing is the default: a plain click on a text card places the caret — no
+            // select-first ritual, no object chrome. Shapes keep click-to-select; ⇧/⌘ clicks
+            // stay pure selection for multi-select.
+            guard isTextElement, !card.locked,
+                  !modifiers.contains(.shift), !modifiers.contains(.command) else { return }
+            enterEditing()
           },
           onDoubleClick: enterEditing,
           onDragChanged: updateMovePreview,
@@ -537,12 +544,21 @@ private struct ComposerChipText: View {
     }
     spans.sort { $0.range.location < $1.range.location }
 
+    // Markdown spans over the whole plain text, styled into every non-token gap. One scan per
+    // render; the ranges are UTF-16 offsets shared with the token spans.
+    let markdown = MarkdownStyle.spans(in: plain)
+    func gapRun(_ range: NSRange) -> Text {
+      Text(MarkdownStyle.rendered(
+        slice: ns.substring(with: range), sliceRange: range, spans: markdown,
+        baseSize: Theme.Typography.body.pointSize, zoom: zoom))
+    }
+
     var out = Text(verbatim: "")
     var cursor = 0
     for (range, span) in spans {
       if range.location < cursor { continue }   // overlap (rare): keep the first, skip the rest
       if range.location > cursor {
-        out = out + Text(verbatim: ns.substring(with: NSRange(location: cursor, length: range.location - cursor)))
+        out = out + gapRun(NSRange(location: cursor, length: range.location - cursor))
       }
       switch span {
       case let .mention(raw): out = out + Self.styledRun(for: raw, zoom: zoom)
@@ -551,7 +567,7 @@ private struct ComposerChipText: View {
       cursor = range.location + range.length
     }
     if cursor < ns.length {
-      out = out + Text(verbatim: ns.substring(with: NSRange(location: cursor, length: ns.length - cursor)))
+      out = out + gapRun(NSRange(location: cursor, length: ns.length - cursor))
     }
     return out
   }
@@ -835,6 +851,7 @@ private final class CanvasImageCache {
 
 private struct CardPointerCatcher: NSViewRepresentable {
   var onPress: (EventModifiers) -> Void
+  var onClick: (EventModifiers) -> Void
   var onDoubleClick: () -> Void
   var onDragChanged: (CGSize) -> Void
   var onDragEnded: (CGSize) -> Void
@@ -852,6 +869,7 @@ private struct CardPointerCatcher: NSViewRepresentable {
   private var callbacks: CatcherView.Callbacks {
     CatcherView.Callbacks(
       onPress: onPress,
+      onClick: onClick,
       onDoubleClick: onDoubleClick,
       onDragChanged: onDragChanged,
       onDragEnded: onDragEnded
@@ -861,6 +879,8 @@ private struct CardPointerCatcher: NSViewRepresentable {
   final class CatcherView: NSView {
     struct Callbacks {
       var onPress: (EventModifiers) -> Void = { _ in }
+      /// A release with no real drag — a plain click (fired with the release's modifiers).
+      var onClick: (EventModifiers) -> Void = { _ in }
       var onDoubleClick: () -> Void = {}
       var onDragChanged: (CGSize) -> Void = { _ in }
       var onDragEnded: (CGSize) -> Void = { _ in }
@@ -905,10 +925,12 @@ private struct CardPointerCatcher: NSViewRepresentable {
     override func mouseUp(with event: NSEvent) {
       guard dragStart != nil else { return }
       dragStart = nil
+      let clicked = !passedThreshold
       passedThreshold = false
       callbacks.onDragEnded(lastTranslation)
       callbacks.onDragChanged(.zero)
       lastTranslation = .zero
+      if clicked { callbacks.onClick(EventModifiers(event.modifierFlags)) }
     }
 
     // A non-editing card sits above the board's scroll surface, so without these the cursor

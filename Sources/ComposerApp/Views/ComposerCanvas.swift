@@ -28,6 +28,8 @@ struct ComposerCanvas: View {
   @State private var showAgent = false
   /// The ⌘K command palette (board switcher + buried board-level actions) is showing.
   @State private var showPalette = false
+  /// The card expanded into the centered focus-writing sheet (nil = normal board).
+  @State private var focusedCardID: UUID?
   /// The tint swatch row in the bottom bar is expanded.
   @State private var tintPickerOpen = false
   /// The board picker opens on hover; a short grace timer stops it flickering while the pointer
@@ -89,6 +91,7 @@ struct ComposerCanvas: View {
           isWorking: isWorking,
           currentTint: board.cards.first(where: { $0.id == editing.id })?.tint,
           onRefine: { refineSelection($0, card: editing) },
+          onFormat: { editing.controller.applyMarkdown($0) },
           onTint: { board.setTint($0, for: editing.id) },
           onApplyFix: { editing.controller.applyLintFix(range: $0.range, expecting: $0.phrase, with: $1) },
           onAskClaude: { askClaude(about: $0, card: editing) }
@@ -102,6 +105,7 @@ struct ComposerCanvas: View {
       boardActionsPill(in: proxy.size)
       bottomCommandBar(fit: inner)
       dockOverlay(in: proxy.size)
+      focusOverlay(in: proxy.size)
       commandPaletteOverlay(in: proxy.size)
       commandBridge
     }
@@ -196,6 +200,9 @@ struct ComposerCanvas: View {
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerTogglePalette)) { _ in
         togglePalette()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .composerToggleFocus)) { _ in
+        toggleFocus()
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerQuickCapture)) { note in
         if let text = note.object as? String {
@@ -653,6 +660,84 @@ struct ComposerCanvas: View {
     withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
   }
 
+  // MARK: Focus mode — one card as a centered writing sheet
+
+  /// ⇧⌘F: the current text card expands into a comfortable, centered writing surface at 100%
+  /// scale — same text, same editor, same chips — and Esc drops it back on the board.
+  private func toggleFocus() {
+    if focusedCardID != nil { closeFocus(); return }
+    let candidate = board.editingInteraction?.id
+      ?? board.primarySelectedCardID
+      ?? board.cards.first(where: { $0.elementKind == .text })?.id
+    guard let id = candidate,
+          board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
+    // Hand the single editor over: capture the board editor's state and unmount it first.
+    board.interaction(for: id).captureEditorState()
+    board.endEditing(id)
+    withAnimation(Theme.Motion.accessory) { focusedCardID = id }
+  }
+
+  private func closeFocus() {
+    guard let id = focusedCardID else { return }
+    board.interaction(for: id).captureEditorState()
+    withAnimation(Theme.Motion.accessory) { focusedCardID = nil }
+    board.scheduleSave()
+  }
+
+  @ViewBuilder
+  private func focusOverlay(in size: CGSize) -> some View {
+    if let id = focusedCardID {
+      let interaction = board.interaction(for: id)
+      ZStack {
+        // The board recedes; a click on it returns you to it.
+        Theme.Palette.windowCanvas.opacity(0.72)
+          .contentShape(Rectangle())
+          .onTapGesture { closeFocus() }
+
+        VStack(spacing: 0) {
+          HStack {
+            Text("Focus")
+              .font(WindowChrome.labelFont)
+              .foregroundStyle(Theme.Palette.menuDesc)
+            Spacer(minLength: 8)
+            SidebarButton(symbol: "arrow.down.right.and.arrow.up.left",
+                          help: "Back to board  ·  Esc", side: 26) { closeFocus() }
+          }
+          .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 6)
+
+          FreeWriteEditor(
+            text: Binding(get: { interaction.text }, set: { interaction.text = $0 }),
+            initialAttributedText: interaction.attributedSnapshot,
+            placeholder: "Brain dump\u{2026}",
+            onCountChange: { interaction.count = $0 },
+            onSelectionChange: { interaction.selection = $0 },
+            onEscape: { closeFocus() },
+            onFocusChange: { _ in },
+            onHeightChange: { _ in },
+            boardContext: { board.lintContext(excluding: id) },
+            definedVariables: { board.definedVariableNames },
+            mentions: interaction.mentions,
+            appSearch: interaction.appSearch,
+            controller: interaction.controller,
+            lint: interaction.lint,
+            refine: interaction.refine,
+            store: DumpStore.shared
+          )
+          .padding(.horizontal, 28)
+          .padding(.bottom, 22)
+        }
+        .frame(width: min(720, size.width * 0.72), height: min(640, size.height * 0.82))
+        .dockPanelSurface()
+        .shadow(color: Theme.Shadow.panel.color, radius: Theme.Shadow.panel.radius, y: Theme.Shadow.panel.y)
+        .onAppear {
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { interaction.controller.focus() }
+        }
+      }
+      .zIndex(70)
+      .transition(.opacity)
+    }
+  }
+
   /// Agent and Settings float over the canvas as glass panels (top-right, full-height).
   /// One slot — they never co-exist.
   @ViewBuilder
@@ -834,6 +919,7 @@ struct ComposerCanvas: View {
   private func handlePasteSelection() { if canEditBoard { pasteSelectedCards() } }
   private func handleSelectAllCards() { if canEditBoard { board.selectAll() } }
   private func handleEscapeBoard() {
+    if focusedCardID != nil { closeFocus(); return }
     if board.editingInteraction != nil { return }
     if tool != .select {
       tool = .select
@@ -983,6 +1069,7 @@ struct ComposerCanvas: View {
       PaletteCommand(id: "capture", title: "Capture screen to board", subtitle: "Read on-device into an agent-ready card", symbol: "text.viewfinder", shortcut: ShortcutStore.shared.captureShortcut.displayString) {
         NotificationCenter.default.post(name: .composerCaptureToBoard, object: nil)
       },
+      PaletteCommand(id: "focus", title: "Focus write", subtitle: "Expand the current card into a writing sheet", symbol: "rectangle.expand.vertical", shortcut: "⇧⌘F") { toggleFocus() },
       PaletteCommand(id: "fit", title: "Fit board to view", symbol: "arrow.up.left.and.arrow.down.right") {
         withAnimation(Theme.Motion.accessory) { fitBoard(in: lastViewportSize) }
       },
@@ -1555,6 +1642,7 @@ private struct ActiveCardOverlays: View {
   let isWorking: Bool
   let currentTint: Int?
   let onRefine: (HeadlessEngine) -> Void
+  let onFormat: (MarkdownStyle.Action) -> Void
   let onTint: (Int?) -> Void
   let onApplyFix: (LintFlag, String) -> Void
   let onAskClaude: (LintFlag) -> Void
@@ -1562,6 +1650,7 @@ private struct ActiveCardOverlays: View {
   init(card: CardInteraction, size: CGSize, isWorking: Bool,
        currentTint: Int?,
        onRefine: @escaping (HeadlessEngine) -> Void,
+       onFormat: @escaping (MarkdownStyle.Action) -> Void,
        onTint: @escaping (Int?) -> Void,
        onApplyFix: @escaping (LintFlag, String) -> Void,
        onAskClaude: @escaping (LintFlag) -> Void) {
@@ -1573,6 +1662,7 @@ private struct ActiveCardOverlays: View {
     self.isWorking = isWorking
     self.currentTint = currentTint
     self.onRefine = onRefine
+    self.onFormat = onFormat
     self.onTint = onTint
     self.onApplyFix = onApplyFix
     self.onAskClaude = onAskClaude
@@ -1595,7 +1685,7 @@ private struct ActiveCardOverlays: View {
   @ViewBuilder
   private var selectionBar: some View {
     if !card.selection.isEmpty, !mentions.isOpen, !appSearch.isOpen, let rect = card.selection.rectInView {
-      SelectionActionBar(isWorking: isWorking, onRefine: onRefine, currentTint: currentTint, onTint: onTint)
+      SelectionActionBar(isWorking: isWorking, onRefine: onRefine, onFormat: onFormat, currentTint: currentTint, onTint: onTint)
         .fixedSize()
         .position(x: clamp(rect.midX, 120, max(120, size.width - 120)),
                   y: clamp(rect.minY - 22, 30, max(30, size.height - 28)))

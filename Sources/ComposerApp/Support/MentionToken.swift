@@ -87,6 +87,8 @@ enum MentionCatalog {
 
 extension NSAttributedString.Key {
   static let mentionToken = NSAttributedString.Key("composer.mentionToken")
+  /// Marks a run of text ink colored with a theme tint slot (Int). Chips never carry it.
+  static let inkSlot = NSAttributedString.Key("composer.inkSlot")
   /// Tags an inline image-attachment run with the on-disk PNG path for serialization.
   static let imageAttachmentPath = NSAttributedString.Key("composer.imageAttachmentPath")
 }
@@ -139,5 +141,50 @@ extension NSAttributedString {
       }
     }
     return out
+  }
+
+  /// `composerPlainText` plus the ink runs: colored spans (`.inkSlot`) mapped into the
+  /// serialized string's UTF-16 offsets, adjacent same-slot runs merged.
+  var composerPlainTextAndInk: (text: String, ink: [InkRun]) {
+    var out = ""
+    var outLength = 0
+    var runs: [InkRun] = []
+    let ns = string as NSString
+    var index = 0
+
+    func appendPlain(_ piece: String, slot: Int?) {
+      let pieceLength = (piece as NSString).length
+      if let slot {
+        if !runs.isEmpty, runs[runs.count - 1].slot == slot,
+           runs[runs.count - 1].loc + runs[runs.count - 1].len == outLength {
+          runs[runs.count - 1].len += pieceLength
+        } else {
+          runs.append(InkRun(loc: outLength, len: pieceLength, slot: slot))
+        }
+      }
+      out += piece
+      outLength += pieceLength
+    }
+
+    while index < length {
+      var range = NSRange()
+      let remaining = NSRange(location: index, length: length - index)
+      if let id = attribute(.mentionToken, at: index, longestEffectiveRange: &range, in: remaining) as? String {
+        out += id
+        outLength += (id as NSString).length
+        index = range.location + range.length
+      } else if let path = attribute(.imageAttachmentPath, at: index, longestEffectiveRange: &range, in: remaining) as? String {
+        let token = "[image: \((path as NSString).lastPathComponent)]"
+        out += token
+        outLength += (token as NSString).length
+        index = range.location + range.length
+      } else {
+        let charRange = ns.rangeOfComposedCharacterSequence(at: index)
+        let slot = attribute(.inkSlot, at: index, effectiveRange: nil) as? Int
+        appendPlain(ns.substring(with: charRange), slot: slot)
+        index = charRange.location + charRange.length
+      }
+    }
+    return (out, runs)
   }
 }
