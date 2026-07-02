@@ -6,7 +6,8 @@ struct SelectionActionBar: View {
   var onRefine: (HeadlessEngine) -> Void
   /// Markdown formatting for the selection (heading/bold/italic/code/quote).
   var onFormat: (MarkdownStyle.Action) -> Void
-  /// The editing card's current tint slot; picking a swatch re-inks the whole card.
+  /// The editing card's current tint slot. Picking a swatch inks the selected range (a live text
+  /// selection); with only a caret it falls back to tinting the whole card. `nil` clears.
   var currentTint: Int?
   var onTint: (Int?) -> Void
 

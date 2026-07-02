@@ -24,6 +24,10 @@ struct ComposerCanvas: View {
   @State private var isImageDropTargeted = false
   @State private var freehandDraft: [CGPoint]?
   @State private var elementDraft: DragSegment?
+  /// While drawing a line/arrow, the card its live end will bind to on release — highlighted so the
+  /// bind is visible before commit. Shares `board.bindCandidate` with the commit path, so the
+  /// preview and the actual binding can never disagree.
+  @State private var bindTargetID: UUID?
   @State private var isSpacePressed = false
   @State private var viewportThrottle = ViewportEventThrottle()
   /// Observed for the agent's *coarse* state (isRunning / grounding) so the toolbar and ⌘K palette
@@ -97,7 +101,14 @@ struct ComposerCanvas: View {
           currentTint: board.cards.first(where: { $0.id == editing.id })?.tint,
           onRefine: { refineSelection($0, card: editing) },
           onFormat: { editing.controller.applyMarkdown($0) },
-          onTint: { board.setTint($0, for: editing.id) },
+          onTint: { slot in
+            // A live text selection inks just that range; a bare caret falls back to whole-card tint.
+            if editing.controller.applyInk(slot) {
+              board.noteInkChanged(cardID: editing.id)
+            } else {
+              board.setTint(slot, for: editing.id)
+            }
+          },
           onApplyFix: { editing.controller.applyLintFix(range: $0.range, expecting: $0.phrase, with: $1) },
           askEngine: resolvedChatEngine(),
           onEscalate: { askAgent(about: $0, card: editing) }
@@ -252,9 +263,9 @@ struct ComposerCanvas: View {
         onSelectionEnded: selectCards(inViewportRect:modifiers:),
         onFreehandChanged: { freehandDraft = $0 },
         onFreehandEnded: commitFreehandDraft,
-        onElementDraftChanged: { start, current in elementDraft = DragSegment(start: start, end: current) },
+        onElementDraftChanged: onElementDraftChanged,
         onElementDraftEnded: commitElementDraft,
-        onElementDraftCancelled: { elementDraft = nil },
+        onElementDraftCancelled: { elementDraft = nil; bindTargetID = nil },
         onPanChanged: { panLive = $0 },
         onPanEnded: { delta in
           pan.width += delta.width
@@ -355,6 +366,21 @@ struct ComposerCanvas: View {
   @ViewBuilder
   private var elementDraftView: some View {
     if let draft = elementDraft, let kind = tool.elementKind {
+      // Highlight the card the arrow/line will bind to, drawn UNDER the draft segment so the segment
+      // stays crisp on top. The card frame is mapped into viewport space with the exact card-layer
+      // transform (frame × scale, offset by pan + panLive), so the ring lines up with the card.
+      if let target = bindTargetID, let card = board.cards.first(where: { $0.id == target }) {
+        let rect = CGRect(
+          x: card.frame.minX * effectiveScale + pan.width + panLive.width,
+          y: card.frame.minY * effectiveScale + pan.height + panLive.height,
+          width: card.frame.width * effectiveScale,
+          height: card.frame.height * effectiveScale)
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .strokeBorder(Theme.Palette.accent.opacity(0.8), lineWidth: 2)
+          .frame(width: rect.width, height: rect.height)
+          .position(x: rect.midX, y: rect.midY)
+          .allowsHitTesting(false)
+      }
       ElementDraftPreview(kind: kind, start: draft.start, end: draft.end)
         .allowsHitTesting(false)
     }
@@ -401,6 +427,10 @@ struct ComposerCanvas: View {
     }
 
     guard let kind = tool.elementKind else { return }
+    // A bare click with a line/arrow/freehand tool places nothing (no default diagonal shape drops
+    // out of nowhere) and keeps the tool active so the next drag draws. Only box shapes and text
+    // are click-to-place; lines are drawn by dragging start→end.
+    if kind == .line || kind == .arrow || kind == .freehand { return }
     let boardPoint = CGPoint(x: (point.x - pan.width) / effectiveScale,
                              y: (point.y - pan.height) / effectiveScale)
     let id = board.addElement(kind, at: boardPoint)
@@ -420,9 +450,23 @@ struct ComposerCanvas: View {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.interaction(for: id).controller.focus() }
   }
 
+  /// The draft segment changed (viewport space). Store it, and for a line/arrow resolve the card its
+  /// live end would bind to — under the CURRENT drag endpoint, converted to board space — so the
+  /// highlight tracks the cursor and matches exactly what `bindArrowIfPossible` will do on commit.
+  private func onElementDraftChanged(_ start: CGPoint, _ current: CGPoint) {
+    elementDraft = DragSegment(start: start, end: current)
+    if tool == .line || tool == .arrow {
+      bindTargetID = board.bindCandidate(at: boardPoint(forViewport: current), excluding: [])
+    } else {
+      bindTargetID = nil
+    }
+  }
+
   /// Commit a shape/line drawn by dragging from `start` to `end` (viewport space → board space).
   private func commitElementDraft(_ start: CGPoint, _ end: CGPoint) {
-    defer { elementDraft = nil }
+    defer { elementDraft = nil; bindTargetID = nil }
+    // Esc mid-drag cleared the draft; the pending mouse-up must then commit nothing.
+    guard elementDraft != nil else { return }
     guard let kind = tool.elementKind else { return }
     if board.addDrawnElement(kind, from: boardPoint(forViewport: start), to: boardPoint(forViewport: end)) != nil {
       tool = .select
@@ -431,6 +475,8 @@ struct ComposerCanvas: View {
 
   private func commitFreehandDraft(_ viewportPoints: [CGPoint]) {
     defer { freehandDraft = nil }
+    // Esc mid-stroke cleared the draft; the pending mouse-up must then commit nothing.
+    guard freehandDraft != nil else { return }
     guard viewportPoints.count > 1 else { return }
     let boardPoints = viewportPoints.map(boardPoint(forViewport:))
     let minX = boardPoints.map(\.x).min() ?? 0
@@ -963,6 +1009,15 @@ struct ComposerCanvas: View {
   private func handleEscapeBoard() {
     if focusedCardID != nil { closeFocus(); return }
     if board.editingInteraction != nil { return }
+    // Esc mid-draw abandons the in-flight shape/freehand: clear the preview state here (the
+    // InputView, listening for the same escape, drops its own drag so the pending mouse-up can't
+    // commit) and swallow the keystroke so it doesn't also revert the tool underneath the cancel.
+    if elementDraft != nil || freehandDraft != nil {
+      elementDraft = nil
+      freehandDraft = nil
+      bindTargetID = nil
+      return
+    }
     if tool != .select {
       tool = .select
     } else if !board.selectedCardIDs.isEmpty {
@@ -979,7 +1034,11 @@ struct ComposerCanvas: View {
   private func handleUnlockSelection() { if canEditBoard { board.lockSelection(false) } }
 
   private func handleSpaceKey(_ notification: Notification) {
-    isSpacePressed = (notification.userInfo?["down"] as? Bool) ?? false
+    let down = (notification.userInfo?["down"] as? Bool) ?? false
+    isSpacePressed = down
+    // Mirror into the shared latch the card catchers poll — they aren't rebuilt on a space press,
+    // so they can't read `isSpacePressed` through the view tree.
+    CanvasKeyState.shared.isSpaceDown = down
   }
 
   private func gotoOlder() { board.flushSave(); store.goOlder(); board.loadFromStore(); resetView() }
@@ -1484,6 +1543,22 @@ private final class ViewportEventThrottle {
 
 // MARK: - Native viewport input
 
+/// Shared, view-independent latch for the space-to-pan key. The board's viewport input owns the
+/// notification-driven state, but a card's own pointer catcher sits ABOVE the viewport in the card
+/// layer, so it must consult the same latch to know when to fall through — otherwise space-pan dies
+/// anywhere a card sits. AppKit re-creates neither NSView on a space press, so a plain singleton
+/// they both poll (in `hitTest` / `mouseDown`) keeps them in lockstep. The window resets it on
+/// losing key so a space held while focus leaves doesn't stick the board in pan mode.
+///
+/// Not `@MainActor`: it's a single `Bool` mutated and read only on the main thread (from
+/// notification handlers and AppKit's `hitTest`/`mouseDown`), and staying nonisolated lets the
+/// AppKit NSView overrides poll it without concurrency ceremony.
+final class CanvasKeyState: @unchecked Sendable {
+  static let shared = CanvasKeyState()
+  private init() {}
+  var isSpaceDown = false
+}
+
 private struct BoardViewportInput: NSViewRepresentable {
   let tool: CanvasTool
   let isSpacePressed: Bool
@@ -1560,25 +1635,69 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     var state = State() {
       didSet {
-        if state.isSpacePressed != oldValue.isSpacePressed { window?.invalidateCursorRects(for: self) }
+        if state.isSpacePressed != oldValue.isSpacePressed || state.tool != oldValue.tool {
+          window?.invalidateCursorRects(for: self)
+        }
       }
     }
     private var dragStart: CGPoint?
     private var dragModifiers: EventModifiers = []
-    private var dragMode: DragMode = .maybeTap
+    /// Refresh the cursor whenever the drag mode changes, so the open-hand grab flips to a closed
+    /// grab the moment a space-pan actually starts (and back when it ends).
+    private var dragMode: DragMode = .maybeTap {
+      didSet { if dragMode != oldValue { window?.invalidateCursorRects(for: self) } }
+    }
     private var dragClickCount = 1
     private var lastPan: CGSize = .zero
     private var freehandPoints: [CGPoint] = []
     /// Last raw drag point, kept so a Shift press/release with the mouse still (flagsChanged,
     /// no mouseDragged) can re-emit the draft with the new constraint immediately.
     private var lastDragPoint: CGPoint?
+    /// Set when Esc aborted the current placing/freehand drag: further mouse-drags stop emitting a
+    /// preview and the pending mouse-up commits nothing. Reset on the next `mouseDown`.
+    private var draftCancelled = false
+    private var escapeObserver: NSObjectProtocol?
+
+    override init(frame frameRect: NSRect) {
+      super.init(frame: frameRect)
+      // Esc while drawing abandons the in-flight shape/freehand: drop this drag so the pending
+      // mouse-up can't commit it. The canvas clears its preview state on the same notification.
+      escapeObserver = NotificationCenter.default.addObserver(
+        forName: .composerEscapeBoard, object: nil, queue: .main
+      ) { [weak self] _ in
+        MainActor.assumeIsolated { self?.cancelActiveDraft() }
+      }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit {
+      if let escapeObserver { NotificationCenter.default.removeObserver(escapeObserver) }
+    }
+
+    /// Abandon a placing/freehand drag in progress (Esc). Leaves the mode intact so the eventual
+    /// mouse-up still tears the gesture down cleanly, but flags it so nothing is committed.
+    private func cancelActiveDraft() {
+      guard dragMode == .placing || dragMode == .drawing else { return }
+      draftCancelled = true
+      freehandPoints = []
+      state.onFreehandChanged(nil)
+      state.onElementDraftCancelled()
+    }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
-    // Make space-to-pan discoverable: a grab cursor while space is held.
+    // Cursor feedback for the current mode: a closed grab while actually panning (space + drag), an
+    // open grab while space is merely held (pan is armed), and a crosshair for every drawing tool so
+    // the canvas reads as "ready to place". Select tool with no space held keeps the arrow.
     override func resetCursorRects() {
-      if state.isSpacePressed { addCursorRect(bounds, cursor: .openHand) }
+      if state.isSpacePressed {
+        addCursorRect(bounds, cursor: dragMode == .panning ? .closedHand : .openHand)
+      } else if state.tool.elementKind != nil {
+        addCursorRect(bounds, cursor: .crosshair)
+      }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1589,6 +1708,7 @@ private struct BoardViewportInput: NSViewRepresentable {
       dragClickCount = event.clickCount
       lastPan = .zero
       freehandPoints = []
+      draftCancelled = false
       dragMode = state.isSpacePressed ? .panning : .maybeTap
       state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
@@ -1597,6 +1717,8 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     override func mouseDragged(with event: NSEvent) {
       guard let start = dragStart else { return }
+      // Esc cancelled this placing/freehand drag — ignore the rest of it until mouse-up.
+      if draftCancelled { lastDragPoint = convert(event.locationInWindow, from: nil); return }
       let point = convert(event.locationInWindow, from: nil)
       let delta = CGSize(width: point.x - start.x, height: point.y - start.y)
       let distance = hypot(delta.width, delta.height)
@@ -1658,6 +1780,13 @@ private struct BoardViewportInput: NSViewRepresentable {
       let delta = CGSize(width: point.x - start.x, height: point.y - start.y)
       let distance = hypot(delta.width, delta.height)
 
+      // Esc already tore down this placing/freehand drag — commit nothing and reset cleanly, so the
+      // mouse-up neither drops a shape nor falls through to tap-to-place.
+      if draftCancelled {
+        resetDragState()
+        return
+      }
+
       switch dragMode {
       case .maybeTap:
         if dragClickCount >= 2 { state.onDoubleTap(start) } else { state.onTap(start, dragModifiers) }
@@ -1673,8 +1802,10 @@ private struct BoardViewportInput: NSViewRepresentable {
         state.onFreehandEnded(freehandPoints)
       case .placing:
         if distance < 5 {
+          // A bare click (no real drag). `onTap` → `handleTap` decides per tool whether to place:
+          // box/text tools place at the click, line/arrow place nothing (no default diagonal arrow).
           state.onElementDraftCancelled()
-          state.onTap(start, dragModifiers)   // a click (no real drag) still drops a default size
+          state.onTap(start, dragModifiers)
         } else {
           state.onElementDraftEnded(start, constrained(point, from: start, flags: event.modifierFlags))
         }
@@ -1682,17 +1813,26 @@ private struct BoardViewportInput: NSViewRepresentable {
         state.onPanEnded(lastPan)
       }
 
+      resetDragState()
+    }
+
+    private func resetDragState() {
       dragStart = nil
       dragModifiers = []
       dragMode = .maybeTap
       lastPan = .zero
       freehandPoints = []
       lastDragPoint = nil
+      draftCancelled = false
       state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
     }
 
     override func scrollWheel(with event: NSEvent) {
+      // Panning mid-draw would shift the board out from under a draft whose start point was captured
+      // at the old pan, so the committed shape lands away from the preview. Swallow scroll-pan while
+      // a shape/freehand drag is live; two-finger pan resumes the moment the draw ends.
+      if dragMode == .placing || dragMode == .drawing { return }
       state.onScroll(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY))
     }
 
@@ -2163,7 +2303,20 @@ private struct ElementDraftPreview: View {
   private func path(in r: CGRect) -> Path {
     switch kind {
     case .line, .arrow:
-      return Path { p in p.move(to: start); p.addLine(to: end) }
+      return Path { p in
+        p.move(to: start)
+        p.addLine(to: end)
+        // Draw the same arrowhead the committed arrow uses (`LineShape`: head 15, splay ±0.82π), so
+        // the preview reads exactly as the final arrow instead of a bare segment.
+        if kind == .arrow {
+          let angle = atan2(end.y - start.y, end.x - start.x)
+          let head: CGFloat = 15
+          for side in [CGFloat.pi * 0.82, -CGFloat.pi * 0.82] {
+            p.move(to: end)
+            p.addLine(to: CGPoint(x: end.x + cos(angle + side) * head, y: end.y + sin(angle + side) * head))
+          }
+        }
+      }
     case .ellipse:
       return Path(ellipseIn: r)
     case .diamond:

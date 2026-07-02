@@ -157,9 +157,13 @@ enum MarkdownStyle {
   /// headings lose their hashes, `- ` becomes a real bullet, checkboxes become box glyphs.
   /// Markers are editing chrome; a card at rest shows the result.
   static func rendered(slice: String, sliceRange: NSRange, spans: [Span],
-                       baseSize: CGFloat, zoom: CGFloat) -> AttributedString {
+                       baseSize: CGFloat, zoom: CGFloat, ink: [InkRun] = []) -> AttributedString {
     var attributed = AttributedString(slice)
     style(&attributed, sliceRange: sliceRange, spans: spans, baseSize: baseSize, zoom: zoom)
+    // Ink colors are applied in SERIALIZED-offset space (matching `spans`/`sliceRange`), BEFORE the
+    // marker deletion below — so the color rides along with the surviving characters as markers are
+    // removed. Ink wins over markdown's marker/quote colors on the inked characters.
+    applyInk(&attributed, sliceRange: sliceRange, ink: ink)
 
     // Hide/replace syntax, walking edits from the END so earlier offsets stay valid.
     struct Edit { let start: Int; let end: Int; let replacement: String }
@@ -252,6 +256,28 @@ enum MarkdownStyle {
         attributed[range].foregroundColor = Color(nsColor: Theme.flavor.overlay1)
         attributed[range].strikethroughStyle = .single
       }
+    }
+  }
+
+  /// Color the ink runs intersecting `sliceRange` onto `attributed` (which holds that slice in its
+  /// pre-deletion serialized form). Offsets are serialized UTF-16, exactly like `sliceRange`. Slots
+  /// re-resolve against the active flavor here, so ink follows a theme switch. Runs are applied in
+  /// serialized space so the marker deletion in `rendered` carries the color forward.
+  static func applyInk(_ attributed: inout AttributedString, sliceRange: NSRange, ink: [InkRun]) {
+    guard !ink.isEmpty else { return }
+    let plain = String(attributed.characters)
+    for run in ink {
+      guard let color = Theme.tintColor(run.slot) else { continue }
+      let start = max(run.loc, sliceRange.location)
+      let end = min(run.loc + run.len, sliceRange.location + sliceRange.length)
+      guard end > start else { continue }
+      let charStart = utf16ToCharacterOffset(start - sliceRange.location, in: plain)
+      let charEnd = utf16ToCharacterOffset(end - sliceRange.location, in: plain)
+      guard charEnd > charStart, charEnd <= plain.count else { continue }
+      let lower = attributed.index(attributed.startIndex, offsetByCharacters: charStart)
+      let upper = attributed.index(attributed.startIndex, offsetByCharacters: charEnd)
+      guard lower < upper else { continue }
+      attributed[lower..<upper].foregroundColor = Color(nsColor: color)
     }
   }
 
