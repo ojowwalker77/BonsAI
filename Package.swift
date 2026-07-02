@@ -21,7 +21,11 @@ let package = Package(
     .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
     // SwiftMath is the native CoreText LaTeX math typesetter behind the equation canvas item — no
     // web view. Its SwiftPM resource bundle is staged by script/build_and_run.sh with app resources.
-    .package(url: "https://github.com/mgriebling/SwiftMath", from: "1.7.0")
+    // Vendored (upstream 1.7.3, MIT) because SwiftPM's generated `Bundle.module` accessor for plain
+    // `swift build` never checks Contents/Resources — every installed CI build trapped on the first
+    // equation render. Vendor/SwiftMath patches its bundle lookups (see MathResourceBundle.swift);
+    // everything else is untouched upstream.
+    .package(path: "Vendor/SwiftMath")
   ],
   targets: [
     .executableTarget(

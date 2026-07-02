@@ -12,6 +12,17 @@ under the new version heading.
 ## [Unreleased]
 
 
+## [1.3.2] - 2026-07-02
+
+### Fixed
+- **Equation cards crashed every installed build.** Typing into (or loading a board with) a LaTeX
+  equation card took the app down instantly on any machine other than the one that compiled it:
+  SwiftMath resolves its math-font bundle through SwiftPM's generated `Bundle.module`, which only
+  checks the `.app` root and an absolute path baked in at build time — never `Contents/Resources`,
+  where the staged app actually keeps it. SwiftMath 1.7.3 is now vendored under `Vendor/SwiftMath`
+  with its bundle lookups patched to search the real app layout first (same fix `Bundle.appResources`
+  applied to the app's own resources in 1.0.1).
+
 ## [1.3.1] - 2026-07-02
 
 ### Added
