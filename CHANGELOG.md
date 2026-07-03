@@ -11,6 +11,9 @@ under the new version heading.
 
 ## [Unreleased]
 
+
+## [1.4.0] - 2026-07-03
+
 ### Added
 - **Graph cards.** Sketch a pair of axes with arrows (hold Shift to draw them perfectly straight),
   double-click one, and "Make graph" turns the sketch into a real two-axis plot — labels, units,
