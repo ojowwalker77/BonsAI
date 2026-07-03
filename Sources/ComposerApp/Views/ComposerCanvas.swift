@@ -63,8 +63,6 @@ struct ComposerCanvas: View {
   /// The card that held the caret when the palette was summoned, captured before the palette's
   /// search field steals first responder — so a cancel can hand editing back to it.
   @State private var paletteReturnCardID: UUID?
-  /// Mirrors the agent's grounding folder so the ⌘K palette reflects it reactively.
-  @AppStorage("agent.groundingDirectory") private var groundingPath = ""
 
   // Board transform. Pointer locations are normalized back into board space so selection,
   // placement, and dragging keep working at every zoom level.
@@ -306,6 +304,7 @@ struct ComposerCanvas: View {
         // drag that starts over it draws a new element instead of selecting/moving the card.
         selectable: tool == .select,
         failedShellCommands: board.failedShellCommands,
+        equationDropTargetID: board.equationDropTargetID,
         onEscape: { dismiss() }
       )
       .equatable()
@@ -735,7 +734,9 @@ struct ComposerCanvas: View {
   private var exportMenu: some View {
     let hasCards = !board.cards.isEmpty
     return VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
-      Text("Export")
+      // "Export Board", not "Export": the rows are width-locked to this rest label (the pill only
+      // grows downward), so the label must be wide enough that "Copy PNG"/"Save PNG…" don't truncate.
+      Text("Export Board")
         .font(WindowChrome.labelFont)
         .foregroundStyle(Theme.Palette.body)
         .lineLimit(1)
@@ -751,7 +752,11 @@ struct ComposerCanvas: View {
         // Width-locked to the rest label so the surface only grows below.
         VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
           Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
-          ExportMenuRow(label: "PNG", help: "Export board as PNG", enabled: hasCards) {
+          ExportMenuRow(label: "Copy PNG", help: "Copy board as PNG to the clipboard", enabled: hasCards) {
+            exportMenuOpen = false
+            copyBoardAsPNG()
+          }
+          ExportMenuRow(label: "Save PNG", help: "Export board as PNG", enabled: hasCards) {
             exportMenuOpen = false
             exportBoardAsPNG()
           }
@@ -1140,6 +1145,18 @@ struct ComposerCanvas: View {
     BoardExporter.presentSavePanel(image: image, suggestedName: store.current?.title ?? "Board")
   }
 
+  /// Same render as the save path, but straight onto the clipboard so the board can be pasted into
+  /// Slack/a PR without a round-trip through the filesystem.
+  @MainActor
+  private func copyBoardAsPNG() {
+    guard let image = BoardExporter.renderBoardImage(cards: board.cards, board: board) else {
+      show(Toast(text: "Nothing to export", symbol: "exclamationmark.triangle.fill", tint: .orange))
+      return
+    }
+    BoardExporter.copyToPasteboard(image: image)
+    show(Toast(text: "PNG copied — paste anywhere", symbol: "doc.on.clipboard", tint: .accentColor))
+  }
+
   // MARK: Board navigation (history stack)
 
   private var canNavigate: Bool {
@@ -1314,34 +1331,72 @@ struct ComposerCanvas: View {
   }
 
   /// The buried, shortcut-less (or hard-to-reach) board-level actions, surfaced for fuzzy search.
-  /// Each closure calls the same handler its button/shortcut does — the palette adds no new
-  /// behavior. Order here is the idle (empty-query) order. Conditionally-shown rows depend on
-  /// reactive state the canvas already observes (`groundingPath` mirrors the agent's folder).
+  /// The lone selected card, or nil unless exactly one is selected. The graph commands below are
+  /// single-selection gestures, so they key off this rather than the broader selection set.
+  private var solelySelectedCard: CardState? {
+    guard board.selectedCardIDs.count == 1, let id = board.primarySelectedCardID else { return nil }
+    return board.cards.first { $0.id == id }
+  }
+
+  /// The ⌘K palette is "what the UI can't reach" — board-lifecycle actions plus the graph builders
+  /// that have no on-canvas home. State-conditional: the graph commands appear only when the current
+  /// selection makes them meaningful. Everything with a pill/bar/shortcut home stays out.
   private var paletteCommands: [PaletteCommand] {
-    let grounded = !groundingPath.isEmpty
-    let folderName = grounded ? URL(fileURLWithPath: groundingPath).lastPathComponent : nil
     var commands: [PaletteCommand] = [
       PaletteCommand(id: "new-board", title: "New board", symbol: "square.and.pencil", shortcut: "⌘N") { newBoard() },
-      PaletteCommand(id: "compile", title: "Compile board into one draft", symbol: "wand.and.stars", shortcut: "⌘R") { runCompile() },
       PaletteCommand(id: "capture", title: "Capture screen to board", subtitle: "Read on-device into an agent-ready card", symbol: "text.viewfinder", shortcut: ShortcutStore.shared.captureShortcut.displayString) {
         NotificationCenter.default.post(name: .composerCaptureToBoard, object: nil)
       },
       PaletteCommand(id: "focus", title: "Focus write", subtitle: "Expand the current card into a writing sheet", symbol: "rectangle.expand.vertical", shortcut: "⇧⌘F") { toggleFocus() },
-      PaletteCommand(id: "fit", title: "Fit board to view", symbol: "arrow.up.left.and.arrow.down.right") {
-        withAnimation(Theme.Motion.accessory) { fitBoard(in: lastViewportSize) }
-      },
-      PaletteCommand(id: "toggle-agent", title: showAgent ? "Hide agent" : "Open agent", symbol: "text.bubble", shortcut: "⌘J") { toggleAgent() },
-      PaletteCommand(id: "ground", title: grounded ? "Change grounding folder…" : "Ground agent in a folder…", subtitle: folderName, symbol: "folder.badge.plus") { agent.chooseDirectory() },
+      PaletteCommand(id: "add-graph", title: "Add graph to board", subtitle: "Blank axes at the center of the view", symbol: "chart.xyaxis.line") { addGraphToBoard() },
     ]
-    if grounded {
-      commands.append(PaletteCommand(id: "clear-ground", title: "Clear grounding folder", subtitle: folderName, symbol: "folder.badge.minus") { agent.setGroundingDirectory(nil) })
+    if let card = solelySelectedCard {
+      let kind = card.elementKind
+      if kind == .line || kind == .arrow {
+        commands.append(PaletteCommand(id: "line-to-graph", title: "Convert line to graph", symbol: "chart.xyaxis.line") { convertLineToGraph(card.id) })
+      }
+      if kind == .equation, !(card.latex ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+         board.cards.contains(where: { $0.elementKind == .graph }) {
+        commands.append(PaletteCommand(id: "plot-equation", title: "Plot equation on graph", symbol: "function") { plotEquationOnGraph(card) })
+      }
+      if kind == .graph {
+        commands.append(PaletteCommand(id: "graph-add-point", title: "Add point to graph…", symbol: "smallcircle.filled.circle") {
+          NotificationCenter.default.post(name: .composerAddGraphPoint, object: card.id)
+        })
+      }
     }
-    commands.append(PaletteCommand(id: "reset-agent", title: "Reset agent conversation", symbol: "arrow.counterclockwise") { agent.reset() })
-    if agent.isRunning {
-      commands.append(PaletteCommand(id: "stop-agent", title: "Stop agent", symbol: "stop.circle") { agent.stop() })
-    }
-    commands.append(PaletteCommand(id: "settings", title: "Open settings", symbol: "gearshape", shortcut: "⌘,") { openSettings() })
     return commands
+  }
+
+  /// Drop a blank graph card at the viewport center (board space) and open its config so it can be
+  /// labeled immediately. Placement mirrors `handleTap`'s viewport→board conversion.
+  private func addGraphToBoard() {
+    let id = board.addGraph(at: boardPoint(forViewport: viewportCenter))
+    board.select(id)
+    board.beginEditing(id)
+  }
+
+  private func convertLineToGraph(_ id: UUID) {
+    board.convertElementToGraph(id, spec: CardState.GraphSpec())
+    board.select(id)
+    board.beginEditing(id)
+  }
+
+  /// Fold the selected equation into a graph: the only `.graph` card, or when several the one whose
+  /// center is nearest the equation's. Toast the outcome.
+  private func plotEquationOnGraph(_ equation: CardState) {
+    let graphs = board.cards.filter { $0.elementKind == .graph }
+    guard !graphs.isEmpty else { return }
+    let eqCenter = CGPoint(x: equation.frame.midX, y: equation.frame.midY)
+    let target = graphs.min { a, b in
+      hypot(a.frame.midX - eqCenter.x, a.frame.midY - eqCenter.y)
+        < hypot(b.frame.midX - eqCenter.x, b.frame.midY - eqCenter.y)
+    }!
+    if board.absorbEquationIntoGraph(equation.id, into: target.id) {
+      show(Toast(text: "Plotted on graph", symbol: "chart.xyaxis.line", tint: Theme.Palette.accent))
+    } else {
+      show(Toast(text: "Couldn't plot that expression", symbol: "exclamationmark.triangle.fill", tint: .orange))
+    }
   }
 
   // MARK: Compile + refine
@@ -1912,13 +1967,21 @@ private struct BoardViewportInput: NSViewRepresentable {
       lastDragPoint = point
     }
 
-    /// Shift squares the drag for box shapes: the end point snaps so |dx| == |dy| == the larger
-    /// side, keeping the dragged direction. Freeform for every other tool.
+    /// Shift squares box-shape drags (|dx| == |dy| == the larger side, keeping direction) and snaps
+    /// line/arrow drags to the nearer axis (horizontal if |dx| >= |dy|, else vertical). Freeform for
+    /// every other tool. Reads the live modifier flags, so pressing/releasing Shift mid-drag updates
+    /// the draft — same mechanism the square constraint uses.
     private func constrained(_ end: CGPoint, from start: CGPoint, flags: NSEvent.ModifierFlags) -> CGPoint {
-      guard flags.contains(.shift), state.tool.constrainsToSquare else { return end }
+      guard flags.contains(.shift) else { return end }
       let dx = end.x - start.x, dy = end.y - start.y
-      let side = max(abs(dx), abs(dy))
-      return CGPoint(x: start.x + (dx < 0 ? -side : side), y: start.y + (dy < 0 ? -side : side))
+      if state.tool.constrainsToSquare {
+        let side = max(abs(dx), abs(dy))
+        return CGPoint(x: start.x + (dx < 0 ? -side : side), y: start.y + (dy < 0 ? -side : side))
+      }
+      if state.tool.constrainsToAxis {
+        return abs(dx) >= abs(dy) ? CGPoint(x: end.x, y: start.y) : CGPoint(x: start.x, y: end.y)
+      }
+      return end
     }
 
     /// Pressing/releasing Shift mid-drag updates the draft immediately, without waiting for the
@@ -2278,6 +2341,9 @@ struct BoardCardLayer: View, Equatable {
   let scale: CGFloat
   let selectable: Bool
   let failedShellCommands: Set<String>
+  /// The graph card a parseable equation is currently dragged over (its accent drop-ring). Included
+  /// in `==` so the ring appears/clears mid-drag even though nothing in `cards` changes.
+  let equationDropTargetID: UUID?
   var onEscape: () -> Void
 
   static func == (lhs: BoardCardLayer, rhs: BoardCardLayer) -> Bool {
@@ -2287,7 +2353,8 @@ struct BoardCardLayer: View, Equatable {
       lhs.primarySelectedCardID == rhs.primarySelectedCardID &&
       lhs.scale == rhs.scale &&
       lhs.selectable == rhs.selectable &&
-      lhs.failedShellCommands == rhs.failedShellCommands
+      lhs.failedShellCommands == rhs.failedShellCommands &&
+      lhs.equationDropTargetID == rhs.equationDropTargetID
   }
 
   var body: some View {
@@ -2497,9 +2564,9 @@ private struct ElementDraftPreview: View {
           }
         }
       }
-    case .equation:
-      // Equations never drag-place (click-to-place, like text), so this preview is only ever hit
-      // for exhaustiveness — a plain rounded box matches the card frame if it ever renders.
+    case .equation, .graph:
+      // Neither drag-places (equations click-to-place; graphs come from converting a line/arrow),
+      // so this preview is only ever hit for exhaustiveness — a plain rounded box if it ever renders.
       return Path(roundedRect: r, cornerRadius: 6)
     case .ellipse:
       return Path(ellipseIn: r)

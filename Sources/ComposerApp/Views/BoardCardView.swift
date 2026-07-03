@@ -30,11 +30,25 @@ struct BoardCardView: View {
   /// committed on Return / click-away. Esc reverts it; a blank commit prunes the card.
   @State private var equationDraft = ""
   @FocusState private var equationFocused: Bool
+  /// Graph config editing: a local draft spec seeded on open. `graphConfigOpen` is armed either by
+  /// double-clicking an existing `.graph` card or by tapping "Make graph" inside a line/arrow's
+  /// label chip (same editing session — no endEditing between). `graphConverting` distinguishes the
+  /// two so the confirm button reads "Make Graph" vs "Apply" and confirm converts vs. updates.
+  @State private var graphConfigOpen = false
+  @State private var graphConverting = false
+  @State private var graphDraft = GraphDraft()
+  /// The ⌥-click Point Composer: prefilled X/Y (from the click's data coords), a label, and a tint
+  /// swatch. Non-nil while the strip is up. Mutually exclusive with `graphConfigOpen` — the config
+  /// popover and the point composer never show together.
+  @State private var pointComposer: PointComposerDraft?
   /// True when a plain (unmodified) press armed this card for a same-gesture move: one press then
   /// drag both selects (if needed) and moves the card, no separate "click to select, click again to
   /// move" step. A modified press (shift/command toggles selection) leaves this false so the drag
   /// doesn't move the card.
   @State private var armedForMove = false
+  /// The graph marker currently being dragged (series id + point index), armed on a plain press that
+  /// lands on a marker of a selected graph card. While set, drags move the point, not the card.
+  @State private var markerDrag: (seriesID: UUID, index: Int)?
 
   /// The content's corner radius, so the selection ring hugs each element shape correctly
   /// (a too-round ring around a square image is what reads as "wrong").
@@ -55,6 +69,7 @@ struct BoardCardView: View {
   private var zoom: CGFloat { max(scale, 0.01) }
   private var isTextElement: Bool { card.elementKind == .text }
   private var isEquationElement: Bool { card.elementKind == .equation }
+  private var isGraphElement: Bool { card.elementKind == .graph }
   /// An empty text card is just a place to write, not a placed object — so it shows no chrome.
   private var isEmptyText: Bool { isTextElement && interaction.text.trimmed.isEmpty }
   /// Suppress chrome (ring, handles, delete ✕) on an empty text card ONLY while it's being edited —
@@ -78,10 +93,13 @@ struct BoardCardView: View {
       .opacity(card.isArchived ? 0.4 : 1)   // superseded ideas fade but stay for lineage
       .frame(width: liveFrame.width * zoom, height: liveFrame.height * zoom, alignment: .topLeading)
       .background(surface)
+      .overlay(graphDropRing)
       .overlay(selectionChrome)
       .overlay(deleteButton, alignment: .topTrailing)
       .overlay(lockBadge, alignment: .topLeading)
       .overlay(equationEditor, alignment: .bottom)
+      .overlay(graphConfigPopover, alignment: .bottom)
+      .overlay(pointComposerPopover, alignment: .bottom)
       .offset(x: liveFrame.minX * zoom, y: liveFrame.minY * zoom)
       .onHover { hovering = $0 }
       .onChange(of: interaction.text) { oldValue, newValue in
@@ -95,6 +113,33 @@ struct BoardCardView: View {
         // Re-apply on mount: the editor builds its attributes with the default ink; a tinted card
         // must recolor once the text view exists.
         if editing { DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { applyEditorTint() } }
+        // Editing a graph card (double-click OR an external `beginEditing` from the ⌘K palette)
+        // opens the config popover in Apply mode — the graph keeps rendering live underneath. Done
+        // here rather than in `enterEditing()` so a palette-driven edit shows an editor too.
+        if editing, isGraphElement, !graphConfigOpen {
+          pointComposer = nil
+          graphDraft = GraphDraft(spec: card.graph ?? CardState.GraphSpec())
+          graphConverting = false
+          graphConfigOpen = true
+        }
+        // A click-away that ends editing without routing through our own commit/cancel must still
+        // dismiss the graph popover, so re-selecting the card doesn't reopen a stale draft.
+        if !editing { graphConfigOpen = false; graphConverting = false }
+      }
+      .onChange(of: isSelected) { _, selected in
+        // The Point Composer belongs to a selected graph; drop it if the card loses selection.
+        if !selected { pointComposer = nil }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .composerAddGraphPoint)) { note in
+        // The ⌘K "Add point to graph…" command targets a graph card by id; only that card responds,
+        // ensures it's selected, and opens the composer seeded at the middle of its axis ranges.
+        guard isGraphElement, note.object as? UUID == card.id else { return }
+        board.select(card.id)
+        let spec = card.graph ?? CardState.GraphSpec()
+        let mid = CardState.GraphPoint(x: (spec.xMin + spec.xMax) / 2, y: (spec.yMin + spec.yMax) / 2)
+        openPointComposer(at: CardState.GraphPoint(
+          x: Self.roundToStep(mid.x, span: spec.xMax - spec.xMin),
+          y: Self.roundToStep(mid.y, span: spec.yMax - spec.yMin)))
       }
   }
 
@@ -154,19 +199,26 @@ struct BoardCardView: View {
         // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
         // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
         // zoom so the text is laid out at screen size (crisp), not stretched.
-        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: board.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom)
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: board.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
           .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)
 
-        if isEditing, !isTextElement, !isEquationElement {
+        if isEditing, !isTextElement, !isEquationElement, !isGraphElement {
           shapeLabelEditor
         }
 
         // Select on mouse-down so handles appear immediately. SwiftUI's separate
         // single/double tap recognizers wait out the double-click interval first.
         CardPointerCatcher(
-          onPress: { modifiers in
+          onPress: { modifiers, localPoint in
+            // Graph cards intercept ⌥-click (add/remove a data point) and — when selected — a plain
+            // press that starts on a marker (drag that marker instead of the card). A consumed press
+            // suppresses select/move for this gesture.
+            if let disposition = graphPressDisposition(modifiers: modifiers, localPoint: localPoint) {
+              armedForMove = false
+              return disposition
+            }
             // Shift- and Command-click both TOGGLE this card's membership in the selection (shift no
             // longer pure-unions), so clicking an already-picked card in a multi-selection drops it.
             let toggling = modifiers.contains(.shift) || modifiers.contains(.command)
@@ -176,12 +228,22 @@ struct BoardCardView: View {
             if toggling || !isSelected {
               board.select(card.id, toggling: toggling)
             }
+            return .passthrough
           },
           onDoubleClick: enterEditing,
           onDragChanged: updateMovePreview,
-          onDragEnded: commitMove
+          onDragEnded: commitMove,
+          onMarkerDrag: updateMarkerDrag,
+          onMarkerDragEnded: endMarkerDrag
         )
         .allowsHitTesting(!isEditing && selectable)
+
+        // Selected graph cards get a live interaction layer ABOVE the catcher: the ✕-legend (its
+        // small top-right region claims clicks) and a passive hover crosshair/readout. Plot-area
+        // presses (⌥-click, marker drag) still fall through to the catcher below.
+        if isGraphElement, isSelected, !isEditing, selectable {
+          GraphInteractionOverlay(spec: card.graph ?? CardState.GraphSpec(), board: board, graphID: card.id)
+        }
       }
     }
   }
@@ -205,29 +267,55 @@ struct BoardCardView: View {
     tv.insertionPointColor = Theme.tintColor(card.tint) ?? Theme.Palette.nsAccent
   }
 
+  /// Lines and arrows can become graph axes — offer it right in the label chip.
+  private var canMakeGraph: Bool { card.elementKind == .line || card.elementKind == .arrow }
+
+  @ViewBuilder
   private var shapeLabelEditor: some View {
-    TextField("Label", text: $interaction.text)
-      .textFieldStyle(.plain)
-      .font(ComposerPreferences.appSwiftUIFont(size: 15, weight: .medium))
-      .foregroundStyle(tint ?? Theme.Palette.body)
-      .multilineTextAlignment(.center)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 7)
-      .frame(width: min(max(liveFrame.width - 20, 120), 220))
-      .background(
-        // Same solid adaptive chip as the rendered label, so entering/leaving edit doesn't flash
-        // between a dark editor and a themed chip.
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(Theme.Palette.labelChipFill)
-          .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
-      )
-      .focused($labelFocused)
-      .onSubmit { board.endEditing(card.id) }
-      .onExitCommand { handleEscape() }
+    // While the graph config popover is up (converting a line/arrow), the label chip steps aside so
+    // the two aren't stacked — the popover owns the editing session.
+    if !graphConfigOpen {
+      HStack(spacing: 6) {
+        TextField("Label", text: $interaction.text)
+          .textFieldStyle(.plain)
+          .font(ComposerPreferences.appSwiftUIFont(size: 15, weight: .medium))
+          .foregroundStyle(tint ?? Theme.Palette.body)
+          .multilineTextAlignment(.center)
+          .focused($labelFocused)
+          .onSubmit { board.endEditing(card.id) }
+          .onExitCommand { handleEscape() }
+          .padding(.horizontal, 10)
+          .frame(width: min(max(liveFrame.width - 20, 120), 220), height: 34)
+          .background(labelChipSurface)
+        // "Make graph" is a sibling chip beside the label, not an icon crammed into the field —
+        // same surface and height so the pair reads as one control group.
+        if canMakeGraph {
+          Button(action: openGraphConfig) {
+            Image(systemName: "chart.xyaxis.line")
+              .font(.system(size: 14, weight: .medium))
+              .foregroundStyle(Theme.Palette.accent)
+              .frame(width: 34, height: 34)
+              .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          }
+          .buttonStyle(.plain)
+          .background(labelChipSurface)
+          .onHover { if $0 { Haptics.hover() } }
+          .help("Make graph")
+        }
+      }
       .onAppear {
         DispatchQueue.main.async { labelFocused = true }
       }
+    }
+  }
+
+  /// The solid adaptive chip both label-editor pieces share — same as the rendered label, so
+  /// entering/leaving edit doesn't flash between a dark editor and a themed chip.
+  private var labelChipSurface: some View {
+    RoundedRectangle(cornerRadius: 8, style: .continuous)
+      .fill(Theme.Palette.labelChipFill)
+      .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
   }
 
   /// The compact LaTeX editor for an equation card — a monospaced field on glass, floating just
@@ -265,7 +353,108 @@ struct BoardCardView: View {
     }
   }
 
+  // MARK: Graph config
+
+  /// The accent ring a graph card shows while a parseable equation is dragged over it — a 2pt stroke
+  /// just inside the frame (the plot-rect lightening is drawn inside GraphCardView).
+  @ViewBuilder
+  private var graphDropRing: some View {
+    if isGraphElement, board.equationDropTargetID == card.id {
+      RoundedRectangle(cornerRadius: radius, style: .continuous)
+        .strokeBorder(Theme.Palette.accent, lineWidth: 2)
+        .padding(1)
+        .allowsHitTesting(false)
+    }
+  }
+
+  /// The glass config strip for a graph card — the two axes' label/unit/range fields plus a grid
+  /// toggle and a confirm button. Mirrors `equationEditor`: screen-size (not zoom-scaled), floating
+  /// below the card, `.composerPopupSurface()`. Shown while converting a line/arrow OR editing an
+  /// existing graph card; the card body renders the live graph underneath either way.
+  @ViewBuilder
+  private var graphConfigPopover: some View {
+    if isEditing, graphConfigOpen {
+      GraphConfigStrip(
+        draft: $graphDraft,
+        converting: graphConverting,
+        width: max(min(liveFrame.width * zoom, 380), 300),
+        onCommit: commitGraphConfig,
+        onCancel: cancelGraphConfig)
+        .offset(y: liveFrame.height * zoom / 2 + 30)
+    }
+  }
+
+  /// The ⌥-click Point Composer strip — X/Y/label fields and a tint swatch row, floating below the
+  /// card on the same glass recipe as the config popover. Shown whenever `pointComposer` is armed
+  /// (which the config popover suppresses, and vice versa, so the two never stack).
+  @ViewBuilder
+  private var pointComposerPopover: some View {
+    if pointComposer != nil {
+      PointComposerStrip(
+        draft: Binding(get: { pointComposer ?? PointComposerDraft() },
+                       set: { pointComposer = $0 }),
+        width: max(min(liveFrame.width * zoom, 380), 300),
+        onCommit: commitPointComposer,
+        onCancel: cancelPointComposer)
+        .offset(y: liveFrame.height * zoom / 2 + 30)
+    }
+  }
+
+  /// "Make graph" tapped inside a line/arrow's label chip: same editing session, just swap the chip
+  /// for the config popover, prefilling axis labels from this arrow (and its perpendicular partner).
+  private func openGraphConfig() {
+    graphDraft = seededGraphDraft()
+    graphConverting = true
+    graphConfigOpen = true
+  }
+
+  /// Seed a fresh draft when converting: the more-horizontal-than-vertical arrow lends its label to
+  /// X, else to Y; a labeled perpendicular partner fills the other axis. Ranges default 0–10, grid on.
+  private func seededGraphDraft() -> GraphDraft {
+    var draft = GraphDraft()
+    let mine = card.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let partner = board.perpendicularPartner(of: card.id)
+    let partnerLabel = (partner?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let points = card.points ?? CardState.defaultLinePoints()
+    let dx = abs((points.last?.x ?? 1) - (points.first?.x ?? 0))
+    let dy = abs((points.last?.y ?? 0) - (points.first?.y ?? 1))
+    if dx >= dy {
+      draft.xLabel = mine
+      draft.yLabel = partnerLabel
+    } else {
+      draft.yLabel = mine
+      draft.xLabel = partnerLabel
+    }
+    return draft
+  }
+
+  private func commitGraphConfig() {
+    let spec = graphDraft.spec()
+    graphConfigOpen = false
+    if graphConverting {
+      board.convertElementToGraph(card.id, spec: spec)
+      board.endEditing(card.id)
+    } else {
+      board.setGraphSpec(card.id, spec)
+      board.endEditing(card.id)
+    }
+    graphConverting = false
+  }
+
+  private func cancelGraphConfig() {
+    graphConfigOpen = false
+    // Converting: Esc cancels the draft, not the card — drop the popover and fall back to the
+    // label chip (same editing session). On an existing graph card, back out of the whole edit.
+    if graphConverting {
+      graphConverting = false
+    } else {
+      board.endEditing(card.id)
+    }
+  }
+
   private func enterEditing() {
+    // Graph cards open their config popover via `.onChange(of: isEditing)` — so a palette-driven
+    // `beginEditing` shows the same editor a double-click does. Here we only focus the text editor.
     board.beginEditing(card.id)
     if isTextElement {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { interaction.controller.focus() }
@@ -281,7 +470,9 @@ struct BoardCardView: View {
 
   private func handleEscape() {
     if isEditing {
-      if isTextElement {
+      if graphConfigOpen {
+        cancelGraphConfig()
+      } else if isTextElement {
         interaction.controller.resignFocus()
       } else if isEquationElement {
         // House rule: Esc cancels the draft. Drop what was typed, end editing, then prune the card
@@ -300,6 +491,7 @@ struct BoardCardView: View {
 
   private func commitMove(_ translation: CGSize) {
     moveDelta = .zero
+    board.clearEquationDropTarget()
     guard armedForMove else { return }
     // A plain click (no real drag) on a card inside a multi-selection collapses the selection to
     // just this card — resolved here on mouse-UP, so a genuine group drag (translation ≥ 4px) still
@@ -319,6 +511,8 @@ struct BoardCardView: View {
         x: card.x + boardDelta.width,
         y: card.y + boardDelta.height,
       width: card.w, height: card.h))
+      // The single-card path skips finishMovePreview, so it needs its own equation→graph drop.
+      if isEquationElement { board.absorbEquationDropIfNeeded(card.id) }
     }
   }
 
@@ -329,6 +523,117 @@ struct BoardCardView: View {
     } else {
       moveDelta = translation
     }
+    // A lone equation dragged onto a graph gets a drop-target highlight; the absorb itself is the
+    // engine's on the move-commit. Only equations bother computing this (updateEquationDropTarget bails otherwise).
+    if isEquationElement, !(board.selectedCardIDs.contains(card.id) && board.selectedCardIDs.count > 1) {
+      board.updateEquationDropTarget(movedID: card.id, center: CGPoint(x: liveFrame.midX, y: liveFrame.midY))
+    }
+  }
+
+  // MARK: Graph plot interaction (⌥-click points, marker drag)
+
+  /// The graph plot geometry for a catcher-local point. The catcher fills the card frame at screen
+  /// scale (× zoom) while GraphCardView renders its plot inside a 2pt inset, so we size the geometry
+  /// to the card frame (screen space, minus the 4pt padding) and shift the point in by 2pt. Returns
+  /// the geometry and the plot-space (pre-inset) point.
+  private func graphGeometry(forCatcher point: CGPoint) -> (geom: GraphGeometry, local: CGPoint)? {
+    guard isGraphElement, let spec = card.graph else { return nil }
+    let size = CGSize(width: liveFrame.width * zoom - 4, height: liveFrame.height * zoom - 4)
+    guard size.width > 1, size.height > 1 else { return nil }
+    return (GraphGeometry(spec: spec, size: size), CGPoint(x: point.x - 2, y: point.y - 2))
+  }
+
+  /// The series id + index of a marker within 10 view points of a catcher-local point, or nil.
+  private func markerHit(atCatcher point: CGPoint) -> (seriesID: UUID, index: Int)? {
+    guard let (geom, local) = graphGeometry(forCatcher: point), let spec = card.graph else { return nil }
+    for series in spec.series {
+      for (index, p) in (series.points ?? []).enumerated() {
+        let vp = geom.viewPoint(p)
+        if hypot(vp.x - local.x, vp.y - local.y) <= 14 { return (series.id, index) }
+      }
+    }
+    return nil
+  }
+
+  /// Decide whether a graph card should intercept this press. ⌥-click adds a point (or removes the
+  /// one under the cursor) and consumes the event; a plain press on a marker of a SELECTED graph card
+  /// arms a marker drag. Returns nil when the press should fall through to normal select/move.
+  private func graphPressDisposition(modifiers: EventModifiers, localPoint: CGPoint) -> CardPointerCatcher.PressDisposition? {
+    guard isGraphElement, let (geom, local) = graphGeometry(forCatcher: localPoint) else { return nil }
+    if modifiers.contains(.option) {
+      if let hit = markerHit(atCatcher: localPoint) {
+        // ⌥-click on an existing marker keeps the fast remove.
+        board.removeGraphPoint(card.id, seriesID: hit.seriesID, index: hit.index)
+      } else if geom.contains(local) {
+        // ⌥-click on empty plot opens the Point Composer, prefilled from the click's data coords,
+        // instead of adding a point instantly.
+        openPointComposer(at: roundedPoint(geom.clampedData(local), geom: geom))
+      } else {
+        return nil
+      }
+      return .consumed
+    }
+    if isSelected, let hit = markerHit(atCatcher: localPoint) {
+      board.registerUndoCheckpoint()
+      markerDrag = hit
+      return .marker
+    }
+    return nil
+  }
+
+  private func updateMarkerDrag(_ localPoint: CGPoint) {
+    guard let markerDrag, let (geom, local) = graphGeometry(forCatcher: localPoint) else { return }
+    // Preserve the dragged marker's own label and tint — only its coordinates move.
+    var moved = geom.clampedData(local)
+    if let points = card.graph?.series.first(where: { $0.id == markerDrag.seriesID })?.points,
+       points.indices.contains(markerDrag.index) {
+      moved.label = points[markerDrag.index].label
+      moved.tint = points[markerDrag.index].tint
+    }
+    board.setGraphPoint(card.id, seriesID: markerDrag.seriesID, index: markerDrag.index,
+                        to: roundedPoint(moved, geom: geom), undoable: false)
+  }
+
+  private func endMarkerDrag() { markerDrag = nil }
+
+  /// Round a dragged/added point to the axes' tick-step precision (2 significant decimals of the
+  /// step) so a placed point reads as a clean value rather than a long float.
+  private func roundedPoint(_ point: CardState.GraphPoint, geom: GraphGeometry) -> CardState.GraphPoint {
+    CardState.GraphPoint(x: Self.roundToStep(point.x, span: geom.xMax - geom.xMin),
+                         y: Self.roundToStep(point.y, span: geom.yMax - geom.yMin),
+                         label: point.label, tint: point.tint)
+  }
+
+  private static func roundToStep(_ value: Double, span: Double) -> Double {
+    guard span > 0 else { return value }
+    // The tick step (1/2/5 × 10ⁿ over ~5 ticks); round to a hundredth of it for 2 extra decimals.
+    let exponent = floor(log10(span / 5))
+    let step = pow(10, exponent)
+    let quantum = step / 100
+    guard quantum > 0 else { return value }
+    return (value / quantum).rounded() * quantum
+  }
+
+  // MARK: Point Composer (⌥-click)
+
+  /// Open the Point Composer for a fresh point at `seed`'s (already tick-rounded) coordinates. The
+  /// config popover and the composer are mutually exclusive, so close the popover first.
+  private func openPointComposer(at seed: CardState.GraphPoint) {
+    graphConfigOpen = false
+    graphConverting = false
+    pointComposer = PointComposerDraft(seed: seed)
+  }
+
+  /// Confirm the composer: resolve its fields (invalid X/Y fall back to the seeded coords), append the
+  /// point, and dismiss. A same-gesture undo checkpoint isn't needed — `addGraphPoint` registers one.
+  private func commitPointComposer() {
+    guard let draft = pointComposer else { return }
+    board.addGraphPoint(card.id, at: draft.resolved())
+    pointComposer = nil
+  }
+
+  private func cancelPointComposer() {
+    pointComposer = nil
   }
 
   // MARK: Selection ring + resize handles
@@ -492,6 +797,10 @@ private struct CanvasElementContent: View {
   var failedCommands: Set<String> = []
   /// Board zoom — fonts scale by it so text is laid out (and stays crisp) at screen size.
   var zoom: CGFloat = 1
+  /// Graph-card display flags. `graphSelected` hands the ✕-legend to the interactive overlay (drawn
+  /// in cardBody); `graphDropTarget` lightens the plot for an incoming equation. Both false on export.
+  var graphSelected: Bool = false
+  var graphDropTarget: Bool = false
 
   /// The card's tint slot resolved against the ACTIVE flavor — semantic, so the same element
   /// re-colors when the theme changes.
@@ -551,6 +860,9 @@ private struct CanvasElementContent: View {
             }
         case .equation:
           EquationView(latex: card.latex ?? "", tint: tint, zoom: zoom)
+        case .graph:
+          GraphCardView(spec: card.graph ?? CardState.GraphSpec(), tint: tint,
+                        isDropTarget: graphDropTarget, interactiveLegend: graphSelected)
         }
       }
 
@@ -836,6 +1148,997 @@ private struct FreehandShape: View {
   }
 }
 
+// MARK: - Graph card
+
+/// The plot rectangle + data⇄view mapping for a graph card, computed identically wherever it's
+/// needed (curve/marker rendering, hover snapping, and the CardPointerCatcher's ⌥-click / marker
+/// drag). One source of truth so a marker never lands off its own dot.
+struct GraphGeometry {
+  static let leftGutter: CGFloat = 30
+  static let bottomGutter: CGFloat = 24
+  static let topGutter: CGFloat = 14
+  static let rightGutter: CGFloat = 14
+
+  let plot: CGRect
+  let xMin: Double
+  let xMax: Double
+  let yMin: Double
+  let yMax: Double
+
+  /// `size` is the graph content's size in its own local space (before the outer 2pt padding, which
+  /// the GeometryReader below already excludes). For CardPointerCatcher hit-testing the point must be
+  /// in that same local space (see `plotPoint(inCatcher:size:)`).
+  init(spec: CardState.GraphSpec, size: CGSize) {
+    plot = CGRect(
+      x: Self.leftGutter,
+      y: Self.topGutter,
+      width: max(size.width - Self.leftGutter - Self.rightGutter, 1),
+      height: max(size.height - Self.topGutter - Self.bottomGutter, 1))
+    (xMin, xMax) = spec.xMax > spec.xMin ? (spec.xMin, spec.xMax) : (spec.xMin, spec.xMin + 10)
+    (yMin, yMax) = spec.yMax > spec.yMin ? (spec.yMin, spec.yMax) : (spec.yMin, spec.yMin + 10)
+  }
+
+  func viewX(_ value: Double) -> CGFloat {
+    plot.minX + CGFloat((value - xMin) / (xMax - xMin)) * plot.width
+  }
+  func viewY(_ value: Double) -> CGFloat {
+    plot.maxY - CGFloat((value - yMin) / (yMax - yMin)) * plot.height
+  }
+  func viewPoint(_ p: CardState.GraphPoint) -> CGPoint { CGPoint(x: viewX(p.x), y: viewY(p.y)) }
+
+  func dataX(_ x: CGFloat) -> Double {
+    xMin + Double((x - plot.minX) / plot.width) * (xMax - xMin)
+  }
+  func dataY(_ y: CGFloat) -> Double {
+    yMax - Double((y - plot.minY) / plot.height) * (yMax - yMin)
+  }
+  func clampedData(_ p: CGPoint) -> CardState.GraphPoint {
+    CardState.GraphPoint(x: min(max(dataX(p.x), xMin), xMax),
+                         y: min(max(dataY(p.y), yMin), yMax))
+  }
+
+  func contains(_ point: CGPoint) -> Bool { plot.contains(point) }
+}
+
+/// Parsed-expression cache keyed by the raw LaTeX string, so a resize/zoom/re-render never re-parses
+/// the same expression. A boxed optional distinguishes "cached as unparseable" from "not yet tried".
+private enum GraphExpressionCache {
+  private final class Box { let value: GraphExpression?; init(_ v: GraphExpression?) { value = v } }
+  private static let cache: NSCache<NSString, Box> = {
+    let c = NSCache<NSString, Box>()
+    c.countLimit = 256
+    return c
+  }()
+
+  static func expression(for latex: String) -> GraphExpression? {
+    let key = latex as NSString
+    if let box = cache.object(forKey: key) { return box.value }
+    let parsed = GraphExpression(latex: latex)
+    cache.setObject(Box(parsed), forKey: key)
+    return parsed
+  }
+}
+
+/// A two-axis graph card: labeled, tick-marked X and Y axes rendered into the card frame with the
+/// same stroke/arrowhead geometry a converted line/arrow carried, so the conversion feels
+/// continuous. Everything scales off the frame, so the generic corner-resize just works. Series
+/// (expression curves + point markers), a legend, the equation drop-target ring, and — when the
+/// card is selected — a hover crosshair/readout layer on top.
+private struct GraphCardView: View {
+  let spec: CardState.GraphSpec
+  var tint: Color?
+  var isDropTarget: Bool = false
+  /// True when the selected live card's interactive overlay draws the ✕-bearing legend, so this
+  /// view's read-only legend steps aside. False on the static/export path and unselected cards.
+  var interactiveLegend: Bool = false
+
+  // Plot gutters — room for tick labels (left/bottom) and arrowheads (top/right).
+  private let leftGutter: CGFloat = GraphGeometry.leftGutter
+  private let bottomGutter: CGFloat = GraphGeometry.bottomGutter
+  private let topGutter: CGFloat = GraphGeometry.topGutter
+  private let rightGutter: CGFloat = GraphGeometry.rightGutter
+  private let tickLength: CGFloat = 4
+  private let headLength: CGFloat = 15   // matches LineShape
+
+  private var stroke: Color { tint ?? Theme.Palette.elementStroke }
+
+  private var xRange: (min: Double, max: Double) {
+    spec.xMax > spec.xMin ? (spec.xMin, spec.xMax) : (spec.xMin, spec.xMin + 10)
+  }
+  private var yRange: (min: Double, max: Double) {
+    spec.yMax > spec.yMin ? (spec.yMin, spec.yMax) : (spec.yMin, spec.yMin + 10)
+  }
+
+  private var xTitle: String { Self.axisTitle(label: spec.xLabel, unit: spec.xUnit) }
+  private var yTitle: String { Self.axisTitle(label: spec.yLabel, unit: spec.yUnit) }
+
+  /// Resolve a series' tint slot to a color, falling back to the accent (never the card's own stroke,
+  /// so an untinted series reads as "a plotted line" distinct from the axes).
+  private func seriesColor(_ series: CardState.GraphSeries) -> Color { GraphFormat.seriesColor(series) }
+
+  var body: some View {
+    GeometryReader { geo in
+      let plot = CGRect(
+        x: leftGutter,
+        y: topGutter,
+        width: max(geo.size.width - leftGutter - rightGutter, 1),
+        height: max(geo.size.height - topGutter - bottomGutter, 1))
+      let origin = CGPoint(x: plot.minX, y: plot.maxY)
+      let xTicks = Self.niceTicks(min: xRange.min, max: xRange.max)
+      let yTicks = Self.niceTicks(min: yRange.min, max: yRange.max)
+
+      let geom = GraphGeometry(spec: spec, size: geo.size)
+
+      ZStack {
+        // Drop-target: while a parseable equation hovers this graph, the plot rect lightens so the
+        // "release here" affordance reads before the accent ring below.
+        if isDropTarget {
+          Rectangle()
+            .fill(Theme.Palette.elementFill.opacity(0.5))
+            .frame(width: plot.width, height: plot.height)
+            .position(x: plot.midX, y: plot.midY)
+            .allowsHitTesting(false)
+        }
+
+        // Grid sits behind the axes, clipped to the plot rect.
+        if spec.showGrid {
+          Path { path in
+            for value in xTicks {
+              let x = plot.minX + CGFloat((value - xRange.min) / (xRange.max - xRange.min)) * plot.width
+              path.move(to: CGPoint(x: x, y: plot.minY))
+              path.addLine(to: CGPoint(x: x, y: plot.maxY))
+            }
+            for value in yTicks {
+              let y = plot.maxY - CGFloat((value - yRange.min) / (yRange.max - yRange.min)) * plot.height
+              path.move(to: CGPoint(x: plot.minX, y: y))
+              path.addLine(to: CGPoint(x: plot.maxX, y: y))
+            }
+          }
+          .stroke(Theme.Palette.panelHairline, lineWidth: 1)
+          .clipped()
+        }
+
+        // Axes with arrowheads on both ends, matching LineShape's geometry.
+        Path { path in
+          path.move(to: origin)
+          path.addLine(to: CGPoint(x: plot.maxX, y: origin.y))   // X axis
+          addArrowHead(to: &path, tip: CGPoint(x: plot.maxX, y: origin.y), angle: 0)
+          path.move(to: origin)
+          path.addLine(to: CGPoint(x: origin.x, y: plot.minY))   // Y axis
+          addArrowHead(to: &path, tip: CGPoint(x: origin.x, y: plot.minY), angle: -.pi / 2)
+        }
+        .stroke(stroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+        .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
+
+        // Tick marks (just outside each axis). Ticks yield to the arrowheads — one that would land
+        // under a head is skipped (marks + labels; the grid keeps its line), so the axis title owns
+        // that corner instead of piling onto the terminal number.
+        Path { path in
+          for value in xTicks {
+            let x = plot.minX + CGFloat((value - xRange.min) / (xRange.max - xRange.min)) * plot.width
+            guard x <= plot.maxX - headLength - 6 else { continue }
+            path.move(to: CGPoint(x: x, y: origin.y))
+            path.addLine(to: CGPoint(x: x, y: origin.y + tickLength))
+          }
+          for value in yTicks {
+            let y = plot.maxY - CGFloat((value - yRange.min) / (yRange.max - yRange.min)) * plot.height
+            guard y >= plot.minY + headLength + 6 else { continue }
+            path.move(to: CGPoint(x: origin.x, y: y))
+            path.addLine(to: CGPoint(x: origin.x - tickLength, y: y))
+          }
+        }
+        .stroke(stroke, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+
+        // Tick labels — muted, monospaced digits.
+        ForEach(Array(xTicks.enumerated()), id: \.offset) { _, value in
+          let x = plot.minX + CGFloat((value - xRange.min) / (xRange.max - xRange.min)) * plot.width
+          if x <= plot.maxX - headLength - 6 {
+            tickLabel(value)
+              .position(x: x, y: origin.y + tickLength + 7)
+          }
+        }
+        ForEach(Array(yTicks.enumerated()), id: \.offset) { _, value in
+          let y = plot.maxY - CGFloat((value - yRange.min) / (yRange.max - yRange.min)) * plot.height
+          if y >= plot.minY + headLength + 6 {
+            tickLabel(value)
+              .frame(width: leftGutter - tickLength - 3, alignment: .trailing)
+              .position(x: (leftGutter - tickLength - 3) / 2, y: y)
+          }
+        }
+
+        // Axis titles sit in the corners the arrowheads freed up: X trailing under its head, Y just
+        // right of its head (leading-aligned so the text grows away from the tick-label gutter).
+        if !xTitle.isEmpty {
+          Text(xTitle)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(Theme.Palette.body)
+            .lineLimit(1)
+            .fixedSize()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .padding(.trailing, 4)
+            .padding(.bottom, 2)
+            .allowsHitTesting(false)
+        }
+        if !yTitle.isEmpty {
+          Text(yTitle)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(Theme.Palette.body)
+            .lineLimit(1)
+            .fixedSize()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .offset(x: origin.x + 14, y: plot.minY - 8)
+            .allowsHitTesting(false)
+        }
+
+        // Series: expression curves (clipped to the plot) under their point markers.
+        ForEach(spec.series) { series in
+          if let latex = series.expression?.trimmingCharacters(in: .whitespacesAndNewlines),
+             !latex.isEmpty, let expr = GraphExpressionCache.expression(for: latex) {
+            curvePath(expr, geom: geom)
+              .stroke(seriesColor(series), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+              .clipShape(Rectangle().path(in: plot))
+              .allowsHitTesting(false)
+          }
+        }
+        ForEach(spec.series) { series in
+          if let points = series.points {
+            let color = seriesColor(series)
+            ForEach(Array(points.enumerated()), id: \.offset) { _, point in
+              marker(point, color: color)
+                .position(geom.viewPoint(point))
+                .allowsHitTesting(false)
+            }
+          }
+        }
+
+        // Read-only legend at the plot's top-right, one chip per series. On the selected live card the
+        // interactive overlay (in cardBody, above the pointer catcher) draws the ✕-bearing legend
+        // instead, so this one steps aside to avoid a double-draw.
+        if !spec.series.isEmpty, !interactiveLegend {
+          GraphLegend(series: spec.series, color: seriesColor)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(.top, plot.minY + 2)
+            .padding(.trailing, rightGutter + 4)
+            .allowsHitTesting(false)
+        }
+      }
+    }
+    .padding(2)
+  }
+
+  /// Sample the expression across the plot width every ~2 view points; break the stroke (move, not
+  /// line) at a non-finite value or one more than a plot-height beyond either y-edge, so an asymptote
+  /// doesn't draw a vertical spike across the card.
+  private func curvePath(_ expr: GraphExpression, geom: GraphGeometry) -> Path {
+    Path { path in
+      let plot = geom.plot
+      var started = false
+      var vx = plot.minX
+      while vx <= plot.maxX {
+        let value = expr.evaluate(geom.dataX(vx))
+        let vy = geom.viewY(value)
+        let offCard = !value.isFinite || vy < plot.minY - plot.height || vy > plot.maxY + plot.height
+        if offCard {
+          started = false
+        } else if started {
+          path.addLine(to: CGPoint(x: vx, y: vy))
+        } else {
+          path.move(to: CGPoint(x: vx, y: vy))
+          started = true
+        }
+        vx += 2
+      }
+    }
+  }
+
+  /// A point marker: a bare dot when unlabeled, or a numbered/labeled outlined circle (hand-drawn
+  /// numbered-event style) that grows to fit its label.
+  @ViewBuilder
+  private func marker(_ point: CardState.GraphPoint, color seriesColor: Color) -> some View {
+    // A per-point tint overrides the series color; nil inherits it.
+    let color = Theme.tintColor(point.tint).map { Color(nsColor: $0) } ?? seriesColor
+    if point.label.isEmpty {
+      Circle()
+        .fill(color)
+        .frame(width: 11, height: 11)
+        .overlay(Circle().strokeBorder(Theme.Palette.elementFill, lineWidth: 2))
+    } else {
+      let diameter = max(28, CGFloat(point.label.count) * 8 + 14)
+      ZStack {
+        Circle().fill(Theme.Palette.elementFill)
+        Circle().strokeBorder(color, lineWidth: 2)
+        Text(point.label)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(Theme.Palette.body)
+          .lineLimit(1)
+          .padding(.horizontal, 4)
+      }
+      .frame(width: diameter, height: diameter)
+    }
+  }
+
+  private func tickLabel(_ value: Double) -> some View {
+    Text(Self.tickText(value))
+      .font(.system(size: 9, design: .monospaced))
+      .monospacedDigit()
+      .foregroundStyle(Theme.Palette.placeholder)
+      .lineLimit(1)
+      .fixedSize()
+  }
+
+  /// The LineShape arrowhead: two segments at ±0.82π off the line angle, `headLength` long.
+  private func addArrowHead(to path: inout Path, tip: CGPoint, angle: CGFloat) {
+    for side in [CGFloat.pi * 0.82, -CGFloat.pi * 0.82] {
+      path.move(to: tip)
+      path.addLine(to: CGPoint(x: tip.x + cos(angle + side) * headLength,
+                               y: tip.y + sin(angle + side) * headLength))
+    }
+  }
+
+  private static func axisTitle(label: String, unit: String) -> String {
+    let l = label.trimmingCharacters(in: .whitespacesAndNewlines)
+    let u = unit.trimmingCharacters(in: .whitespacesAndNewlines)
+    if l.isEmpty && u.isEmpty { return "" }
+    if u.isEmpty { return l }
+    if l.isEmpty { return "(\(u))" }
+    return "\(l) (\(u))"
+  }
+
+  /// Drop a trailing `.0` so integer ticks read cleanly.
+  private static func tickText(_ value: Double) -> String {
+    let rounded = (value * 1000).rounded() / 1000
+    if rounded == rounded.rounded() { return String(Int(rounded)) }
+    return String(format: "%g", rounded)
+  }
+
+  /// A "nice" tick sequence (1/2/5 × 10ⁿ step) targeting ~4–6 ticks across the range.
+  private static func niceTicks(min lo: Double, max hi: Double) -> [Double] {
+    guard hi > lo else { return [lo] }
+    let step = niceStep((hi - lo) / 5)
+    guard step > 0 else { return [lo, hi] }
+    let first = (lo / step).rounded(.up) * step
+    var ticks: [Double] = []
+    var v = first
+    // Guard the loop and cap the count so a degenerate range can't spin.
+    while v <= hi + step * 0.001 && ticks.count < 32 {
+      ticks.append(v)
+      v += step
+    }
+    return ticks
+  }
+
+  private static func niceStep(_ raw: Double) -> Double {
+    guard raw > 0 else { return 0 }
+    let exponent = floor(log10(raw))
+    let base = pow(10, exponent)
+    let fraction = raw / base
+    let nice: Double = fraction <= 1 ? 1 : (fraction <= 2 ? 2 : (fraction <= 5 ? 5 : 10))
+    return nice * base
+  }
+}
+
+/// Series-color resolution and coordinate/label formatting shared by the plot and its interactive
+/// overlay, so a legend chip and a hover readout always agree on color and precision.
+enum GraphFormat {
+  static func seriesColor(_ series: CardState.GraphSeries) -> Color {
+    Theme.tintColor(series.tint).map { Color(nsColor: $0) } ?? Theme.Palette.accent
+  }
+
+  /// Format a coordinate to the axis' tick-step precision, appending the unit (space-separated) when
+  /// one is set — e.g. `3.2 s`.
+  static func coordText(_ value: Double, unit: String, min lo: Double, max hi: Double) -> String {
+    let span = hi > lo ? hi - lo : 10
+    var text = formatToStep(value, step: niceStep(span / 5))
+    let u = unit.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !u.isEmpty { text += " \(u)" }
+    return text
+  }
+
+  private static func formatToStep(_ value: Double, step: Double) -> String {
+    guard step > 0 else { return String(format: "%g", value) }
+    let decimals = max(0, Int(ceil(-log10(step))))
+    let rounded = (value / step).rounded() * step
+    if decimals == 0 { return String(Int(rounded.rounded())) }
+    return String(format: "%.\(decimals)f", rounded)
+  }
+
+  private static func niceStep(_ raw: Double) -> Double {
+    guard raw > 0 else { return 0 }
+    let exponent = floor(log10(raw))
+    let base = pow(10, exponent)
+    let fraction = raw / base
+    let nice: Double = fraction <= 1 ? 1 : (fraction <= 2 ? 2 : (fraction <= 5 ? 5 : 10))
+    return nice * base
+  }
+
+  static func legendText(_ label: String) -> String {
+    let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.count > 18 else { return trimmed }
+    return "\(trimmed.prefix(8))…\(trimmed.suffix(8))"
+  }
+}
+
+/// The legend column: one swatch + middle-truncated label per series, with an optional ✕ (when the
+/// card is selected) that drops the series. Read-only inside the plot; interactive in the overlay.
+private struct GraphLegend: View {
+  let series: [CardState.GraphSeries]
+  var color: (CardState.GraphSeries) -> Color
+  var onRemove: ((UUID) -> Void)? = nil
+
+  var body: some View {
+    VStack(alignment: .trailing, spacing: 3) {
+      ForEach(series) { s in
+        HStack(spacing: 5) {
+          RoundedRectangle(cornerRadius: 1)
+            .fill(color(s))
+            .frame(width: 14, height: 2)
+          Text(GraphFormat.legendText(s.label))
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(Theme.Palette.placeholder)
+            .lineLimit(1)
+          if let onRemove {
+            LegendRemoveButton { onRemove(s.id) }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The legend chip's ✕: secondary ink, accent on hover. Drops the series without opening a panel.
+private struct LegendRemoveButton: View {
+  var action: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: "xmark")
+        .font(.system(size: 8, weight: .bold))
+        .foregroundStyle(hovering ? Theme.Palette.accent : Theme.Palette.placeholder)
+        .frame(width: 12, height: 12)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+  }
+}
+
+/// The selected graph card's interactive layer, hosted in `cardBody` ABOVE the pointer catcher (which
+/// owns ⌥-click and marker drags). It draws the ✕-bearing legend (occupying only its top-right corner,
+/// so plot-area presses still fall through to the catcher) and a hover crosshair + readout chip. The
+/// hover tracker sits under the legend so it never eats the ✕; it does not consume clicks (SwiftUI
+/// hover is passive), so the AppKit catcher below still receives every mouse-down in the plot.
+private struct GraphInteractionOverlay: View {
+  let spec: CardState.GraphSpec
+  let board: BoardViewModel
+  let graphID: UUID
+
+  @State private var hover: HoverReadout?
+
+  private struct HoverReadout: Equatable {
+    var view: CGPoint
+    var x: Double
+    var y: Double
+    var color: Color?
+  }
+
+  var body: some View {
+    GeometryReader { geo in
+      let geom = GraphGeometry(spec: spec, size: CGSize(width: geo.size.width - 4, height: geo.size.height - 4))
+      // Shift into the plot's own space (the plot renders inside GraphCardView's 2pt inset).
+      ZStack(alignment: .topLeading) {
+        if let hover {
+          hoverLayer(hover, geom: geom).offset(x: 2, y: 2)
+        }
+        // Hover tracker fills the plot rect only; `onContinuousHover` is passive so the catcher keeps
+        // its clicks. Placed before the legend so the ✕ stays clickable.
+        Color.clear
+          .contentShape(Rectangle())
+          .frame(width: geom.plot.width, height: geom.plot.height)
+          .offset(x: geom.plot.minX + 2, y: geom.plot.minY + 2)
+          .onContinuousHover(coordinateSpace: .local) { phase in
+            switch phase {
+            case .active(let location):
+              let local = CGPoint(x: location.x - 2, y: location.y - 2)
+              hover = geom.contains(local) ? readout(at: local, geom: geom) : nil
+            case .ended:
+              hover = nil
+            }
+          }
+        if !spec.series.isEmpty {
+          GraphLegend(series: spec.series, color: GraphFormat.seriesColor,
+                      onRemove: { board.removeGraphSeries(graphID, seriesID: $0) })
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(.top, geom.plot.minY + 2 + 2)
+            .padding(.trailing, GraphGeometry.rightGutter + 4 + 2)
+        }
+      }
+    }
+  }
+
+  /// Snap the raw pointer to the nearest expression curve (within 8 view points vertically) or marker
+  /// (within 10 view points), else read the raw data coordinate.
+  private func readout(at location: CGPoint, geom: GraphGeometry) -> HoverReadout {
+    var best: (distance: CGFloat, readout: HoverReadout)?
+    func consider(_ candidate: HoverReadout, distance: CGFloat, limit: CGFloat) {
+      guard distance <= limit else { return }
+      if best == nil || distance < best!.distance { best = (distance, candidate) }
+    }
+    for series in spec.series {
+      let color = GraphFormat.seriesColor(series)
+      if let latex = series.expression?.trimmingCharacters(in: .whitespacesAndNewlines),
+         !latex.isEmpty, let expr = GraphExpressionCache.expression(for: latex) {
+        let value = expr.evaluate(geom.dataX(location.x))
+        if value.isFinite {
+          let vy = geom.viewY(value)
+          consider(HoverReadout(view: CGPoint(x: location.x, y: vy),
+                                x: geom.dataX(location.x), y: value, color: color),
+                   distance: abs(vy - location.y), limit: 8)
+        }
+      }
+      for point in series.points ?? [] {
+        let vp = geom.viewPoint(point)
+        // A per-point tint colors this marker's readout; nil inherits the series color.
+        let pointColor = Theme.tintColor(point.tint).map { Color(nsColor: $0) } ?? color
+        consider(HoverReadout(view: vp, x: point.x, y: point.y, color: pointColor),
+                 distance: hypot(vp.x - location.x, vp.y - location.y), limit: 14)
+      }
+    }
+    if let best { return best.readout }
+    return HoverReadout(view: location, x: geom.dataX(location.x), y: geom.dataY(location.y), color: nil)
+  }
+
+  @ViewBuilder
+  private func hoverLayer(_ readout: HoverReadout, geom: GraphGeometry) -> some View {
+    let plot = geom.plot
+    Path { path in
+      path.move(to: CGPoint(x: plot.minX, y: readout.view.y))
+      path.addLine(to: CGPoint(x: plot.maxX, y: readout.view.y))
+      path.move(to: CGPoint(x: readout.view.x, y: plot.minY))
+      path.addLine(to: CGPoint(x: readout.view.x, y: plot.maxY))
+    }
+    .stroke(Theme.Palette.panelHairline, lineWidth: 1)
+    .clipShape(Rectangle().path(in: plot))
+    .allowsHitTesting(false)
+
+    let text = "(\(GraphFormat.coordText(readout.x, unit: spec.xUnit, min: spec.xMin, max: spec.xMax)), " +
+               "\(GraphFormat.coordText(readout.y, unit: spec.yUnit, min: spec.yMin, max: spec.yMax)))"
+    let flipX = readout.view.x > plot.maxX - 90
+    let flipY = readout.view.y < plot.minY + 26
+    Text(text)
+      .font(.system(size: 10, design: .monospaced))
+      .foregroundStyle(readout.color ?? Theme.Palette.body)
+      .padding(.horizontal, 7)
+      .padding(.vertical, 4)
+      .composerPopupSurface()
+      .fixedSize()
+      .alignmentGuide(.leading) { d in flipX ? d.width : 0 }
+      .alignmentGuide(.top) { d in flipY ? 0 : d.height }
+      .position(x: readout.view.x + (flipX ? -12 : 12),
+                y: readout.view.y + (flipY ? 12 : -12))
+      .allowsHitTesting(false)
+  }
+}
+
+/// The ⌥-click Point Composer's editable state: X/Y as raw field text (so a mid-edit value never
+/// fights the field), a label, and a tint slot. `seed` remembers the click's coordinates so a
+/// half-typed field falls back to them on commit rather than to zero.
+private struct PointComposerDraft: Equatable {
+  var xText = ""
+  var yText = ""
+  var label = ""
+  /// Per-point tint slot into the active flavor's tints; nil inherits the series color.
+  var tint: Int? = nil
+  private var seedX: Double = 0
+  private var seedY: Double = 0
+
+  init() {}
+
+  init(seed: CardState.GraphPoint) {
+    seedX = seed.x
+    seedY = seed.y
+    xText = PointComposerDraft.format(seed.x)
+    yText = PointComposerDraft.format(seed.y)
+  }
+
+  /// Resolve to a point — a non-numeric X or Y falls back to the seeded coordinate, so a half-typed
+  /// field never commits a broken point.
+  func resolved() -> CardState.GraphPoint {
+    let x = Double(xText.trimmingCharacters(in: .whitespaces)) ?? seedX
+    let y = Double(yText.trimmingCharacters(in: .whitespaces)) ?? seedY
+    return CardState.GraphPoint(x: x, y: y,
+                                label: label.trimmingCharacters(in: .whitespacesAndNewlines),
+                                tint: tint)
+  }
+
+  private static func format(_ value: Double) -> String {
+    value == value.rounded() ? String(Int(value)) : String(format: "%g", value)
+  }
+}
+
+/// The graph config popover's editable state — labels/units as free text, ranges as raw field text
+/// (so a mid-edit value never fights the field), resolved back to a validated `GraphSpec` on commit.
+private struct GraphDraft {
+  var xLabel = ""
+  var xUnit = ""
+  var yLabel = ""
+  var yUnit = ""
+  var xMinText = "0"
+  var xMaxText = "10"
+  var yMinText = "0"
+  var yMaxText = "10"
+  var showGrid = true
+  /// Carried through untouched EXCEPT for point-series points, which `pointRows` edits and `spec()`
+  /// writes back. Expression series (and their tints/labels/ids) ride through here unmodified.
+  var series: [CardState.GraphSeries] = []
+  /// One editable row per data point across all point-bearing series — raw field text (never fights
+  /// the field), resolved back on `spec()`. Deleting a row here deletes the point on Apply.
+  var pointRows: [PointRow] = []
+
+  /// A single point's editable state, tagged with the series it belongs to so `spec()` can rebuild
+  /// that series' point list. `original` supplies the fallback when a coordinate field is half-typed.
+  struct PointRow: Identifiable, Equatable {
+    let id = UUID()
+    var seriesID: UUID
+    var xText: String
+    var yText: String
+    var label: String
+    var tint: Int?
+    var original: CardState.GraphPoint
+  }
+
+  init() {}
+
+  init(spec: CardState.GraphSpec) {
+    xLabel = spec.xLabel
+    xUnit = spec.xUnit
+    yLabel = spec.yLabel
+    yUnit = spec.yUnit
+    xMinText = GraphDraft.format(spec.xMin)
+    xMaxText = GraphDraft.format(spec.xMax)
+    yMinText = GraphDraft.format(spec.yMin)
+    yMaxText = GraphDraft.format(spec.yMax)
+    showGrid = spec.showGrid
+    series = spec.series
+    for s in spec.series {
+      for p in s.points ?? [] {
+        pointRows.append(PointRow(seriesID: s.id,
+                                  xText: GraphDraft.format(p.x),
+                                  yText: GraphDraft.format(p.y),
+                                  label: p.label, tint: p.tint, original: p))
+      }
+    }
+  }
+
+  /// Resolve the draft into a spec — non-numeric or max<=min ranges fall back to the defaults, so a
+  /// half-typed field never commits a broken axis. Point-series points are rebuilt from `pointRows`
+  /// (invalid coords fall back to the row's original values); expression series pass through untouched.
+  func spec() -> CardState.GraphSpec {
+    let (xMin, xMax) = GraphDraft.range(xMinText, xMaxText, fallback: (0, 10))
+    let (yMin, yMax) = GraphDraft.range(yMinText, yMaxText, fallback: (0, 10))
+    var resolved = CardState.GraphSpec(
+      xLabel: xLabel.trimmingCharacters(in: .whitespacesAndNewlines),
+      xUnit: xUnit.trimmingCharacters(in: .whitespacesAndNewlines),
+      yLabel: yLabel.trimmingCharacters(in: .whitespacesAndNewlines),
+      yUnit: yUnit.trimmingCharacters(in: .whitespacesAndNewlines),
+      xMin: xMin, xMax: xMax, yMin: yMin, yMax: yMax, showGrid: showGrid)
+    resolved.series = resolvedSeries()
+    return resolved
+  }
+
+  /// Rebuild each point-bearing series' `points` from the draft rows in row order, keeping expression
+  /// series and their order intact. A row whose X/Y won't parse keeps its original coordinate.
+  private func resolvedSeries() -> [CardState.GraphSeries] {
+    series.map { s in
+      guard s.points != nil else { return s }
+      var updated = s
+      updated.points = pointRows
+        .filter { $0.seriesID == s.id }
+        .map { row in
+          CardState.GraphPoint(
+            x: Double(row.xText.trimmingCharacters(in: .whitespaces)) ?? row.original.x,
+            y: Double(row.yText.trimmingCharacters(in: .whitespaces)) ?? row.original.y,
+            label: row.label.trimmingCharacters(in: .whitespacesAndNewlines),
+            tint: row.tint)
+        }
+      return updated
+    }
+  }
+
+  private static func range(_ minText: String, _ maxText: String, fallback: (Double, Double)) -> (Double, Double) {
+    guard let lo = Double(minText.trimmingCharacters(in: .whitespaces)),
+          let hi = Double(maxText.trimmingCharacters(in: .whitespaces)),
+          hi > lo else { return fallback }
+    return (lo, hi)
+  }
+
+  private static func format(_ value: Double) -> String {
+    value == value.rounded() ? String(Int(value)) : String(format: "%g", value)
+  }
+}
+
+/// The graph config editing UI: two rows (X, Y) of label/unit/min/max fields, a grid toggle, and an
+/// accent confirm. Return commits, Esc cancels; first field focused on open. Built on the shared
+/// glass recipe with WindowChrome-consistent metrics, like the equation strip.
+private struct GraphConfigStrip: View {
+  @Binding var draft: GraphDraft
+  let converting: Bool
+  let width: CGFloat
+  var onCommit: () -> Void
+  var onCancel: () -> Void
+
+  @FocusState private var focusedFirst: Bool
+
+  private var labelFont: Font { .system(size: 12, weight: .medium) }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      axisRow(axis: "X",
+              label: $draft.xLabel, labelPlaceholder: "x label",
+              unit: $draft.xUnit, minText: $draft.xMinText, maxText: $draft.xMaxText,
+              focusFirst: true)
+      axisRow(axis: "Y",
+              label: $draft.yLabel, labelPlaceholder: "y label",
+              unit: $draft.yUnit, minText: $draft.yMinText, maxText: $draft.yMaxText,
+              focusFirst: false)
+      pointsSection
+      HStack(spacing: 8) {
+        Toggle(isOn: $draft.showGrid) {
+          Text("Grid").font(labelFont).foregroundStyle(Theme.Palette.body)
+        }
+        .toggleStyle(.checkbox)
+        Spacer()
+        Button(action: onCommit) {
+          Text(converting ? "Make Graph" : "Apply")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Theme.Palette.accent)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .fill(Theme.Palette.accentFill))
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 10)
+    .frame(width: width)
+    .composerPopupSurface()
+    .onExitCommand(perform: onCancel)
+    .onAppear { DispatchQueue.main.async { focusedFirst = true } }
+  }
+
+  @ViewBuilder
+  private func axisRow(axis: String,
+                       label: Binding<String>, labelPlaceholder: String,
+                       unit: Binding<String>, minText: Binding<String>, maxText: Binding<String>,
+                       focusFirst: Bool) -> some View {
+    HStack(spacing: 6) {
+      Text(axis)
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(Theme.Palette.placeholder)
+        .frame(width: 12, alignment: .leading)
+      field(labelPlaceholder, text: label, focusFirst: focusFirst)
+        .frame(maxWidth: .infinity)
+      field("unit", text: unit).frame(width: 48)
+      field("0", text: minText).frame(width: 52)
+      field("10", text: maxText).frame(width: 52)
+    }
+  }
+
+  /// The editable list of data points, shown only when the graph carries any. Each row is a tint
+  /// swatch (tap cycles slots), a label field, X/Y fields, and a ✕ delete. More than 4 rows scroll
+  /// inside a fixed ~4-row height.
+  private static let pointRowHeight: CGFloat = 30
+  private static let pointRowSpacing: CGFloat = 5
+
+  @ViewBuilder
+  private var pointsSection: some View {
+    if !draft.pointRows.isEmpty {
+      VStack(alignment: .leading, spacing: 5) {
+        Text("Points")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(Theme.Palette.placeholder)
+        let rows = VStack(spacing: Self.pointRowSpacing) {
+          ForEach($draft.pointRows) { $row in
+            pointRow($row)
+          }
+        }
+        if draft.pointRows.count > 4 {
+          // Fixed 4-row viewport (4 rows + 3 gaps); the rest scrolls.
+          ScrollView {
+            rows.padding(.trailing, 2)
+          }
+          .frame(height: Self.pointRowHeight * 4 + Self.pointRowSpacing * 3)
+        } else {
+          rows
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func pointRow(_ row: Binding<GraphDraft.PointRow>) -> some View {
+    HStack(spacing: 6) {
+      // Tap the swatch to cycle: series default → each tint slot → back to default.
+      Button(action: { cycleTint(row) }) {
+        pointSwatch(row.wrappedValue.tint)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help(row.wrappedValue.tint == nil ? "Series default" : "Theme color \((row.wrappedValue.tint ?? 0) + 1)")
+      field("label", text: row.label).frame(width: 60)
+      field("0", text: row.xText).frame(width: 52)
+      field("0", text: row.yText).frame(width: 52)
+      Spacer(minLength: 0)
+      Button(action: { draft.pointRows.removeAll { $0.id == row.wrappedValue.id } }) {
+        Image(systemName: "xmark")
+          .font(.system(size: 9, weight: .bold))
+          .foregroundStyle(Theme.Palette.placeholder)
+          .frame(width: 16, height: 16)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help("Delete point")
+    }
+    .frame(height: Self.pointRowHeight)
+  }
+
+  private func pointSwatch(_ slot: Int?) -> some View {
+    let fill = Theme.tintColor(slot).map { Color(nsColor: $0) }
+    return Circle()
+      .fill(fill ?? Color.clear)
+      .frame(width: 14, height: 14)
+      .overlay(Circle().strokeBorder(fill == nil ? Theme.Palette.placeholder : Theme.Palette.panelHairline, lineWidth: 1))
+  }
+
+  /// Cycle a row's tint: nil → 0 → 1 → … → last slot → nil.
+  private func cycleTint(_ row: Binding<GraphDraft.PointRow>) {
+    let count = Theme.flavor.tints.count
+    guard count > 0 else { return }
+    switch row.wrappedValue.tint {
+    case nil: row.wrappedValue.tint = 0
+    case let slot? where slot + 1 < count: row.wrappedValue.tint = slot + 1
+    default: row.wrappedValue.tint = nil
+    }
+  }
+
+  @ViewBuilder
+  private func field(_ placeholder: String, text: Binding<String>, focusFirst: Bool = false) -> some View {
+    let base = TextField(placeholder, text: text)
+      .textFieldStyle(.plain)
+      .font(.system(size: 12))
+      .foregroundStyle(Theme.Palette.body)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 5)
+      .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .fill(Theme.Palette.segmentedFill))
+      .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
+      .onSubmit(onCommit)
+    if focusFirst {
+      base.focused($focusedFirst)
+    } else {
+      base
+    }
+  }
+}
+
+/// The shared glass-strip field chrome (segmented fill + hairline border), so the config popover, the
+/// Point Composer, and the draft point rows all wear the exact same field.
+private struct GraphFieldChrome: ViewModifier {
+  func body(content: Content) -> some View {
+    content
+      .textFieldStyle(.plain)
+      .font(.system(size: 12))
+      .foregroundStyle(Theme.Palette.body)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 5)
+      .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .fill(Theme.Palette.segmentedFill))
+      .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
+  }
+}
+
+private extension View {
+  func graphFieldChrome() -> some View { modifier(GraphFieldChrome()) }
+}
+
+/// A tap-to-pick tint swatch row for a data point: a neutral "series default" swatch (nil) followed by
+/// each of the active flavor's tint slots — mirroring the selection bar's enumeration. The selected
+/// swatch wears an accent ring.
+private struct PointTintSwatchRow: View {
+  @Binding var tint: Int?
+
+  var body: some View {
+    HStack(spacing: 6) {
+      swatch(nil)
+      ForEach(Theme.flavor.tints.indices, id: \.self) { slot in
+        swatch(slot)
+      }
+    }
+  }
+
+  private func swatch(_ slot: Int?) -> some View {
+    Button(action: { tint = slot }) {
+      swatchCircle(slot, selected: tint == slot)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(slot == nil ? "Series default" : "Theme color \((slot ?? 0) + 1)")
+  }
+
+  /// A 14pt swatch. The "series default" (nil) reads as a neutral outlined ring; each slot fills with
+  /// its resolved tint. The active pick gets an accent ring just outside.
+  @ViewBuilder
+  private func swatchCircle(_ slot: Int?, selected: Bool) -> some View {
+    let fill = Theme.tintColor(slot).map { Color(nsColor: $0) }
+    Circle()
+      .fill(fill ?? Color.clear)
+      .frame(width: 14, height: 14)
+      .overlay(Circle().strokeBorder(fill == nil ? Theme.Palette.placeholder : Theme.Palette.panelHairline, lineWidth: 1))
+      .overlay(
+        Circle()
+          .strokeBorder(selected ? Theme.Palette.accent : Color.clear, lineWidth: 1.5)
+          .frame(width: 20, height: 20)
+      )
+      .frame(width: 20, height: 20)
+  }
+}
+
+/// The ⌥-click Point Composer strip: one row of X/Y/label fields, a tint swatch row, and an accent
+/// "Add Point" confirm. The label field is focused on open (the coords are usually already right).
+/// Return commits, Esc cancels. Same glass recipe/metrics as `GraphConfigStrip`.
+private struct PointComposerStrip: View {
+  @Binding var draft: PointComposerDraft
+  let width: CGFloat
+  var onCommit: () -> Void
+  var onCancel: () -> Void
+
+  @FocusState private var labelFocused: Bool
+
+  private var labelFont: Font { .system(size: 12, weight: .medium) }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 6) {
+        Text("X").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.Palette.placeholder)
+        TextField("0", text: $draft.xText).graphFieldChrome().onSubmit(onCommit).frame(width: 52)
+        Text("Y").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.Palette.placeholder)
+        TextField("0", text: $draft.yText).graphFieldChrome().onSubmit(onCommit).frame(width: 52)
+        TextField("label", text: $draft.label)
+          .graphFieldChrome().onSubmit(onCommit)
+          .focused($labelFocused)
+          .frame(width: 70)
+        Spacer(minLength: 0)
+      }
+      HStack(spacing: 8) {
+        PointTintSwatchRow(tint: $draft.tint)
+        Spacer()
+        Button(action: onCommit) {
+          Text("Add Point")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Theme.Palette.accent)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .fill(Theme.Palette.accentFill))
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 10)
+    .frame(width: width)
+    .composerPopupSurface()
+    .onExitCommand(perform: onCancel)
+    .onAppear { DispatchQueue.main.async { labelFocused = true } }
+  }
+}
+
 private struct ImageObjectPlaceholder: View {
   let path: String?
   @State private var image: NSImage?
@@ -1067,10 +2370,17 @@ private final class CanvasImageCache {
 // MARK: - Immediate pointer catcher
 
 private struct CardPointerCatcher: NSViewRepresentable {
-  var onPress: (EventModifiers) -> Void
+  /// How a press was handled: `.passthrough` runs the normal select/move gesture, `.consumed`
+  /// swallows the click (⌥-click on a graph — no select/move/drag), `.marker` swallows select/move
+  /// but routes subsequent drags to the marker-drag callbacks instead of the card move.
+  enum PressDisposition { case passthrough, consumed, marker }
+
+  var onPress: (EventModifiers, CGPoint) -> PressDisposition
   var onDoubleClick: () -> Void
   var onDragChanged: (CGSize) -> Void
   var onDragEnded: (CGSize) -> Void
+  var onMarkerDrag: (CGPoint) -> Void = { _ in }
+  var onMarkerDragEnded: () -> Void = {}
 
   func makeNSView(context: Context) -> CatcherView {
     let view = CatcherView()
@@ -1087,16 +2397,20 @@ private struct CardPointerCatcher: NSViewRepresentable {
       onPress: onPress,
       onDoubleClick: onDoubleClick,
       onDragChanged: onDragChanged,
-      onDragEnded: onDragEnded
+      onDragEnded: onDragEnded,
+      onMarkerDrag: onMarkerDrag,
+      onMarkerDragEnded: onMarkerDragEnded
     )
   }
 
   final class CatcherView: NSView {
     struct Callbacks {
-      var onPress: (EventModifiers) -> Void = { _ in }
+      var onPress: (EventModifiers, CGPoint) -> PressDisposition = { _, _ in .passthrough }
       var onDoubleClick: () -> Void = {}
       var onDragChanged: (CGSize) -> Void = { _ in }
       var onDragEnded: (CGSize) -> Void = { _ in }
+      var onMarkerDrag: (CGPoint) -> Void = { _ in }
+      var onMarkerDragEnded: () -> Void = {}
     }
 
     var callbacks = Callbacks()
@@ -1107,6 +2421,9 @@ private struct CardPointerCatcher: NSViewRepresentable {
     private var lastTranslation: CGSize = .zero
     /// A small dead-zone so a click with a touch of jitter doesn't read as a move.
     private var passedThreshold = false
+    /// Set when the press was consumed (⌥-click) or armed a marker drag — the normal card move is
+    /// suppressed for the whole gesture, and drags route to the marker-drag callbacks when `.marker`.
+    private var disposition: PressDisposition = .passthrough
 
     override var isFlipped: Bool { true }
 
@@ -1118,10 +2435,13 @@ private struct CardPointerCatcher: NSViewRepresentable {
     }
 
     override func mouseDown(with event: NSEvent) {
+      let local = convert(event.locationInWindow, from: nil)
       dragStart = event.locationInWindow
       lastTranslation = .zero
       passedThreshold = false
-      callbacks.onPress(EventModifiers(event.modifierFlags))
+      disposition = callbacks.onPress(EventModifiers(event.modifierFlags), local)
+      // A consumed press (⌥-click) is a one-shot: no drag, no double-click.
+      if disposition == .consumed { dragStart = nil; return }
       if event.clickCount >= 2 {
         dragStart = nil
         callbacks.onDragChanged(.zero)
@@ -1136,6 +2456,10 @@ private struct CardPointerCatcher: NSViewRepresentable {
         guard hypot(p.x - dragStart.x, p.y - dragStart.y) >= 4 else { return }
         passedThreshold = true
       }
+      if disposition == .marker {
+        callbacks.onMarkerDrag(convert(p, from: nil))
+        return
+      }
       // Window y is up; the board is y-down, so negate dy. Divided by zoom downstream.
       let translation = CGSize(width: p.x - dragStart.x, height: dragStart.y - p.y)
       lastTranslation = translation
@@ -1146,6 +2470,11 @@ private struct CardPointerCatcher: NSViewRepresentable {
       guard dragStart != nil else { return }
       dragStart = nil
       passedThreshold = false
+      if disposition == .marker {
+        callbacks.onMarkerDragEnded()
+        disposition = .passthrough
+        return
+      }
       callbacks.onDragEnded(lastTranslation)
       callbacks.onDragChanged(.zero)
       lastTranslation = .zero

@@ -270,6 +270,10 @@ struct AppSearchPanel: View {
 struct FocusedSearchField: NSViewRepresentable {
   @Binding var text: String
   var placeholder: String
+  /// Defaults to the editor font; chrome surfaces (⌘K palette) pass a system font instead — the
+  /// custom app fonts (Nohemi/Satoshi) declare tighter vertical metrics than their glyph bounds,
+  /// so NSTextField baselines them too high and clips the ascenders.
+  var font: NSFont = Theme.Typography.body
   var onMoveUp: () -> Void
   var onMoveDown: () -> Void
   var onCommit: () -> Void
@@ -282,7 +286,7 @@ struct FocusedSearchField: NSViewRepresentable {
     field.isBordered = false
     field.drawsBackground = false
     field.focusRingType = .none
-    field.font = Theme.Typography.body
+    field.font = font
     field.textColor = Theme.nsBodyText
     field.cell?.usesSingleLineMode = true
     field.cell?.wraps = false
@@ -297,7 +301,7 @@ struct FocusedSearchField: NSViewRepresentable {
 
   func updateNSView(_ field: NSTextField, context: Context) {
     context.coordinator.parent = self
-    field.font = Theme.Typography.body
+    field.font = font
     field.textColor = Theme.nsBodyText
     if field.placeholderString != placeholder { field.placeholderString = placeholder }
     if field.stringValue != text { field.stringValue = text }

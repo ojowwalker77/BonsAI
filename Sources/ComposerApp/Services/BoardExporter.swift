@@ -62,6 +62,7 @@ enum BoardExporter {
       scale: 1,
       selectable: false,
       failedShellCommands: board.failedShellCommands,
+      equationDropTargetID: nil,
       onEscape: {}
     )
     .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
@@ -174,6 +175,20 @@ enum BoardExporter {
       panel.beginSheetModal(for: window, completionHandler: apply)
     } else {
       apply(panel.runModal())
+    }
+  }
+
+  /// Write `image` onto the general pasteboard so it can be pasted into Slack, a PR, etc. Writes both
+  /// the NSImage (TIFF, via `writeObjects`) and an explicit PNG data rep, so every paste target — from
+  /// browsers that want `public.png` to apps that read TIFF — accepts it.
+  static func copyToPasteboard(image: NSImage) {
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.writeObjects([image])
+    if let tiff = image.tiffRepresentation,
+       let rep = NSBitmapImageRep(data: tiff),
+       let png = rep.representation(using: .png, properties: [:]) {
+      pasteboard.setData(png, forType: .png)
     }
   }
 

@@ -11,12 +11,23 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
   case freehand
   case image
   case equation
+  case graph
 
   /// Box shapes constrain to a square while Shift is held (draw + resize) — rectangle→square,
-  /// ellipse→circle, diamond→uniform. Lines, arrows, and freehand stay freeform.
+  /// ellipse→circle, diamond→uniform. Lines and arrows instead snap to an axis (`constrainsToAxis`);
+  /// freehand stays freeform.
   var constrainsToSquare: Bool {
     switch self {
     case .rectangle, .ellipse, .diamond: true
+    default: false
+    }
+  }
+
+  /// Lines and arrows snap perfectly horizontal or vertical while Shift is held (whichever the drag
+  /// is nearer to). Box shapes square instead; freehand stays freeform.
+  var constrainsToAxis: Bool {
+    switch self {
+    case .line, .arrow: true
     default: false
     }
   }
@@ -79,6 +90,137 @@ struct CardState: Codable, Identifiable, Equatable {
   /// Per-range text ink (text cards): colored spans over the serialized plain text.
   var ink: [InkRun]?
 
+  struct GraphPoint: Codable, Equatable, Hashable {
+    var x: Double
+    var y: Double
+    var label: String = ""
+    /// Per-point ink slot (status colors on a timeline); nil inherits the series color.
+    var tint: Int? = nil
+
+    init(x: Double, y: Double, label: String = "", tint: Int? = nil) {
+      self.x = x
+      self.y = y
+      self.label = label
+      self.tint = tint
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case x
+      case y
+      case label
+      case tint
+    }
+
+    init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      x = try values.decodeIfPresent(Double.self, forKey: .x) ?? 0
+      y = try values.decodeIfPresent(Double.self, forKey: .y) ?? 0
+      label = try values.decodeIfPresent(String.self, forKey: .label) ?? ""
+      tint = try values.decodeIfPresent(Int.self, forKey: .tint)
+    }
+  }
+
+  struct GraphSeries: Codable, Equatable, Hashable, Identifiable {
+    var id: UUID = UUID()
+    var expression: String? = nil
+    var points: [GraphPoint]? = nil
+    var label: String = ""
+    var tint: Int? = nil
+
+    init(id: UUID = UUID(),
+         expression: String? = nil,
+         points: [GraphPoint]? = nil,
+         label: String = "",
+         tint: Int? = nil) {
+      self.id = id
+      self.expression = expression
+      self.points = points
+      self.label = label
+      self.tint = tint
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case id
+      case expression
+      case points
+      case label
+      case tint
+    }
+
+    init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      id = try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+      expression = try values.decodeIfPresent(String.self, forKey: .expression)
+      points = try values.decodeIfPresent([GraphPoint].self, forKey: .points)
+      label = try values.decodeIfPresent(String.self, forKey: .label) ?? ""
+      tint = try values.decodeIfPresent(Int.self, forKey: .tint)
+    }
+  }
+
+  struct GraphSpec: Codable, Equatable, Hashable {
+    var xLabel: String = ""
+    var xUnit: String = ""
+    var yLabel: String = ""
+    var yUnit: String = ""
+    var xMin: Double = 0
+    var xMax: Double = 10
+    var yMin: Double = 0
+    var yMax: Double = 10
+    var showGrid: Bool = true
+    var series: [GraphSeries] = []
+
+    init(xLabel: String = "",
+         xUnit: String = "",
+         yLabel: String = "",
+         yUnit: String = "",
+         xMin: Double = 0,
+         xMax: Double = 10,
+         yMin: Double = 0,
+         yMax: Double = 10,
+         showGrid: Bool = true,
+         series: [GraphSeries] = []) {
+      self.xLabel = xLabel
+      self.xUnit = xUnit
+      self.yLabel = yLabel
+      self.yUnit = yUnit
+      self.xMin = xMin
+      self.xMax = xMax
+      self.yMin = yMin
+      self.yMax = yMax
+      self.showGrid = showGrid
+      self.series = series
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case xLabel
+      case xUnit
+      case yLabel
+      case yUnit
+      case xMin
+      case xMax
+      case yMin
+      case yMax
+      case showGrid
+      case series
+    }
+
+    init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      xLabel = try values.decodeIfPresent(String.self, forKey: .xLabel) ?? ""
+      xUnit = try values.decodeIfPresent(String.self, forKey: .xUnit) ?? ""
+      yLabel = try values.decodeIfPresent(String.self, forKey: .yLabel) ?? ""
+      yUnit = try values.decodeIfPresent(String.self, forKey: .yUnit) ?? ""
+      xMin = try values.decodeIfPresent(Double.self, forKey: .xMin) ?? 0
+      xMax = try values.decodeIfPresent(Double.self, forKey: .xMax) ?? 10
+      yMin = try values.decodeIfPresent(Double.self, forKey: .yMin) ?? 0
+      yMax = try values.decodeIfPresent(Double.self, forKey: .yMax) ?? 10
+      showGrid = try values.decodeIfPresent(Bool.self, forKey: .showGrid) ?? true
+      series = try values.decodeIfPresent([GraphSeries].self, forKey: .series) ?? []
+    }
+  }
+  /// For `.graph` cards: axis labels, units, ranges, and grid preference.
+  var graph: GraphSpec?
+
   init(id: UUID = UUID(),
        kind: CanvasElementKind = .text,
        text: String = "",
@@ -94,6 +236,7 @@ struct CardState: Codable, Identifiable, Equatable {
        isLocked: Bool = false,
        imagePath: String? = nil,
        latex: String? = nil,
+       graph: GraphSpec? = nil,
        imageUnderstanding: String? = nil,
        archived: Bool = false,
        whoWrote: Int? = nil,
@@ -114,6 +257,7 @@ struct CardState: Codable, Identifiable, Equatable {
     self.isLocked = isLocked ? true : nil
     self.imagePath = imagePath
     self.latex = latex
+    self.graph = graph
     self.imageUnderstanding = imageUnderstanding
     self.archived = archived ? true : nil
     self.whoWrote = whoWrote
@@ -147,6 +291,7 @@ struct CardState: Codable, Identifiable, Equatable {
   static let shapeSize = CGSize(width: 220, height: 140)
   static let lineSize = CGSize(width: 240, height: 96)
   static let equationSize = CGSize(width: 220, height: 96)
+  static let graphSize = CGSize(width: 320, height: 240)
 
   var minimumSize: CGSize {
     switch elementKind {
@@ -154,6 +299,8 @@ struct CardState: Codable, Identifiable, Equatable {
       CardState.textMinSize
     case .equation:
       CGSize(width: 100, height: 48)
+    case .graph:
+      CGSize(width: 180, height: 140)
     case .rectangle, .ellipse, .diamond, .image:
       CardState.shapeMinSize
     case .line, .arrow, .freehand:

@@ -118,6 +118,11 @@ final class BoardViewModel: ObservableObject {
   /// copy; cleared on the next copy and whenever the board text changes.
   @Published var failedShellCommands: Set<String> = []
 
+  /// The graph card a single, parseable equation is currently being dragged over — set while a lone
+  /// equation's live center lands inside a graph frame (and its LaTeX parses), cleared when the drag
+  /// leaves or ends. Graph cards read it to draw the accent drop-target ring.
+  @Published private(set) var equationDropTargetID: UUID?
+
   private var interactions: [UUID: CardInteraction] = [:]
   private var movePreviewIDs: Set<UUID> = []
   private var movePreviewDelta: CGSize = .zero
@@ -332,6 +337,10 @@ final class BoardViewModel: ObservableObject {
     redoStack.removeAll()
   }
 
+  func registerUndoCheckpoint() {
+    registerUndo()
+  }
+
   private func restore(_ value: HistorySnapshot) {
     isRestoringHistory = true
     cards = value.cards
@@ -394,6 +403,7 @@ final class BoardViewModel: ObservableObject {
       switch kind {
       case .line, .arrow, .freehand: CardState.lineSize
       case .equation: CardState.equationSize
+      case .graph: CardState.graphSize
       case .image: CardState.shapeSize
       case .rectangle, .ellipse, .diamond: CardState.shapeSize
       case .text: CardState.defaultSize
@@ -405,7 +415,7 @@ final class BoardViewModel: ObservableObject {
         return CardState.defaultLinePoints()
       case .freehand:
         return CardState.defaultFreehandPoints()
-      case .text, .rectangle, .ellipse, .diamond, .image, .equation:
+      case .text, .rectangle, .ellipse, .diamond, .image, .equation, .graph:
         return nil
       }
     }()
@@ -436,7 +446,7 @@ final class BoardViewModel: ObservableObject {
   /// keep the two points as their endpoints; boxes use the bounding frame. Clamped to a minimum.
   @discardableResult
   func addDrawnElement(_ kind: CanvasElementKind, from start: CGPoint, to end: CGPoint) -> UUID? {
-    guard kind != .text, kind != .freehand, kind != .image, kind != .equation else { return nil }
+    guard kind != .text, kind != .freehand, kind != .image, kind != .equation, kind != .graph else { return nil }
     registerUndo()
     let isLine = (kind == .line || kind == .arrow)
     let minSize = isLine ? CardState.lineMinSize : CardState.shapeMinSize
@@ -595,6 +605,26 @@ final class BoardViewModel: ObservableObject {
     return card.id
   }
 
+  /// Drop a blank graph card centered on `point` (board space), carrying a default spec so it
+  /// renders empty axes immediately. Mirrors `insertEquation`'s placement path. Selects it.
+  @discardableResult
+  func addGraph(at point: CGPoint) -> UUID {
+    registerUndo()
+    let size = CardState.graphSize
+    let card = CardState(kind: .graph, text: "",
+                         x: Double(point.x - size.width / 2), y: Double(point.y - size.height / 2),
+                         w: Double(size.width), h: Double(size.height), z: nextZ,
+                         graph: CardState.GraphSpec(), whoWrote: nextAuthor)
+    nextZ += 1
+    cards.append(card)
+    interactions[card.id] = CardInteraction(card)
+    selectedCardIDs = [card.id]
+    primarySelectedCardID = card.id
+    editingCardID = nil
+    scheduleSave()
+    return card.id
+  }
+
   /// Replace a card's text (serialized form). The live editor re-chipifies it if mounted.
   /// Fill in an image card's on-device understanding once the OCR/classification pass finishes.
   /// Not an undoable user edit — it's the async completion of a capture, so it skips undo and just
@@ -620,6 +650,180 @@ final class BoardViewModel: ObservableObject {
     bundle.text = text
     bundle.cachePlainText(text)
     if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w)) }
+    scheduleSave()
+  }
+
+  /// Update a graph card's spec in place (axis labels, units, ranges, grid). Mirrors `setText`'s
+  /// mutation pattern — one undo step, then persist. No-ops on a non-graph card.
+  func setGraphSpec(_ id: UUID, _ spec: CardState.GraphSpec) {
+    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .graph else { return }
+    registerUndo()
+    cards[i].graph = spec
+    cards[i].whoWrote = nextAuthor
+    scheduleSave()
+  }
+
+  @discardableResult
+  func absorbEquationIntoGraph(_ equationID: UUID, into graphID: UUID) -> Bool {
+    guard equationID != graphID,
+          let equationIndex = index(for: equationID),
+          let graphIndex = index(for: graphID),
+          cards[equationIndex].elementKind == .equation,
+          cards[graphIndex].elementKind == .graph else { return false }
+    let equation = cards[equationIndex]
+    let latex = (equation.latex ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !latex.isEmpty, GraphExpression(latex: latex) != nil else { return false }
+
+    registerUndo()
+    var spec = cards[graphIndex].graph ?? CardState.GraphSpec()
+    spec.series.append(CardState.GraphSeries(expression: latex, label: latex, tint: equation.tint))
+    cards[graphIndex].graph = spec
+    cards[graphIndex].whoWrote = nextAuthor
+
+    let previousSuppressUndo = suppressUndo
+    suppressUndo = true
+    delete(equationID)
+    suppressUndo = previousSuppressUndo
+    scheduleSave()
+    return true
+  }
+
+  func addGraphPoint(_ graphID: UUID, at point: CardState.GraphPoint) {
+    guard let graphIndex = index(for: graphID), cards[graphIndex].elementKind == .graph else { return }
+    registerUndo()
+    var spec = cards[graphIndex].graph ?? CardState.GraphSpec()
+    if let seriesIndex = spec.series.firstIndex(where: { $0.points != nil }) {
+      spec.series[seriesIndex].points?.append(point)
+    } else {
+      spec.series.append(CardState.GraphSeries(points: [point]))
+    }
+    cards[graphIndex].graph = spec
+    cards[graphIndex].whoWrote = nextAuthor
+    scheduleSave()
+  }
+
+  func setGraphPoint(_ graphID: UUID,
+                     seriesID: UUID,
+                     index pointIndex: Int,
+                     to point: CardState.GraphPoint,
+                     undoable: Bool = true) {
+    guard let graphIndex = index(for: graphID),
+          cards[graphIndex].elementKind == .graph,
+          var spec = cards[graphIndex].graph,
+          let seriesIndex = spec.series.firstIndex(where: { $0.id == seriesID }),
+          var points = spec.series[seriesIndex].points,
+          points.indices.contains(pointIndex) else { return }
+    if undoable { registerUndo() }
+    points[pointIndex] = point
+    spec.series[seriesIndex].points = points
+    cards[graphIndex].graph = spec
+    cards[graphIndex].whoWrote = nextAuthor
+    scheduleSave()
+  }
+
+  func removeGraphPoint(_ graphID: UUID, seriesID: UUID, index pointIndex: Int) {
+    guard let graphIndex = index(for: graphID),
+          cards[graphIndex].elementKind == .graph,
+          var spec = cards[graphIndex].graph,
+          let seriesIndex = spec.series.firstIndex(where: { $0.id == seriesID }),
+          var points = spec.series[seriesIndex].points,
+          points.indices.contains(pointIndex) else { return }
+    registerUndo()
+    points.remove(at: pointIndex)
+    spec.series[seriesIndex].points = points
+    cards[graphIndex].graph = spec
+    cards[graphIndex].whoWrote = nextAuthor
+    scheduleSave()
+  }
+
+  func removeGraphSeries(_ graphID: UUID, seriesID: UUID) {
+    guard let graphIndex = index(for: graphID),
+          cards[graphIndex].elementKind == .graph,
+          var spec = cards[graphIndex].graph,
+          let seriesIndex = spec.series.firstIndex(where: { $0.id == seriesID }) else { return }
+    registerUndo()
+    spec.series.remove(at: seriesIndex)
+    cards[graphIndex].graph = spec
+    cards[graphIndex].whoWrote = nextAuthor
+    scheduleSave()
+  }
+
+  /// Live drop-target update for a lone equation drag: `movedID` is the equation being dragged and
+  /// `center` its current board-space center. Highlights the topmost graph whose frame contains the
+  /// center when the equation's LaTeX parses; clears otherwise. Cheap — bails immediately unless the
+  /// dragged card is a single equation with parseable math.
+  func updateEquationDropTarget(movedID: UUID, center: CGPoint) {
+    guard let moved = card(id: movedID), moved.elementKind == .equation,
+          let latex = moved.latex?.trimmingCharacters(in: .whitespacesAndNewlines), !latex.isEmpty,
+          GraphExpression(latex: latex) != nil else {
+      if equationDropTargetID != nil { equationDropTargetID = nil }
+      return
+    }
+    let target = cards
+      .filter { $0.id != movedID && $0.elementKind == .graph && $0.frame.contains(center) }
+      .max(by: { $0.z < $1.z })?
+      .id
+    if equationDropTargetID != target { equationDropTargetID = target }
+  }
+
+  func clearEquationDropTarget() {
+    if equationDropTargetID != nil { equationDropTargetID = nil }
+  }
+
+  func perpendicularPartner(of id: UUID) -> CardState? {
+    guard let base = card(id: id),
+          (base.elementKind == .line || base.elementKind == .arrow),
+          let baseSegment = lineSegment(for: base) else { return nil }
+    let tolerance: CGFloat = 24
+    let minimumAngle = 65.0
+
+    return cards.compactMap { candidate -> (card: CardState, distance: CGFloat, angleOffset: Double)? in
+      guard candidate.id != id,
+            candidate.elementKind == .line || candidate.elementKind == .arrow,
+            let candidateSegment = lineSegment(for: candidate) else { return nil }
+      let closestEndpointDistance = Self.closestEndpointDistance(baseSegment.endpoints, candidateSegment.endpoints)
+      guard closestEndpointDistance <= tolerance else { return nil }
+      let dot = abs(baseSegment.vector.dx * candidateSegment.vector.dx + baseSegment.vector.dy * candidateSegment.vector.dy)
+      let cosine = min(max(dot / (baseSegment.length * candidateSegment.length), 0), 1)
+      let acuteAngle = acos(Double(cosine)) * 180 / Double.pi
+      guard acuteAngle >= minimumAngle else { return nil }
+      return (candidate, closestEndpointDistance, abs(90 - acuteAngle))
+    }
+    .min(by: { lhs, rhs in
+      lhs.distance != rhs.distance
+        ? lhs.distance < rhs.distance
+        : lhs.angleOffset < rhs.angleOffset
+    })?
+    .card
+  }
+
+  func convertElementToGraph(_ id: UUID, spec: CardState.GraphSpec) {
+    guard let i = index(for: id), cards[i].elementKind == .line || cards[i].elementKind == .arrow else { return }
+    let partner = perpendicularPartner(of: id)
+    var targetFrame = cards[i].frame
+    if let partner { targetFrame = targetFrame.union(partner.frame) }
+    targetFrame.size.width = max(targetFrame.width, CardState.graphSize.width)
+    targetFrame.size.height = max(targetFrame.height, CardState.graphSize.height)
+
+    registerUndo()
+    let previousSuppressUndo = suppressUndo
+    suppressUndo = true
+    if let partner { delete(partner.id) }
+    suppressUndo = previousSuppressUndo
+
+    guard let targetIndex = index(for: id) else {
+      refreshBoundArrows()
+      scheduleSave()
+      return
+    }
+    cards[targetIndex].kind = .graph
+    cards[targetIndex].graph = spec
+    cards[targetIndex].points = nil
+    cards[targetIndex].startBindingID = nil
+    cards[targetIndex].endBindingID = nil
+    cards[targetIndex].frame = targetFrame
+    if editingCardID == id { editingCardID = nil }
+    refreshBoundArrows()
     scheduleSave()
   }
 
@@ -832,7 +1036,7 @@ final class BoardViewModel: ObservableObject {
 
   private static func isLayoutNode(_ card: CardState) -> Bool {
     switch card.elementKind {
-    case .text, .rectangle, .ellipse, .diamond, .image, .equation: return true
+    case .text, .rectangle, .ellipse, .diamond, .image, .equation, .graph: return true
     case .line, .arrow, .freehand: return false
     }
   }
@@ -1070,15 +1274,41 @@ final class BoardViewModel: ObservableObject {
     let ids = movePreviewIDs
     let delta = movePreviewDelta
     clearMovePreview()
+    clearEquationDropTarget()
     guard commit, !ids.isEmpty, delta != .zero else { return }
     registerUndo()
     for i in cards.indices where ids.contains(cards[i].id) {
       cards[i].x += Double(delta.width)
       cards[i].y += Double(delta.height)
     }
+    absorbMovedEquationIntoTopmostGraphIfNeeded(ids)
     detachMovedArrows(ids)
     refreshBoundArrows()
     scheduleSave()
+  }
+
+  /// Single-card drags commit through `setFrame`, not `finishMovePreview` — this gives that path
+  /// the same equation→graph drop. The absorb runs suppressed, so the caller's move snapshot owns
+  /// the whole gesture (one undo restores the equation card at its pre-drag position).
+  func absorbEquationDropIfNeeded(_ id: UUID) {
+    absorbMovedEquationIntoTopmostGraphIfNeeded([id])
+  }
+
+  private func absorbMovedEquationIntoTopmostGraphIfNeeded(_ ids: Set<UUID>) {
+    guard ids.count == 1,
+          let movedID = ids.first,
+          let moved = card(id: movedID),
+          moved.elementKind == .equation else { return }
+    let center = CGPoint(x: moved.frame.midX, y: moved.frame.midY)
+    guard let graphID = cards
+      .filter({ $0.id != movedID && $0.elementKind == .graph && $0.frame.contains(center) })
+      .max(by: { $0.z < $1.z })?
+      .id else { return }
+
+    let previousSuppressUndo = suppressUndo
+    suppressUndo = true
+    _ = absorbEquationIntoGraph(movedID, into: graphID)
+    suppressUndo = previousSuppressUndo
   }
 
   func groupSelection() {
@@ -1297,6 +1527,24 @@ final class BoardViewModel: ObservableObject {
       CGPoint(x: card.x + start.x * card.w, y: card.y + start.y * card.h),
       CGPoint(x: card.x + end.x * card.w, y: card.y + end.y * card.h)
     )
+  }
+
+  private func lineSegment(for card: CardState) -> (endpoints: (start: CGPoint, end: CGPoint), vector: CGVector, length: CGFloat)? {
+    let endpoints = lineEndpoints(for: card)
+    let vector = CGVector(dx: endpoints.end.x - endpoints.start.x, dy: endpoints.end.y - endpoints.start.y)
+    let length = hypot(vector.dx, vector.dy)
+    guard length > 0 else { return nil }
+    return (endpoints, vector, length)
+  }
+
+  private static func closestEndpointDistance(_ lhs: (start: CGPoint, end: CGPoint),
+                                              _ rhs: (start: CGPoint, end: CGPoint)) -> CGFloat {
+    [
+      hypot(lhs.start.x - rhs.start.x, lhs.start.y - rhs.start.y),
+      hypot(lhs.start.x - rhs.end.x, lhs.start.y - rhs.end.y),
+      hypot(lhs.end.x - rhs.start.x, lhs.end.y - rhs.start.y),
+      hypot(lhs.end.x - rhs.end.x, lhs.end.y - rhs.end.y),
+    ].min() ?? .greatestFiniteMagnitude
   }
 
   private func card(id: UUID) -> CardState? {

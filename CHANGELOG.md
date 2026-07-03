@@ -11,6 +11,35 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Added
+- **Graph cards.** Sketch a pair of axes with arrows (hold Shift to draw them perfectly straight),
+  double-click one, and "Make graph" turns the sketch into a real two-axis plot — labels, units,
+  ranges, ticks, and a grid, with a roughly perpendicular partner arrow absorbed as the second axis
+  in the same undo step. Drop a LaTeX equation card onto a graph to plot it as a curve in the card's
+  tint (a built-in dependency-free expression parser handles `f(x)=`, `\sin`, `\frac`, `\sqrt`,
+  powers, and implicit multiplication; poles and out-of-domain regions break the stroke cleanly).
+  ⌥-click places labeled, colored data points through a point composer, markers drag to reposition,
+  and hovering a selected graph shows a coordinate readout in the axis units that snaps to curves
+  and points. The config popover edits everything later, including a per-point list.
+- **Copy board as PNG.** The Export Board menu now renders the board straight to the clipboard
+  (PNG + TIFF) for instant pasting into Slack, pull requests, or docs — no save dialog.
+
+### Changed
+- **The ⌘K palette now carries only what the UI can't reach.** Entries duplicating visible chrome
+  (agent, settings, compile, fit, grounding) were removed; the palette is New board, Capture screen,
+  Focus write, Add graph to board, and — when the selection makes them meaningful — Convert line to
+  graph, Plot equation on graph, and Add point to graph. Its visuals were rebuilt on the app's glass
+  language: quiet accent selection, bare shortcut glyphs, muted inline subtitles, no keycap footer.
+- **Shift keeps lines and arrows straight.** Holding Shift while drawing a line or arrow snaps it
+  perfectly horizontal or vertical (live in the preview), matching the box shapes' Shift-square
+  constraint.
+- **Export pill reads "Export Board"** so its menu rows ("Copy PNG", "Save PNG") fit the
+  width-locked hover menu without truncating.
+
+### Fixed
+- **The ⌘K search field no longer clips tall letters.** The palette field rendered in the
+  user-selected app font, whose declared vertical metrics are tighter than its glyphs; the palette
+  is chrome and now uses the system font like the rest of its rows.
 
 ## [1.3.2] - 2026-07-02
 
