@@ -60,20 +60,23 @@ struct CommandPalette: View {
 
   @State private var query = ""
   @State private var selection = 0
+  @State private var hovered: Int? = nil
 
   /// With no query, the palette leads with the few most-recent boards rather than the whole stack.
   private let idleBoardLimit = 6
-  private let rowHeight: CGFloat = 40
-  private let headerHeight: CGFloat = 25
+  private let rowHeight: CGFloat = 36
+  private let headerHeight: CGFloat = 26
   private let maxVisibleRows = 7
+  /// Row content aligns to this inset; the section headers share it so labels sit over their rows.
+  private let contentInset: CGFloat = 8
+  /// Fixed leading icon slot — every glyph is optically centered in the same 24pt column.
+  private let iconSlot: CGFloat = 24
 
   var body: some View {
     VStack(spacing: 0) {
       searchRow
-      Rectangle().fill(Theme.Palette.separator).frame(height: 1)
+      Rectangle().fill(Theme.Palette.panelHairline).frame(height: 1)
       results
-      Rectangle().fill(Theme.Palette.separator).frame(height: 1)
-      footer
     }
     .frame(width: 560)
     .composerPopupSurface()
@@ -115,23 +118,26 @@ struct CommandPalette: View {
   // MARK: Search row
 
   private var searchRow: some View {
-    HStack(spacing: 9) {
+    HStack(spacing: 10) {
       Image(systemName: "magnifyingglass")
-        .font(.body)
-        .foregroundStyle(Theme.Palette.menuDesc)
-        .frame(width: 17, height: 17)
+        .font(.system(size: 15, weight: .regular))
+        .foregroundStyle(Theme.Palette.placeholder)
+        .frame(width: iconSlot)
       FocusedSearchField(
         text: Binding(get: { query }, set: { query = $0; selection = 0 }),
         placeholder: "Search boards and actions…",
+        // System font, not the editor font: the palette is chrome (its rows are all system fonts),
+        // and the custom app fonts' lying vertical metrics clip ascenders in NSTextField.
+        font: .systemFont(ofSize: 15),
         onMoveUp: { move(-1) },
         onMoveDown: { move(1) },
         onCommit: { commit() },
         onCancel: { onDismiss() }
       )
-      .frame(height: 20)
+      .frame(height: 28)
     }
-    .padding(.horizontal, 15)
-    .frame(height: 46)
+    .padding(.horizontal, contentInset + 6)
+    .frame(height: 44)
   }
 
   // MARK: Results
@@ -139,22 +145,27 @@ struct CommandPalette: View {
   @ViewBuilder
   private var results: some View {
     if rowCount == 0 {
-      HStack(spacing: 7) {
-        Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.tertiary)
-        Text("No matches").font(.caption).foregroundStyle(Theme.Palette.menuDesc)
+      HStack(spacing: 8) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 13))
+          .foregroundStyle(Theme.Palette.placeholder)
+          .frame(width: iconSlot)
+        Text("No matches").font(Theme.Typography.menuName).foregroundStyle(Theme.Palette.placeholder)
         Spacer(minLength: 0)
       }
-      .padding(.horizontal, 16).padding(.vertical, 14)
+      .padding(.horizontal, contentInset).padding(.vertical, 14)
     } else {
       ScrollViewReader { proxy in
         ScrollView(.vertical) {
-          VStack(alignment: .leading, spacing: 0) {
+          VStack(alignment: .leading, spacing: 2) {
             if !filteredBoards.isEmpty {
               sectionHeader("Boards")
               ForEach(Array(filteredBoards.enumerated()), id: \.element.persistentModelID) { index, dump in
                 boardRow(dump, selected: safeSelection == index)
+                  .brightness(hovered == index && safeSelection != index ? 0.12 : 0)
                   .id(index)
                   .onTapGesture { onPickBoard(dump.persistentModelID) }
+                  .onHover { inside in updateHover(index, inside) }
               }
             }
             if !filteredCommands.isEmpty {
@@ -162,11 +173,14 @@ struct CommandPalette: View {
               ForEach(Array(filteredCommands.enumerated()), id: \.element.id) { index, command in
                 let row = filteredBoards.count + index
                 commandRow(command, selected: safeSelection == row)
+                  .brightness(hovered == row && safeSelection != row ? 0.12 : 0)
                   .id(row)
                   .onTapGesture { onRunCommand(command) }
+                  .onHover { inside in updateHover(row, inside) }
               }
             }
           }
+          .padding(.horizontal, contentInset)
           .padding(.vertical, 6)
         }
         .scrollIndicators(.never)
@@ -178,63 +192,89 @@ struct CommandPalette: View {
     }
   }
 
+  /// Hover paints no background (guardrail) — it only brightens the row's foreground and, on enter,
+  /// fires the trackpad tick that stands in for a hover fill everywhere in the chrome.
+  private func updateHover(_ index: Int, _ inside: Bool) {
+    if inside {
+      if hovered != index { Haptics.hover() }
+      hovered = index
+    } else if hovered == index {
+      hovered = nil
+    }
+  }
+
   /// Sized to the exact content height (capped at `maxVisibleRows`), so the scroll area never
   /// leaves empty glass below a short list — a greedy `ScrollView` fills whatever it's offered.
   private var listMaxHeight: CGFloat {
     let visibleRows = min(rowCount, maxVisibleRows)
     let headers = (filteredBoards.isEmpty ? 0 : 1) + (filteredCommands.isEmpty ? 0 : 1)
-    return CGFloat(visibleRows) * rowHeight + CGFloat(headers) * headerHeight + 12
+    return CGFloat(visibleRows) * (rowHeight + 2) + CGFloat(headers) * headerHeight + 12
   }
 
   private func sectionHeader(_ text: String) -> some View {
     Text(text.uppercased())
-      .font(.caption2.weight(.semibold))
-      .foregroundStyle(Theme.Palette.title)
-      .padding(.horizontal, 18)
-      .padding(.top, 8)
-      .padding(.bottom, 3)
+      .font(.system(size: 10.5, weight: .semibold))
+      .tracking(0.4)
+      .foregroundStyle(Theme.Palette.placeholder)
+      .padding(.leading, rowContentInset)
+      .padding(.top, 12)
+      .padding(.bottom, 4)
   }
 
+  /// Text inside a row starts after the icon slot; headers align to the same x so a label sits
+  /// directly over its rows' titles.
+  private var rowContentInset: CGFloat { 8 + iconSlot + 8 }
+
   private func boardRow(_ dump: Dump, selected: Bool) -> some View {
-    HStack(spacing: 10) {
+    let isEmpty = dump.title.isEmpty
+    return HStack(spacing: 8) {
       Circle()
         .fill(dump.persistentModelID == store.currentID ? Theme.Palette.accent : Color.clear)
         .frame(width: 6, height: 6)
-      Text(dump.title.isEmpty ? "Empty draft" : dump.title)
+        .frame(width: iconSlot)
+      Text(isEmpty ? "Empty draft" : dump.title)
         .font(Theme.Typography.menuName)
-        .foregroundStyle(dump.title.isEmpty ? Theme.Palette.menuDesc : Theme.Palette.body)
+        .foregroundStyle(isEmpty ? Theme.Palette.placeholder : Theme.Palette.body)
         .lineLimit(1)
       Spacer(minLength: 8)
       Text(relativeDumpTime(dump.updatedAt))
-        .font(.caption.monospacedDigit())
-        .foregroundStyle(Theme.Palette.title)
+        .font(.system(size: 11).monospacedDigit())
+        .foregroundStyle(Theme.Palette.placeholder)
     }
-    .padding(.horizontal, 14)
+    .padding(.horizontal, 8)
     .frame(height: rowHeight)
     .background(rowFill(selected))
     .contentShape(Rectangle())
   }
 
   private func commandRow(_ command: PaletteCommand, selected: Bool) -> some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 8) {
       Image(systemName: command.symbol)
-        .font(.body)
-        .foregroundStyle(selected ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.menuDesc))
-        .frame(width: 18)
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(selected ? Theme.Palette.accent : Theme.Palette.placeholder)
+        .frame(width: iconSlot)
       Text(command.title)
         .font(Theme.Typography.menuName)
         .foregroundStyle(Theme.Palette.body)
         .lineLimit(1)
+        .layoutPriority(1)
       if let subtitle = command.subtitle {
         Text(subtitle)
-          .font(Theme.Typography.menuDesc)
-          .foregroundStyle(Theme.Palette.menuDesc)
+          .font(.system(size: 11.5))
+          .foregroundStyle(Theme.Palette.placeholder)
           .lineLimit(1)
+          .truncationMode(.tail)
       }
       Spacer(minLength: 8)
-      if let shortcut = command.shortcut { keycap(shortcut) }
+      if let shortcut = command.shortcut {
+        Text(shortcut)
+          .font(.system(size: 11, design: .monospaced))
+          .foregroundStyle(Theme.Palette.placeholder)
+          .lineLimit(1)
+          .fixedSize()
+      }
     }
-    .padding(.horizontal, 14)
+    .padding(.horizontal, 8)
     .frame(height: rowHeight)
     .background(rowFill(selected))
     .contentShape(Rectangle())
@@ -242,29 +282,7 @@ struct CommandPalette: View {
 
   private func rowFill(_ selected: Bool) -> some View {
     RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-      .fill(selected ? Theme.Palette.selectedRowFill : Color.clear)
-      .padding(.horizontal, 6)
-  }
-
-  // MARK: Footer
-
-  private var footer: some View {
-    HStack(spacing: 6) {
-      keycap("↑↓"); Text("navigate").font(.caption2).foregroundStyle(Theme.Palette.title)
-      keycap("↵"); Text("open").font(.caption2).foregroundStyle(Theme.Palette.title)
-      keycap("esc"); Text("close").font(.caption2).foregroundStyle(Theme.Palette.title)
-      Spacer()
-    }
-    .padding(.horizontal, 14)
-    .frame(height: 28)
-  }
-
-  private func keycap(_ text: String) -> some View {
-    Text(text)
-      .font(.caption2.weight(.medium))
-      .foregroundStyle(.secondary)
-      .padding(.horizontal, 5).padding(.vertical, 1.5)
-      .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Palette.keycapFill))
+      .fill(selected ? Theme.Palette.accent.opacity(0.14) : Color.clear)
   }
 
   // MARK: Keyboard

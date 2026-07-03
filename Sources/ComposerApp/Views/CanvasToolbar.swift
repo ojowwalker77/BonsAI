@@ -40,6 +40,9 @@ enum CanvasTool: Equatable {
 
   /// Shift constrains box-shape drags to a square (see `CanvasElementKind.constrainsToSquare`).
   var constrainsToSquare: Bool { elementKind?.constrainsToSquare ?? false }
+
+  /// Shift snaps line/arrow drags to the nearer axis (see `CanvasElementKind.constrainsToAxis`).
+  var constrainsToAxis: Bool { elementKind?.constrainsToAxis ?? false }
 }
 
 /// The canvas tool cluster — the eight placement/selection tools, rendered bare so the bottom

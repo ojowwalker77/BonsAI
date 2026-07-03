@@ -40,6 +40,9 @@ extension Notification.Name {
   static let composerEnterEditing = Notification.Name("composerEnterEditing")
   /// ⌘1–⌘8 pick a canvas tool; userInfo["index"] is 1-based (1 = select, 2 = text, …).
   static let composerSelectTool = Notification.Name("composerSelectTool")
+  /// ⌘K "Add point to graph…": the graph card whose id matches `object` (a UUID) opens its Point
+  /// Composer seeded at the middle of its axis ranges.
+  static let composerAddGraphPoint = Notification.Name("composerAddGraphPoint")
   /// ⌘J toggles the separate agent panel.
   static let composerToggleAgent = Notification.Name("composerToggleAgent")
   /// ⌘K toggles the command palette (board switcher + buried board-level actions).
