@@ -839,6 +839,166 @@ final class BoardViewModel: ObservableObject {
     if committed.isEmpty { delete(id) }
   }
 
+  // MARK: Promotions (the "promotion seam" — rough matter promoted into richer matter)
+
+  /// Promote a recognized freehand stroke into the clean shape/line/arrow it was read as, keeping
+  /// the card's id, tint, and z (continuity of matter) in a single undo step. Box shapes take the
+  /// recognition's rect; lines/arrows mirror `addDrawnElement`'s two-point geometry exactly so a
+  /// promoted line is indistinguishable from a drawn one. No-op unless the card is still a freehand.
+  func convertFreehand(_ id: UUID, to kind: ShapeRecognizer.Kind) {
+    guard let i = index(for: id), cards[i].elementKind == .freehand else { return }
+    registerUndo()
+
+    switch kind {
+    case .rectangle(let rect), .ellipse(let rect), .diamond(let rect):
+      cards[i].kind = shapeKind(for: kind)
+      cards[i].frame = rect
+      cards[i].points = nil
+    case .line(let start, let end), .arrow(let start, let end):
+      // Mirror `addDrawnElement`: a padded bounding box respecting `lineMinSize`, endpoints stored
+      // normalized into that frame, so the promoted line reads exactly like a drawn one.
+      let minSize = CardState.lineMinSize
+      var minX = min(start.x, end.x), minY = min(start.y, end.y)
+      var maxX = max(start.x, end.x), maxY = max(start.y, end.y)
+      if maxX - minX < minSize.width { let pad = (minSize.width - (maxX - minX)) / 2; minX -= pad; maxX += pad }
+      if maxY - minY < minSize.height { let pad = (minSize.height - (maxY - minY)) / 2; minY -= pad; maxY += pad }
+      let frame = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+      cards[i].kind = (kind.isArrow ? .arrow : .line)
+      cards[i].frame = frame
+      cards[i].points = [
+        CanvasPoint(x: Double((start.x - frame.minX) / frame.width), y: Double((start.y - frame.minY) / frame.height)),
+        CanvasPoint(x: Double((end.x - frame.minX) / frame.width), y: Double((end.y - frame.minY) / frame.height)),
+      ]
+    }
+    cards[i].whoWrote = nextAuthor
+    // Rebuild the interaction from the rewritten card so the label/selection chrome reads the new kind.
+    interactions[cards[i].id] = CardInteraction(cards[i])
+    if cards[i].elementKind == .arrow { bindArrowIfPossible(id) }
+    select(id)
+    scheduleSave()
+  }
+
+  private func shapeKind(for kind: ShapeRecognizer.Kind) -> CanvasElementKind {
+    switch kind {
+    case .rectangle: .rectangle
+    case .ellipse: .ellipse
+    case .diamond: .diamond
+    case .line: .line
+    case .arrow: .arrow
+    }
+  }
+
+  /// Promote a math-like text card into an equation card in one undo step, keeping id/frame/tint.
+  /// The LaTeX is the text stripped of surrounding `$`/`$$` (mirroring how equation cards store raw
+  /// math-mode source without delimiters), and the card's `text` is cleared the way an equation card
+  /// carries none. No-op unless the card is still text.
+  func convertTextToEquation(_ id: UUID) {
+    guard let i = index(for: id), cards[i].elementKind == .text else { return }
+    let latex = Self.strippedEquationLatex(plainText(for: cards[i]))
+    registerUndo()
+    cards[i].kind = .equation
+    cards[i].latex = latex
+    cards[i].text = ""
+    cards[i].ink = nil
+    cards[i].whoWrote = nextAuthor
+    interactions[cards[i].id] = CardInteraction(cards[i])
+    select(id)
+    scheduleSave()
+  }
+
+  /// Promote a bullet-list text card into one text card per non-empty line, stacked from the
+  /// original's origin: same width, auto-fit text height, 12pt board-unit gaps, all inheriting the
+  /// original's tint. The original is deleted in the SAME undo step (its delete is suppressed, the
+  /// way `convertElementToGraph` absorbs its partner). Non-bullet lines (e.g. a heading) become
+  /// cards too, in order. Selects the new cards. No-op unless the card is still text.
+  func splitTextCard(_ id: UUID) {
+    guard let i = index(for: id), cards[i].elementKind == .text else { return }
+    let lines = plainText(for: cards[i])
+      .components(separatedBy: .newlines)
+      .map { Self.strippedBulletMarker($0) }
+      .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    guard lines.count > 1 else { return }
+
+    let origin = CGPoint(x: cards[i].x, y: cards[i].y)
+    let width = cards[i].w
+    let tint = cards[i].tint
+    let gap: CGFloat = 12
+
+    registerUndo()
+    // Append the new cards FIRST, then remove the original directly (not through `delete`, whose
+    // empty-board guard would resurrect a blank first card if this split card were the board's only
+    // one). One `registerUndo` above covers both, so a single undo restores the original card.
+    var newIDs: [UUID] = []
+    var y = origin.y
+    for line in lines {
+      let height = Self.fittedTextHeight(line, width: width)
+      let card = CardState(text: line, x: Double(origin.x), y: Double(y),
+                           w: Double(width), h: Double(height), z: nextZ,
+                           whoWrote: nextAuthor, tint: tint)
+      nextZ += 1
+      cards.append(card)
+      interactions[card.id] = CardInteraction(card)
+      newIDs.append(card.id)
+      y += height + gap
+    }
+    cards.removeAll { $0.id == id }
+    interactions[id] = nil
+    selectedCardIDs = Set(newIDs)
+    primarySelectedCardID = newIDs.last
+    editingCardID = nil
+    refreshBoundArrows()
+    scheduleSave()
+  }
+
+  // MARK: Promotion detection (pure, testable — precision first, false offers are worse than none)
+
+  /// A text card is promotable to an equation only when its trimmed text is non-empty, single-line,
+  /// and reads as math: either wrapped in `$…$`/`$$…$$` delimiters, or carrying a LaTeX command
+  /// (`\command`). Precision-biased so prose never offers to become an equation.
+  static func isMathLike(_ text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, !trimmed.contains(where: { $0.isNewline }) else { return false }
+    if (trimmed.hasPrefix("$$") && trimmed.hasSuffix("$$") && trimmed.count > 4)
+      || (trimmed.hasPrefix("$") && trimmed.hasSuffix("$") && trimmed.count > 2) {
+      return true
+    }
+    return trimmed.range(of: "\\\\[a-zA-Z]+", options: .regularExpression) != nil
+  }
+
+  /// A text card is promotable to a split only when its text has ≥3 lines and ≥3 non-empty lines
+  /// begin with a bullet marker (`- `, `* `, or `• `). A single stray dash never triggers a split.
+  static func isBulletList(_ text: String) -> Bool {
+    let lines = text.components(separatedBy: .newlines)
+    guard lines.count >= 3 else { return false }
+    let bulleted = lines.filter { line in
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      return !trimmed.isEmpty && (trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• "))
+    }
+    return bulleted.count >= 3
+  }
+
+  /// Strip surrounding `$$…$$` or `$…$` delimiters and trim — the raw math-mode source an equation
+  /// card stores (`latex`, no delimiters).
+  static func strippedEquationLatex(_ text: String) -> String {
+    var body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if body.hasPrefix("$$"), body.hasSuffix("$$"), body.count > 4 {
+      body = String(body.dropFirst(2).dropLast(2))
+    } else if body.hasPrefix("$"), body.hasSuffix("$"), body.count > 2 {
+      body = String(body.dropFirst().dropLast())
+    }
+    return body.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// Strip a leading bullet marker (`- `, `* `, `• `) from a line, leaving the content; a line with
+  /// no marker (a heading) is returned trimmed of trailing space but otherwise intact.
+  static func strippedBulletMarker(_ line: String) -> String {
+    let trimmedLeading = String(line.drop(while: { $0 == " " || $0 == "\t" }))
+    for marker in ["- ", "* ", "• "] where trimmedLeading.hasPrefix(marker) {
+      return String(trimmedLeading.dropFirst(marker.count))
+    }
+    return line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+  }
+
   /// Height a text card needs to show `text` at `width`, measured the way the non-editing card
   /// renders it. Used for agent/programmatic edits and on load, where no live editor reports it.
   static func fittedTextHeight(_ text: String, width: CGFloat) -> CGFloat {

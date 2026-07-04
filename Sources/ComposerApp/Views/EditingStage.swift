@@ -19,6 +19,11 @@ struct EditingStage: View {
   let isWorking: Bool
   /// The engine the linter's "Refine with …" escalation targets on the text stage; nil hides it.
   let askEngine: HeadlessEngine?
+  /// Axes→graph promotion: open the label stage straight in graph-config mode on appear (as if
+  /// "Make graph" were tapped). One-shot — `onGraphConfigConsumed` clears the pending intent so a
+  /// later manual reopen of the same card lands on the label, not the config.
+  var openGraphConfigOnAppear: Bool = false
+  var onGraphConfigConsumed: () -> Void = {}
   /// Commit-close the stage the way a click-away ends editing (text/label/equation commit, graph
   /// closes without applying). Wired to the scrim tap and the header close button.
   let onClose: () -> Void
@@ -311,6 +316,14 @@ struct EditingStage: View {
       showingGraphConfig = false
     case .line, .arrow, .rectangle, .ellipse, .diamond:
       labelDraft = interaction.text
+      // Axes→graph promotion: open straight in graph-config, as if "Make graph" were tapped. Esc
+      // still falls back to the label (same session), matching the manual conversion path.
+      if openGraphConfigOnAppear, canMakeGraph {
+        graphDraft = seededGraphDraft()
+        graphConverting = true
+        showingGraphConfig = true
+      }
+      onGraphConfigConsumed()
     default:
       break
     }

@@ -68,6 +68,18 @@ struct ComposerCanvas: View {
   @State private var pan: CGSize = .zero
   @State private var panLive: CGSize = .zero
 
+  /// The promotion seam's one live offer (freehand→shape, text→equation/cards, axes→graph) — the
+  /// floating chip near the recognized card. At most one at a time; nil hides the chip. Armed at the
+  /// human-gesture hooks (freehand/draw commit, edit end, single selection) and dismissed on any new
+  /// gesture, selection change, undo/redo, board switch, or Esc — plus the auto-dismiss timer below.
+  @State private var promotion: PromotionOffer?
+  /// The 6s auto-dismiss for the live chip; invalidated whenever the offer changes or clears so a
+  /// stale timer can never retract a newer chip.
+  @State private var promotionDismissWork: DispatchWorkItem?
+  /// A pending intent to open the label stage straight in graph-config mode (axes→graph promotion),
+  /// consumed by `EditingStage` on appear then cleared.
+  @State private var openGraphConfigCardID: UUID?
+
   private let service = HeadlessPromptService()
   private let cardPasteboardType = NSPasteboard.PasteboardType("dev.jow.Composer.cards")
 
@@ -127,6 +139,9 @@ struct ComposerCanvas: View {
 
       // Floating chrome: board identity top-left (the pill IS the board manager), agent top-right,
       // everything hands-on (tools, zoom, settings) in one bottom command bar.
+      // The promotion chip floats above the cards but below the command bar/pills and the agent dock
+      // — it's a whisper over the canvas, not chrome that competes with the tools.
+      promotionOverlay(in: inner)
       boardSwitcherPill(in: proxy.size)
       boardActionsPill(in: proxy.size)
       bottomCommandBar(fit: inner)
@@ -146,6 +161,16 @@ struct ComposerCanvas: View {
       }
     }
     .onChange(of: inner) { _, value in lastViewportSize = value }
+    // Promotion lifecycle: a tool change starts a fresh intent, so any live chip is stale.
+    .onChange(of: tool) { _, _ in dismissPromotion() }
+    // Editing a card owns the screen; while a stage is open the chip must not hover behind it. When
+    // a text card's edit session ENDS (editingCardID → nil), evaluate it for a text promotion.
+    .onChange(of: board.editingCardID) { previous, current in
+      if current != nil { dismissPromotion() }
+      else if let previous { evaluateTextPromotion(previous) }
+    }
+    // Selection change away from the offer's card retracts it; a single text selection can arm one.
+    .onChange(of: board.selectedCardIDs) { _, _ in promotionSelectionChanged() }
   }
 
   // MARK: Board content (pan / zoom / place)
@@ -268,14 +293,14 @@ struct ComposerCanvas: View {
         isSpacePressed: isSpacePressed,
         onTap: handleTap,
         onDoubleTap: handleDoubleTap,
-        onSelectionChanged: { selectionRect = $0 },
+        onSelectionChanged: { rect in selectionRect = rect; if promotion != nil { dismissPromotion() } },
         onSelectionEnded: selectCards(inViewportRect:modifiers:),
-        onFreehandChanged: { freehandDraft = $0 },
+        onFreehandChanged: { freehandDraft = $0; if promotion != nil { dismissPromotion() } },
         onFreehandEnded: commitFreehandDraft,
         onElementDraftChanged: onElementDraftChanged,
         onElementDraftEnded: commitElementDraft,
         onElementDraftCancelled: { elementDraft = nil; bindTargetID = nil },
-        onPanChanged: { panLive = $0 },
+        onPanChanged: { panLive = $0; if promotion != nil { dismissPromotion() } },
         onPanEnded: { delta in
           pan.width += delta.width
           pan.height += delta.height
@@ -466,6 +491,7 @@ struct ComposerCanvas: View {
   /// live end would bind to — under the CURRENT drag endpoint, converted to board space — so the
   /// highlight tracks the cursor and matches exactly what `bindArrowIfPossible` will do on commit.
   private func onElementDraftChanged(_ start: CGPoint, _ current: CGPoint) {
+    if promotion != nil { dismissPromotion() }
     elementDraft = DragSegment(start: start, end: current)
     if tool == .line || tool == .arrow {
       bindTargetID = board.bindCandidate(at: boardPoint(forViewport: current), excluding: [])
@@ -480,8 +506,10 @@ struct ComposerCanvas: View {
     // Esc mid-drag cleared the draft; the pending mouse-up must then commit nothing.
     guard elementDraft != nil else { return }
     guard let kind = tool.elementKind else { return }
-    if board.addDrawnElement(kind, from: boardPoint(forViewport: start), to: boardPoint(forViewport: end)) != nil {
+    if let id = board.addDrawnElement(kind, from: boardPoint(forViewport: start), to: boardPoint(forViewport: end)) {
       tool = .select
+      // A perpendicular partner means this pair of lines/arrows reads as axes — offer a graph.
+      if kind == .line || kind == .arrow { offerGraphPromotion(id) }
     }
   }
 
@@ -514,8 +542,10 @@ struct ComposerCanvas: View {
         y: Double(($0.y - frame.minY) / frame.height)
       )
     }
-    if board.addFreehandStroke(frame: frame, points: normalized) != nil {
+    if let id = board.addFreehandStroke(frame: frame, points: normalized) {
       tool = .select
+      // The flagship promotion: a confidently recognized stroke offers to become that clean shape.
+      offerFreehandPromotion(id, boardPoints: boardPoints)
     }
   }
 
@@ -918,10 +948,125 @@ struct ComposerCanvas: View {
         size: size,
         isWorking: isWorking,
         askEngine: resolvedChatEngine(),
+        // Axes→graph promotion opens the label stage straight in graph-config mode; consume the
+        // one-shot intent so a later manual edit of the same card doesn't reopen it.
+        openGraphConfigOnAppear: openGraphConfigCardID == id,
+        onGraphConfigConsumed: { if openGraphConfigCardID == id { openGraphConfigCardID = nil } },
         onClose: { board.endEditing(id) }
       )
       .id(id)
     }
+  }
+
+  // MARK: Promotion chip (the promotion seam's floating affordance)
+
+  /// The live promotion chip, floating just above its card's top edge in viewport space so it tracks
+  /// pan/zoom, clamped to stay on screen. Click promotes; the chip is dismissed by the same call.
+  @ViewBuilder
+  private func promotionOverlay(in size: CGSize) -> some View {
+    if let offer = promotion,
+       let card = board.cards.first(where: { $0.id == offer.cardID }) {
+      let midX = card.frame.midX * effectiveScale + pan.width
+      let topY = card.frame.minY * effectiveScale + pan.height - 30
+      // A rough half-width for clamping; the chip re-centers itself, so keeping its anchor inside a
+      // 90pt inset keeps the whole pill on screen at any pan/zoom.
+      let x = min(max(midX, 90), max(90, size.width - 90))
+      let y = min(max(topY, 30), max(30, size.height - 30))
+      PromotionChip(offer: offer) { promote(offer) }
+        .position(x: x, y: y)
+        .transition(.opacity)
+        .zIndex(45)
+    }
+  }
+
+  /// Arm the single live offer, replacing any current one, and (re)start the 6s auto-dismiss.
+  ///
+  /// Arming hops to the next runloop tick: a commit path flips `tool` back to `.select`, whose
+  /// `.onChange` fires `dismissPromotion()` on THIS tick — arming after it wins, so the freshly
+  /// committed shape/graph offer survives its own tool reset. (Edit-end/selection paths don't touch
+  /// the tool, so the hop is harmless there.)
+  private func armPromotion(_ offer: PromotionOffer) {
+    DispatchQueue.main.async {
+      withAnimation(Theme.Motion.accessory) { promotion = offer }
+      promotionDismissWork?.cancel()
+      let work = DispatchWorkItem { dismissPromotion() }
+      promotionDismissWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
+    }
+  }
+
+  /// Clear the live offer and invalidate its timer — the one retraction path (auto-dismiss, new
+  /// gesture, selection change, undo/redo, board switch, Esc, promote).
+  private func dismissPromotion() {
+    promotionDismissWork?.cancel()
+    promotionDismissWork = nil
+    if promotion != nil {
+      withAnimation(Theme.Motion.accessory) { promotion = nil }
+    }
+  }
+
+  /// Run the offer's promotion (one undo step each), then dismiss the chip.
+  private func promote(_ offer: PromotionOffer) {
+    switch offer.kind {
+    case .freehandToShape(let kind):
+      board.convertFreehand(offer.cardID, to: kind)
+    case .textToEquation:
+      board.convertTextToEquation(offer.cardID)
+    case .textToCards:
+      board.splitTextCard(offer.cardID)
+    case .arrowsToGraph:
+      // Reuse the existing editing-stage conversion, opened straight in graph-config mode.
+      openGraphConfigCardID = offer.cardID
+      board.select(offer.cardID)
+      board.beginEditing(offer.cardID)
+    }
+    dismissPromotion()
+  }
+
+  /// After a freehand stroke commits, offer to promote it to the shape the recognizer read (nil =
+  /// no confident read, no chip). `boardPoints` are the committed stroke in board space.
+  private func offerFreehandPromotion(_ id: UUID, boardPoints: [CGPoint]) {
+    guard let recognition = ShapeRecognizer.recognize(boardPoints) else { return }
+    armPromotion(PromotionOffer(
+      cardID: id,
+      kind: .freehandToShape(recognition.kind),
+      label: recognition.kind.promotionLabel,
+      symbol: recognition.kind.promotionSymbol))
+  }
+
+  /// After a line/arrow finishes drawing, offer a graph if it found a perpendicular partner (an axis
+  /// pair). Armed on the NEW element.
+  private func offerGraphPromotion(_ id: UUID) {
+    guard board.perpendicularPartner(of: id) != nil else { return }
+    armPromotion(PromotionOffer(
+      cardID: id, kind: .arrowsToGraph, label: "Make graph", symbol: "chart.xyaxis.line"))
+  }
+
+  /// Evaluate a text card for the equation/split promotions when its edit session ends. Precision
+  /// first: equation wins over split (they can't both match — bullets are multi-line), and prose
+  /// offers nothing. No-op for a card that's since gone or is no longer text.
+  private func evaluateTextPromotion(_ id: UUID) {
+    guard let card = board.cards.first(where: { $0.id == id }), card.elementKind == .text else { return }
+    let text = board.plainText(for: card)
+    if BoardViewModel.isMathLike(text) {
+      armPromotion(PromotionOffer(cardID: id, kind: .textToEquation, label: "Make equation", symbol: "x.squareroot"))
+    } else if BoardViewModel.isBulletList(text) {
+      armPromotion(PromotionOffer(cardID: id, kind: .textToCards, label: "Split into cards", symbol: "square.on.square"))
+    }
+  }
+
+  /// Selection changed: retract a chip whose card is no longer the single selection, and arm a text
+  /// promotion when a promotable text card becomes the sole selected card (the second evaluation
+  /// moment, alongside edit-end).
+  private func promotionSelectionChanged() {
+    if let offer = promotion, board.selectedCardIDs != [offer.cardID] {
+      dismissPromotion()
+    }
+    guard board.editingCardID == nil,
+          board.selectedCardIDs.count == 1,
+          let id = board.selectedCardIDs.first,
+          promotion?.cardID != id else { return }
+    evaluateTextPromotion(id)
   }
 
   /// Agent and Settings float over the canvas as glass panels (top-right, full-height).
@@ -1095,7 +1240,7 @@ struct ComposerCanvas: View {
   }
 
 
-  private func resetView() { scale = 1; pan = .zero }
+  private func resetView() { scale = 1; pan = .zero; dismissPromotion() }
 
   // MARK: Export
 
@@ -1147,6 +1292,9 @@ struct ComposerCanvas: View {
   private func handlePasteSelection() { if canEditBoard { pasteSelectedCards() } }
   private func handleSelectAllCards() { if canEditBoard { board.selectAll() } }
   private func handleEscapeBoard() {
+    // A live promotion chip is the shallowest thing Esc can dismiss — retract it and swallow the
+    // keystroke so it doesn't also revert the tool or drop the selection underneath.
+    if promotion != nil { dismissPromotion(); return }
     // While a card is being edited the stage owns Esc (its own editor consumes it, per-kind), so the
     // board Esc cascade must not also fire — return before touching the tool/selection underneath.
     if board.editingInteraction != nil { return }
@@ -1167,8 +1315,8 @@ struct ComposerCanvas: View {
       dismiss()
     }
   }
-  private func handleUndoBoard() { if canEditBoard { board.undo() } }
-  private func handleRedoBoard() { if canEditBoard { board.redo() } }
+  private func handleUndoBoard() { if canEditBoard { dismissPromotion(); board.undo() } }
+  private func handleRedoBoard() { if canEditBoard { dismissPromotion(); board.redo() } }
   private func handleGroupSelection() { if canEditBoard { board.groupSelection() } }
   private func handleUngroupSelection() { if canEditBoard { board.ungroupSelection() } }
   private func handleLockSelection() { if canEditBoard { board.lockSelection(true) } }
