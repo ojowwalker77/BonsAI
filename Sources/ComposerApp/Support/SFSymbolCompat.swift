@@ -1,6 +1,16 @@
 import SwiftUI
 import AppKit
 
+/// Resolves an SF Symbol NAME (a plain string) against the running OS, for call sites that pass a
+/// bare symbol string rather than building an `Image` (e.g. `PaletteCommand.symbol`, rendered by a
+/// plain `Image(systemName:)`). Same probe as the `Image` initializer below — falls back when the
+/// preferred glyph isn't present on the deployment floor.
+enum SFSymbolName {
+  static func resolve(_ preferred: String, fallback: String) -> String {
+    NSImage(systemSymbolName: preferred, accessibilityDescription: nil) != nil ? preferred : fallback
+  }
+}
+
 extension Image {
   /// An SF Symbol image with a graceful fallback for OS versions where `preferred` doesn't exist yet.
   ///

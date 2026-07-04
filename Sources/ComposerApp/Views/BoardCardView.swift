@@ -213,6 +213,9 @@ struct BoardCardView: View {
   private func commitMove(_ translation: CGSize) {
     moveDelta = .zero
     board.clearEquationDropTarget()
+    // Retire guides on every drag end — including the click and ⌥-duplicate branches below that
+    // never reach the single-card snap commit.
+    board.clearSnapGuides()
     let wasDuplicating = duplicateDragStarted
     duplicateDragStarted = false
     duplicateDragArmed = false
@@ -234,13 +237,18 @@ struct BoardCardView: View {
       return
     }
     guard !card.locked else { return }
-    let boardDelta = CGSize(width: translation.width / zoom, height: translation.height / zoom)
     if board.selectedCardIDs.contains(card.id), board.selectedCardIDs.count > 1 {
       board.finishMovePreview(commit: true)
     } else {
+      // Snap the committed frame through the same helper the preview used, so what landed on screen
+      // is what commits (preview==commit). The helper also clears its guides via the setFrame path
+      // below, but we clear explicitly so a no-op commit still retires the hairlines.
+      let proposed = CGSize(width: translation.width / zoom, height: translation.height / zoom)
+      let snapped = board.snappedDelta(for: [card.id], proposed: proposed, tolerance: 8 / zoom)
+      board.clearSnapGuides()
       board.setFrame(card.id, CGRect(
-        x: card.x + boardDelta.width,
-        y: card.y + boardDelta.height,
+        x: card.x + snapped.width,
+        y: card.y + snapped.height,
       width: card.w, height: card.h))
       // The single-card path skips finishMovePreview, so it needs its own equation→graph drop.
       if isEquationElement { board.absorbEquationDropIfNeeded(card.id) }
@@ -256,13 +264,18 @@ struct BoardCardView: View {
       duplicateDragStarted = true
     }
     if duplicateDragStarted {
-      board.updateMovePreview(by: CGSize(width: translation.width / zoom, height: translation.height / zoom))
+      board.updateMovePreview(by: CGSize(width: translation.width / zoom, height: translation.height / zoom), tolerance: 8 / zoom)
       return
     }
     if board.selectedCardIDs.contains(card.id), board.selectedCardIDs.count > 1 {
-      board.updateMovePreview(by: CGSize(width: translation.width / zoom, height: translation.height / zoom))
+      board.updateMovePreview(by: CGSize(width: translation.width / zoom, height: translation.height / zoom), tolerance: 8 / zoom)
     } else {
-      moveDelta = translation
+      // Single card: snap in board space through the shared helper (which publishes the guides),
+      // then scale back to screen space — `liveFrame` divides `moveDelta` by zoom, so the card
+      // sticks to exactly the snapped position the commit will land on.
+      let proposed = CGSize(width: translation.width / zoom, height: translation.height / zoom)
+      let snapped = board.snappedDelta(for: [card.id], proposed: proposed, tolerance: 8 / zoom)
+      moveDelta = CGSize(width: snapped.width * zoom, height: snapped.height * zoom)
     }
     // A lone equation dragged onto a graph gets a drop-target highlight; the absorb itself is the
     // engine's on the move-commit. Only equations bother computing this (updateEquationDropTarget bails otherwise).

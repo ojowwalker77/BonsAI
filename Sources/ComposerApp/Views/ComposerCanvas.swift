@@ -339,6 +339,7 @@ struct ComposerCanvas: View {
       selectionRectView
       freehandDraftView
       elementDraftView
+      snapGuidesOverlay
 
       // Board-wide pinch-to-zoom, so it works no matter what's under the cursor (card, dock,
       // toolbar, editing text view). Transparent to clicks; only listens for magnify.
@@ -417,6 +418,50 @@ struct ComposerCanvas: View {
       }
       ElementDraftPreview(kind: kind, start: draft.start, end: draft.end)
         .allowsHitTesting(false)
+    }
+  }
+
+  /// Quiet alignment hairlines while a card MOVE drag snaps. Board→viewport maps with the exact
+  /// card-layer transform (× effectiveScale, offset by pan + panLive); each guide spans its own
+  /// start→end with a small overshoot so the alignment reads at a glance. 1pt accent lines at 0.6,
+  /// pointer-transparent, and NEVER animated — snapping must feel instant.
+  @ViewBuilder
+  private var snapGuidesOverlay: some View {
+    if !board.snapGuides.isEmpty {
+      let overshoot: CGFloat = 8
+      Path { path in
+        for guide in board.snapGuides {
+          let position = guide.position * effectiveScale + originOffset(for: guide.axis)
+          let start = guide.start * effectiveScale + originOffset(perpendicularTo: guide.axis) - overshoot
+          let end = guide.end * effectiveScale + originOffset(perpendicularTo: guide.axis) + overshoot
+          switch guide.axis {
+          case .vertical:   // a line at x == position, spanning y
+            path.move(to: CGPoint(x: position, y: start))
+            path.addLine(to: CGPoint(x: position, y: end))
+          case .horizontal: // a line at y == position, spanning x
+            path.move(to: CGPoint(x: start, y: position))
+            path.addLine(to: CGPoint(x: end, y: position))
+          }
+        }
+      }
+      .stroke(Theme.Palette.accent.opacity(0.6), lineWidth: 1)
+      .allowsHitTesting(false)
+    }
+  }
+
+  /// The pan translation along a guide's own axis (vertical guide → x pan, horizontal → y pan).
+  private func originOffset(for axis: SnapEngine.Axis) -> CGFloat {
+    switch axis {
+    case .vertical:   return pan.width + panLive.width
+    case .horizontal: return pan.height + panLive.height
+    }
+  }
+
+  /// The pan translation perpendicular to a guide's axis (used to place its span endpoints).
+  private func originOffset(perpendicularTo axis: SnapEngine.Axis) -> CGFloat {
+    switch axis {
+    case .vertical:   return pan.height + panLive.height
+    case .horizontal: return pan.width + panLive.width
     }
   }
 
@@ -1462,6 +1507,16 @@ struct ComposerCanvas: View {
       PaletteCommand(id: "focus", title: "Focus write", subtitle: "Expand the current card into a writing sheet", symbol: "rectangle.expand.vertical", shortcut: "⇧⌘F") { toggleFocus() },
       PaletteCommand(id: "add-graph", title: "Add graph to board", subtitle: "Blank axes at the center of the view", symbol: "chart.xyaxis.line") { addGraphToBoard() },
     ]
+    // Tidy: the human's reach for the agent's `relayout`. Board-wide re-flow needs ≥2 cards; the
+    // selection variant appears only when ≥2 cards are selected. Symbol probes the running OS so it
+    // degrades below `wand.and.sparkles`'s macOS-15 floor.
+    let tidySymbol = SFSymbolName.resolve("wand.and.sparkles", fallback: "sparkles")
+    if board.cards.count > 1 {
+      commands.append(PaletteCommand(id: "tidy-board", title: "Tidy board", subtitle: "Re-flow every card into a clean layout", symbol: tidySymbol) { tidyBoard() })
+    }
+    if board.selectedCardIDs.count > 1 {
+      commands.append(PaletteCommand(id: "tidy-selection", title: "Tidy selection", subtitle: "Re-flow the selected cards in place", symbol: tidySymbol) { tidySelection() })
+    }
     if let card = solelySelectedCard {
       let kind = card.elementKind
       if kind == .line || kind == .arrow {
@@ -1486,6 +1541,19 @@ struct ComposerCanvas: View {
     let id = board.addGraph(at: boardPoint(forViewport: viewportCenter))
     board.select(id)
     board.beginEditing(id)
+  }
+
+  /// Board-wide tidy: re-flow everything, then fit the result into view (with animation) the way the
+  /// old palette Fit command did, so the user sees the whole cleaned board.
+  private func tidyBoard() {
+    board.relayout()
+    withAnimation(Theme.Motion.accessory) { fitBoard(in: lastViewportSize, forceAll: true) }
+  }
+
+  /// Selection tidy re-flows only the selected cards and keeps them where they were (center held in
+  /// relayoutSelection), so it does NOT fit — a corner tidies without the camera jumping.
+  private func tidySelection() {
+    board.relayoutSelection()
   }
 
   private func convertLineToGraph(_ id: UUID) {

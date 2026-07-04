@@ -123,6 +123,11 @@ final class BoardViewModel: ObservableObject {
   /// leaves or ends. Graph cards read it to draw the accent drop-target ring.
   @Published private(set) var equationDropTargetID: UUID?
 
+  /// Alignment guide lines to draw while a card MOVE drag is snapping (board space). Set from the
+  /// live preview via `snappedDelta(for:proposed:)`, and ALWAYS cleared on commit/cancel/clear so
+  /// the hairlines never outlive the gesture.
+  @Published private(set) var snapGuides: [SnapEngine.Guide] = []
+
   private var interactions: [UUID: CardInteraction] = [:]
   private var movePreviewIDs: Set<UUID> = []
   private var movePreviewDelta: CGSize = .zero
@@ -1155,6 +1160,59 @@ final class BoardViewModel: ObservableObject {
     }
   }
 
+  /// Human "Tidy selection": re-flow ONLY the selected cards through the same `BoardLayout`
+  /// machinery as `relayout`, using the selected subset as nodes and the arrows/lines among them as
+  /// edges. The laid-out result is then translated so the subset's new bounding-box center matches
+  /// its old one — tidying a corner of the board never teleports it. One undo step; the selection
+  /// stays selected. No-ops with fewer than two layout nodes selected.
+  func relayoutSelection(direction: LayoutDirection = .down) {
+    let selectedNodes = cards.filter { selectedCardIDs.contains($0.id) && Self.isLayoutNode($0) }
+    guard selectedNodes.count > 1 else { return }
+    let nodeIDs = Set(selectedNodes.map(\.id))
+    // Edges are the bound arrows/lines whose BOTH endpoints are in the selected subset — the same
+    // rule relayout uses, narrowed to the subset so an edge to an off-board node never pulls layout.
+    let edges: [BoardLayout.Edge] = cards.compactMap { card in
+      guard card.elementKind == .arrow || card.elementKind == .line,
+            let from = card.startBindingID, let to = card.endBindingID,
+            nodeIDs.contains(from), nodeIDs.contains(to), from != to
+      else { return nil }
+      return BoardLayout.Edge(from: from, to: to)
+    }
+
+    let oldCenter = Self.centerOfRects(selectedNodes.map(\.frame))
+
+    registerUndo()
+    suppressUndo = true
+    defer { suppressUndo = false; refreshBoundArrows(); scheduleSave() }
+
+    var config = BoardLayout.Config()
+    config.direction = direction
+    config.origin = CGPoint(x: selectedNodes.map(\.x).min() ?? 120, y: selectedNodes.map(\.y).min() ?? 120)
+    let layoutNodes = selectedNodes.map { BoardLayout.Node(id: $0.id, size: CGSize(width: $0.w, height: $0.h)) }
+    let positions = BoardLayout.layout(nodes: layoutNodes, edges: edges, config: config)
+
+    // Recentre: BoardLayout places from `origin`, so the laid-out subset can drift. Shift it back so
+    // its new bounding box shares the old center — the corner tidies in place.
+    let laidRects = positions.compactMap { id, point -> CGRect? in
+      guard let card = cards.first(where: { $0.id == id }) else { return nil }
+      return CGRect(x: point.x, y: point.y, width: card.w, height: card.h)
+    }
+    let newCenter = Self.centerOfRects(laidRects)
+    let shift = CGSize(width: oldCenter.x - newCenter.x, height: oldCenter.y - newCenter.y)
+
+    for (id, point) in positions {
+      guard let i = cards.firstIndex(where: { $0.id == id }) else { continue }
+      cards[i].x = Double(point.x + shift.width)
+      cards[i].y = Double(point.y + shift.height)
+    }
+  }
+
+  /// Center of the union bounding box of `rects` (empty → origin).
+  private static func centerOfRects(_ rects: [CGRect]) -> CGPoint {
+    guard let union = unionRect(rects) else { return .zero }
+    return CGPoint(x: union.midX, y: union.midY)
+  }
+
   /// Insert a text card and let the board pick a non-overlapping spot — used when an agent adds a
   /// one-off card without (or not caring about) coordinates.
   @discardableResult
@@ -1417,7 +1475,46 @@ final class BoardViewModel: ObservableObject {
     scheduleSave()
   }
 
+  /// The single source of truth for move snapping: snaps `proposed` (board-space delta) so the
+  /// union bounding rect of `movingIDs` aligns to nearby peers, publishes the resulting guide lines,
+  /// and returns the adjusted delta. Both move paths call this so preview and commit share the exact
+  /// same rule (the bind-preview house rule) and both publish the same guides. `tolerance` is in
+  /// board space (callers pass `8 / zoom` for the 8pt screen-space threshold). Peers are every
+  /// non-moving, non-archived card frame. Returns `proposed` unchanged (and clears guides) when the
+  /// moving set is empty or nothing lands within tolerance.
+  func snappedDelta(for movingIDs: Set<UUID>, proposed: CGSize, tolerance: CGFloat) -> CGSize {
+    guard !movingIDs.isEmpty else {
+      if !snapGuides.isEmpty { snapGuides = [] }
+      return proposed
+    }
+    let movingFrames = cards.filter { movingIDs.contains($0.id) }.map(\.frame)
+    guard let union = Self.unionRect(movingFrames) else {
+      if !snapGuides.isEmpty { snapGuides = [] }
+      return proposed
+    }
+    let peers = cards
+      .filter { !movingIDs.contains($0.id) && !$0.isArchived }
+      .map(\.frame)
+    let result = SnapEngine.snap(moving: union, proposedDelta: proposed, others: peers, tolerance: tolerance)
+    if snapGuides != result.guides { snapGuides = result.guides }
+    return result.delta
+  }
+
+  /// The tight bounding box of `frames`, or nil when empty. Used to snap a multi-card move as one
+  /// rigid unit (a single card is its own frame).
+  private static func unionRect(_ frames: [CGRect]) -> CGRect? {
+    guard var union = frames.first else { return nil }
+    for frame in frames.dropFirst() { union = union.union(frame) }
+    return union
+  }
+
   func updateMovePreview(by delta: CGSize) {
+    updateMovePreview(by: delta, tolerance: 0)
+  }
+
+  /// Move preview with alignment snapping. `tolerance` is the board-space snap threshold (the view
+  /// passes `8 / zoom`); `0` disables snapping for callers that don't thread a zoom.
+  func updateMovePreview(by rawDelta: CGSize, tolerance: CGFloat) {
     let moving = unlockedIDs(in: selectedCardIDs)
     // A multi-selection can contain locked cards. Preview the unlocked subset even when it has
     // only one member, because BoardCardView still commits through finishMovePreview for the
@@ -1427,6 +1524,7 @@ final class BoardViewModel: ObservableObject {
       clearMovePreview()
       movePreviewIDs = moving
     }
+    let delta = snappedDelta(for: moving, proposed: rawDelta, tolerance: tolerance)
     movePreviewDelta = delta
     for id in moving {
       interactions[id]?.dragDelta = delta
@@ -1575,12 +1673,21 @@ final class BoardViewModel: ObservableObject {
     clearMovePreview()
   }
 
+  /// Retire the alignment hairlines. The single-card move path publishes guides directly (it doesn't
+  /// go through `clearMovePreview`), so its commit/cancel branches call this to end the gesture.
+  func clearSnapGuides() {
+    if !snapGuides.isEmpty { snapGuides = [] }
+  }
+
   private func clearMovePreview() {
     for id in movePreviewIDs {
       interactions[id]?.dragDelta = .zero
     }
     movePreviewIDs = []
     movePreviewDelta = .zero
+    // Guides belong to a live drag only — every commit/cancel/clear routes through here, so this is
+    // the one place that guarantees the hairlines vanish the instant the gesture ends.
+    if !snapGuides.isEmpty { snapGuides = [] }
   }
 
   private func detachMovedArrows(_ ids: Set<UUID>) {
