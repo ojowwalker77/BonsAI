@@ -68,6 +68,10 @@ struct ComposerCanvas: View {
   @State private var pan: CGSize = .zero
   @State private var panLive: CGSize = .zero
 
+  /// The ⇧⌘F writing sheet's card. Separate from `editingCardID` on purpose: text edits inline on
+  /// the board; the centered sheet is an explicit summon, not what double-click does.
+  @State private var focusedCardID: UUID?
+
   /// The promotion seam's one live offer (freehand→shape, text→equation/cards, axes→graph) — the
   /// floating chip near the recognized card. At most one at a time; nil hides the chip. Armed at the
   /// human-gesture hooks (freehand/draw commit, edit end, single selection) and dismissed on any new
@@ -529,7 +533,11 @@ struct ComposerCanvas: View {
   private func handleDoubleTap(at point: CGPoint) {
     let id = board.addCard(at: boardPoint(forViewport: point))
     tool = .select
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.beginEditing(id) }
+    // Text edits inline: begin editing, then hand the caret to the in-card editor once it mounts.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+      board.beginEditing(id)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { board.interaction(for: id).controller.focus() }
+    }
   }
 
   /// The draft segment changed (viewport space). Store it, and for a line/arrow resolve the card its
@@ -962,30 +970,52 @@ struct ComposerCanvas: View {
     withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
   }
 
-  // MARK: Editing stage — the one centered surface for every card edit
+  // MARK: Editing stage — the centered surface for structured edits (+ the ⇧⌘F writing sheet)
 
-  /// ⇧⌘F begins editing the appropriate text card in the stage — the text stage IS the old focus
-  /// sheet, so this is now just "open the writing surface". Candidate logic unchanged: the editing
-  /// interaction, else the primary selection, else the first text card. A second press ends editing.
+  /// ⇧⌘F: the current text card expands into the centered writing sheet — the stage's text surface,
+  /// summoned EXPLICITLY. Double-click writes inline on the board (writing is the core act and it
+  /// stays in place); the sheet is opt-in. Candidate logic unchanged: the editing interaction, else
+  /// the primary selection, else the first text card. A second press drops back to the board.
   private func toggleFocus() {
-    if let editing = board.editingCardID { board.endEditing(editing); return }
+    if focusedCardID != nil { closeFocus(); return }
     let candidate = board.editingInteraction?.id
       ?? board.primarySelectedCardID
       ?? board.cards.first(where: { $0.elementKind == .text })?.id
     guard let id = candidate,
           board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
-    withAnimation(Theme.Motion.accessory) { board.beginEditing(id) }
+    // Hand the single editor over: capture the inline editor's state and unmount it first.
+    board.interaction(for: id).captureEditorState()
+    board.endEditing(id)
+    withAnimation(Theme.Motion.accessory) { focusedCardID = id }
   }
 
-  /// The unified editing surface, presented whenever a card is being edited — text, equation, graph,
-  /// or a shape/line label. It recedes the board behind a scrim and elevates the per-kind editor on
-  /// centered glass, replacing the old per-card in-card chrome (and the focus sheet, now the text
-  /// stage). `editingCardID` is the single source of truth; freehand/image never open one.
+  private func closeFocus() {
+    guard let id = focusedCardID else { return }
+    board.interaction(for: id).captureEditorState()
+    withAnimation(Theme.Motion.accessory) { focusedCardID = nil }
+    board.scheduleSave()
+  }
+
+  /// The unified editing surface for STRUCTURED edits — equation, graph, shape/line label — plus
+  /// the ⇧⌘F writing sheet (`focusedCardID`). Text otherwise edits inline on the board and never
+  /// opens a stage from `editingCardID`; freehand/image never open one at all.
   @ViewBuilder
   private func editingStageOverlay(in size: CGSize) -> some View {
-    if let id = board.editingCardID,
+    if let id = focusedCardID,
+       let card = board.cards.first(where: { $0.id == id }), card.elementKind == .text {
+      EditingStage(
+        board: board,
+        card: card,
+        interaction: board.interaction(for: id),
+        size: size,
+        isWorking: isWorking,
+        askEngine: resolvedChatEngine(),
+        onClose: { closeFocus() }
+      )
+      .id(id)
+    } else if let id = board.editingCardID,
        let card = board.cards.first(where: { $0.id == id }),
-       card.elementKind != .freehand, card.elementKind != .image {
+       card.elementKind != .freehand, card.elementKind != .image, card.elementKind != .text {
       EditingStage(
         board: board,
         card: card,
@@ -1215,11 +1245,25 @@ struct ComposerCanvas: View {
     return CGPoint(x: local.x, y: content.isFlipped ? local.y : content.bounds.height - local.y)
   }
 
+  /// Whether the board may pan/zoom right now. Stage edits (equation/graph/label) are modal —
+  /// events that leak through the scrim (scrollWheel/magnify land on the NSViews beneath SwiftUI
+  /// layers) are swallowed so they can't shift the board or tear down an in-flight draft. Inline
+  /// TEXT editing lives ON the board, so pan/zoom stays live there; only the caret-anchored popups
+  /// (mentions, inline search, lint) are dropped first so they don't drift off their anchor.
+  private func allowPanZoom() -> Bool {
+    guard let id = board.editingCardID,
+          let kind = board.cards.first(where: { $0.id == id })?.elementKind else { return true }
+    guard kind == .text else { return false }
+    if let editing = board.editingInteraction {
+      if editing.mentions.isOpen { editing.mentions.isOpen = false; editing.mentions.items = [] }
+      if editing.appSearch.isOpen { editing.appSearch.isOpen = false }
+      if editing.lint.activeFlagID != nil { editing.lint.activeFlagID = nil }
+    }
+    return true
+  }
+
   private func zoom(_ factor: CGFloat, anchoredAt point: CGPoint) {
-    // The editing stage is modal: pan/zoom events that leak through its scrim (scrollWheel and
-    // magnify land on the NSViews beneath SwiftUI layers) must not shift the board or, worse,
-    // tear down an in-flight draft the way ending the session would. Swallow them.
-    guard board.editingCardID == nil else { return }
+    guard allowPanZoom() else { return }
     let oldScale = max(scale, 0.01)
     let nextScale = clampZoom(oldScale * factor)
     guard nextScale != scale else { return }
@@ -1235,7 +1279,7 @@ struct ComposerCanvas: View {
   }
 
   private func handleScroll(_ delta: CGSize) {
-    guard board.editingCardID == nil else { return }
+    guard allowPanZoom() else { return }
     viewportThrottle.enqueueScroll(delta) { applied in
       pan.width += applied.width
       pan.height += applied.height
@@ -1337,11 +1381,13 @@ struct ComposerCanvas: View {
   private func handlePasteSelection() { if canEditBoard { pasteSelectedCards() } }
   private func handleSelectAllCards() { if canEditBoard { board.selectAll() } }
   private func handleEscapeBoard() {
-    // A live promotion chip is the shallowest thing Esc can dismiss — retract it and swallow the
-    // keystroke so it doesn't also revert the tool or drop the selection underneath.
+    // The ⇧⌘F writing sheet closes first — it owns the screen while it's up.
+    if focusedCardID != nil { closeFocus(); return }
+    // A live promotion chip is the shallowest board-level thing Esc can dismiss — retract it and
+    // swallow the keystroke so it doesn't also revert the tool or drop the selection underneath.
     if promotion != nil { dismissPromotion(); return }
-    // While a card is being edited the stage owns Esc (its own editor consumes it, per-kind), so the
-    // board Esc cascade must not also fire — return before touching the tool/selection underneath.
+    // While a card is being edited its editor owns Esc (inline text resigns focus; stage editors
+    // cancel per-kind), so the board Esc cascade must not also fire.
     if board.editingInteraction != nil { return }
     // Esc mid-draw abandons the in-flight shape/freehand: clear the preview state here (the
     // InputView, listening for the same escape, drops its own drag so the pending mouse-up can't
@@ -1481,9 +1527,14 @@ struct ComposerCanvas: View {
     showPalette = false
     guard let id = paletteReturnCardID else { return }
     paletteReturnCardID = nil
-    guard board.cards.contains(where: { $0.id == id }) else { return }
+    guard let card = board.cards.first(where: { $0.id == id }) else { return }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
       board.beginEditing(id)
+      // Stage kinds refocus their own fields on appear; the inline text editor needs the caret
+      // handed back explicitly.
+      if card.elementKind == .text {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { board.interaction(for: id).controller.focus() }
+      }
     }
   }
 

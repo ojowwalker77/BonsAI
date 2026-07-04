@@ -97,6 +97,11 @@ struct BoardCardView: View {
         // The Point Composer belongs to a selected graph; drop it if the card loses selection.
         if !selected { pointComposer = nil }
       }
+      .onChange(of: card.tint) { _, _ in applyEditorTint() }
+      .onChange(of: isEditing) { _, editing in
+        // The inline text editor mounts a beat after editing flips on; recolor once it exists.
+        if editing { DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { applyEditorTint() } }
+      }
       .onReceive(NotificationCenter.default.publisher(for: .composerAddGraphPoint)) { note in
         // The ⌘K "Add point to graph…" command targets a graph card by id; only that card responds,
         // ensures it's selected, and opens the composer seeded at the middle of its axis ranges.
@@ -112,21 +117,64 @@ struct BoardCardView: View {
 
   // MARK: Body (editor + move/select catcher)
 
-  /// The card ALWAYS renders statically now — even while it's being edited, because its editor
-  /// mounts in the centered `EditingStage` and this card sits behind the scrim. The stage seeds its
-  /// draft from the card and commits through the board, so the static render only needs the
-  /// committed serialized text/spec (with the graph carve-outs for ⌥-click points and marker drag,
-  /// which are gestures, not an edit session, and so stay live here).
+  /// TEXT edits inline, on the board — writing is the core act and it stays in place; only the
+  /// structured editors (equation, graph, labels) present in the centered `EditingStage`, and the
+  /// writing sheet remains an explicit ⇧⌘F summon. So: a text card being edited mounts the live
+  /// editor right here; every other kind renders statically while its stage floats above (the graph
+  /// carve-outs — ⌥-click points, marker drag — are gestures, not edit sessions, and stay live).
   private var cardBody: some View {
     ZStack(alignment: .topLeading) {
-      // Non-editing cards render from the serialized plain text (tokens like "@github"), so
-      // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
-      // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
-      // zoom so the text is laid out at screen size (crisp), not stretched.
-      CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: board.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
-        .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
-        .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
-        .allowsHitTesting(false)
+      if isEditing, isTextElement {
+        FreeWriteEditor(
+          text: $interaction.text,
+          initialAttributedText: interaction.attributedSnapshot,
+          initialInk: interaction.ink,
+          placeholder: "Brain dump\u{2026}",
+          onCountChange: { interaction.count = $0 },
+          onSelectionChange: { interaction.selection = $0 },
+          onEscape: { interaction.controller.resignFocus() },
+          onFocusChange: { active in
+            if active {
+              board.beginEditing(card.id)
+            } else if !interaction.appSearch.isOpen, !interaction.mentions.isOpen {
+              // The editor only truly stopped editing if focus left for a real reason (a
+              // click-away) — not because our own inline search field or mention menu took
+              // first responder. Tearing down editing there would kill the very popup the
+              // user is picking from.
+              board.endEditing(card.id)
+            }
+          },
+          onHeightChange: { contentHeight in
+            // + the editor's vertical padding below, so the card frame fits the text exactly.
+            board.fitTextHeight(card.id, to: contentHeight + 20)
+          },
+          boardContext: { board.lintContext(excluding: card.id) },
+          definedVariables: { board.definedVariableNames },
+          cardTint: { card.tint },
+          mentions: interaction.mentions,
+          appSearch: interaction.appSearch,
+          controller: interaction.controller,
+          lint: interaction.lint,
+          refine: interaction.refine,
+          store: DumpStore.shared
+        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        // The live editor keeps its native (board-size) layout and is scaled to fill the card.
+        // Its text softens only while you're actively editing this one card — every other card
+        // is layout-zoomed and stays crisp. Anchored top-left to line up with the static render.
+        .frame(width: liveFrame.width, height: liveFrame.height, alignment: .topLeading)
+        .scaleEffect(zoom, anchor: .topLeading)
+      } else {
+        // Non-editing cards render from the serialized plain text (tokens like "@github"), so
+        // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
+        // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
+        // zoom so the text is laid out at screen size (crisp), not stretched.
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: board.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
+          .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
+          .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
+          .allowsHitTesting(false)
+      }
 
       // Select on mouse-down so handles appear immediately. SwiftUI's separate
       // single/double tap recognizers wait out the double-click interval first.
@@ -208,6 +256,30 @@ struct BoardCardView: View {
   /// canvas guards `beginEditing` for them (a double-click there does nothing).
   private func enterEditing() {
     board.beginEditing(card.id)
+    // Text edits inline — hand the caret to the just-mounted in-card editor. Stage kinds focus
+    // their own fields on appear.
+    if isTextElement {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { interaction.controller.focus() }
+    }
+  }
+
+  /// Recolor the LIVE editor's text to the card's tint: every run except chips (marked with
+  /// `.mentionToken`) and per-range ink (marked with `.inkSlot`) takes the ink, and the typing
+  /// attributes follow so new text matches. Inked spans keep their own color so a whole-card tint
+  /// never stomps range ink.
+  private func applyEditorTint() {
+    guard isEditing, isTextElement,
+          let tv = interaction.controller.coordinator?.textView, let storage = tv.textStorage else { return }
+    let color = Theme.tintColor(card.tint) ?? Theme.nsBodyText
+    let full = NSRange(location: 0, length: storage.length)
+    storage.beginEditing()
+    storage.enumerateAttributes(in: full, options: []) { attrs, range, _ in
+      guard attrs[.mentionToken] == nil, attrs[.inkSlot] == nil else { return }
+      storage.addAttribute(.foregroundColor, value: color, range: range)
+    }
+    storage.endEditing()
+    tv.typingAttributes[.foregroundColor] = color
+    tv.insertionPointColor = Theme.tintColor(card.tint) ?? Theme.Palette.nsAccent
   }
 
   private func commitMove(_ translation: CGSize) {
