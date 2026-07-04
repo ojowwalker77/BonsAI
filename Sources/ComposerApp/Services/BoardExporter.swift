@@ -62,8 +62,7 @@ enum BoardExporter {
       scale: 1,
       selectable: false,
       failedShellCommands: board.failedShellCommands,
-      equationDropTargetID: nil,
-      onEscape: {}
+      equationDropTargetID: nil
     )
     .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
     .offset(x: -bounds.minX, y: -bounds.minY)

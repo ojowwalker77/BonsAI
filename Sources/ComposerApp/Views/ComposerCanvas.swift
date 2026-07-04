@@ -37,8 +37,6 @@ struct ComposerCanvas: View {
   @State private var showAgent = false
   /// The ⌘K command palette (board switcher + buried board-level actions) is showing.
   @State private var showPalette = false
-  /// The card expanded into the centered focus-writing sheet (nil = normal board).
-  @State private var focusedCardID: UUID?
   /// The tint swatch row in the bottom bar is expanded.
   @State private var tintPickerOpen = false
   /// The board picker opens on hover; a short grace timer stops it flickering while the pointer
@@ -133,7 +131,7 @@ struct ComposerCanvas: View {
       boardActionsPill(in: proxy.size)
       bottomCommandBar(fit: inner)
       dockOverlay(in: proxy.size)
-      focusOverlay(in: proxy.size)
+      editingStageOverlay(in: proxy.size)
       commandPaletteOverlay(in: proxy.size)
       commandBridge
     }
@@ -304,8 +302,7 @@ struct ComposerCanvas: View {
         // drag that starts over it draws a new element instead of selecting/moving the card.
         selectable: tool == .select,
         failedShellCommands: board.failedShellCommands,
-        equationDropTargetID: board.equationDropTargetID,
-        onEscape: { dismiss() }
+        equationDropTargetID: board.equationDropTargetID
       )
       .equatable()
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -447,14 +444,10 @@ struct ComposerCanvas: View {
                              y: (point.y - pan.height) / effectiveScale)
     let id = board.addElement(kind, at: boardPoint)
     tool = .select
-    if kind == .text {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-        board.interaction(for: id).controller.focus()
-      }
-    } else if kind == .equation {
-      // Mirror the text tool: a placed equation is empty and useless until you type LaTeX, so
-      // drop straight into edit mode. Its editor is the SwiftUI strip below the card (no NSTextView
-      // to focus), so the same post-place delay just lets the card mount before edit mode arms it.
+    // Text and equation both drop straight into edit mode — an empty card is useless until you
+    // type. The editor now lives in the centered `EditingStage` (keyed off `editingCardID`), which
+    // owns its own focus delay, so both kinds just arm edit mode after the card mounts.
+    if kind == .text || kind == .equation {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
         board.beginEditing(id)
       }
@@ -466,7 +459,7 @@ struct ComposerCanvas: View {
   private func handleDoubleTap(at point: CGPoint) {
     let id = board.addCard(at: boardPoint(forViewport: point))
     tool = .select
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.interaction(for: id).controller.focus() }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.beginEditing(id) }
   }
 
   /// The draft segment changed (viewport space). Store it, and for a line/arrow resolve the card its
@@ -894,81 +887,40 @@ struct ComposerCanvas: View {
     withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
   }
 
-  // MARK: Focus mode — one card as a centered writing sheet
+  // MARK: Editing stage — the one centered surface for every card edit
 
-  /// ⇧⌘F: the current text card expands into a comfortable, centered writing surface at 100%
-  /// scale — same text, same editor, same chips — and Esc drops it back on the board.
+  /// ⇧⌘F begins editing the appropriate text card in the stage — the text stage IS the old focus
+  /// sheet, so this is now just "open the writing surface". Candidate logic unchanged: the editing
+  /// interaction, else the primary selection, else the first text card. A second press ends editing.
   private func toggleFocus() {
-    if focusedCardID != nil { closeFocus(); return }
+    if let editing = board.editingCardID { board.endEditing(editing); return }
     let candidate = board.editingInteraction?.id
       ?? board.primarySelectedCardID
       ?? board.cards.first(where: { $0.elementKind == .text })?.id
     guard let id = candidate,
           board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
-    // Hand the single editor over: capture the board editor's state and unmount it first.
-    board.interaction(for: id).captureEditorState()
-    board.endEditing(id)
-    withAnimation(Theme.Motion.accessory) { focusedCardID = id }
+    withAnimation(Theme.Motion.accessory) { board.beginEditing(id) }
   }
 
-  private func closeFocus() {
-    guard let id = focusedCardID else { return }
-    board.interaction(for: id).captureEditorState()
-    withAnimation(Theme.Motion.accessory) { focusedCardID = nil }
-    board.scheduleSave()
-  }
-
+  /// The unified editing surface, presented whenever a card is being edited — text, equation, graph,
+  /// or a shape/line label. It recedes the board behind a scrim and elevates the per-kind editor on
+  /// centered glass, replacing the old per-card in-card chrome (and the focus sheet, now the text
+  /// stage). `editingCardID` is the single source of truth; freehand/image never open one.
   @ViewBuilder
-  private func focusOverlay(in size: CGSize) -> some View {
-    if let id = focusedCardID {
-      let interaction = board.interaction(for: id)
-      ZStack {
-        // The board recedes; a click on it returns you to it.
-        Theme.Palette.windowCanvas.opacity(0.72)
-          .contentShape(Rectangle())
-          .onTapGesture { closeFocus() }
-
-        VStack(spacing: 0) {
-          HStack {
-            Text("Focus")
-              .font(WindowChrome.labelFont)
-              .foregroundStyle(Theme.Palette.menuDesc)
-            Spacer(minLength: 8)
-            SidebarButton(symbol: "arrow.down.right.and.arrow.up.left",
-                          help: "Back to board  ·  Esc", side: 26) { closeFocus() }
-          }
-          .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 6)
-
-          FreeWriteEditor(
-            text: Binding(get: { interaction.text }, set: { interaction.text = $0 }),
-            initialAttributedText: interaction.attributedSnapshot,
-            placeholder: "Brain dump\u{2026}",
-            onCountChange: { interaction.count = $0 },
-            onSelectionChange: { interaction.selection = $0 },
-            onEscape: { closeFocus() },
-            onFocusChange: { _ in },
-            onHeightChange: { _ in },
-            boardContext: { board.lintContext(excluding: id) },
-            definedVariables: { board.definedVariableNames },
-            mentions: interaction.mentions,
-            appSearch: interaction.appSearch,
-            controller: interaction.controller,
-            lint: interaction.lint,
-            refine: interaction.refine,
-            store: DumpStore.shared
-          )
-          .padding(.horizontal, 28)
-          .padding(.bottom, 22)
-        }
-        .frame(width: min(720, size.width * 0.72), height: min(640, size.height * 0.82))
-        .dockPanelSurface()
-        .shadow(color: Theme.Shadow.panel.color, radius: Theme.Shadow.panel.radius, y: Theme.Shadow.panel.y)
-        .onAppear {
-          DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { interaction.controller.focus() }
-        }
-      }
-      .zIndex(70)
-      .transition(.opacity)
+  private func editingStageOverlay(in size: CGSize) -> some View {
+    if let id = board.editingCardID,
+       let card = board.cards.first(where: { $0.id == id }),
+       card.elementKind != .freehand, card.elementKind != .image {
+      EditingStage(
+        board: board,
+        card: card,
+        interaction: board.interaction(for: id),
+        size: size,
+        isWorking: isWorking,
+        askEngine: resolvedChatEngine(),
+        onClose: { board.endEditing(id) }
+      )
+      .id(id)
     }
   }
 
@@ -1050,9 +1002,11 @@ struct ComposerCanvas: View {
     CGPoint(x: lastViewportSize.width / 2, y: lastViewportSize.height / 2)
   }
 
-  /// Toolbar/keyboard zoom targets the current selection's center so the board doesn't lurch
-  /// back to center on every zoom; falls back to the viewport center with nothing selected.
+  /// Toolbar/keyboard zoom anchors at the pointer when it's over the canvas — the least-surprise
+  /// anchor, and the one pinch already uses. With the cursor elsewhere (menu-driven zoom) it falls
+  /// back to the selection's center, then the viewport center, so the board still doesn't lurch.
   private var zoomAnchor: CGPoint {
+    if let pointer = pointerViewportLocation() { return pointer }
     let selected = board.cards.filter { board.selectedCardIDs.contains($0.id) }
     guard !selected.isEmpty else { return viewportCenter }
     let midX = ((selected.map(\.x).min() ?? 0) + (selected.map { $0.x + $0.w }.max() ?? 0)) / 2
@@ -1061,11 +1015,24 @@ struct ComposerCanvas: View {
                    y: CGFloat(midY) * effectiveScale + pan.height)
   }
 
+  /// The pointer in viewport coordinates (top-left origin), or nil when it isn't over the window.
+  /// The canvas fills the content view edge to edge, so the content view IS the viewport; the
+  /// isFlipped check keeps this correct whether AppKit hands us a flipped hosting view or not.
+  private func pointerViewportLocation() -> CGPoint? {
+    guard let window = NSApp.keyWindow, let content = window.contentView else { return nil }
+    let local = content.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+    guard content.bounds.contains(local) else { return nil }
+    return CGPoint(x: local.x, y: content.isFlipped ? local.y : content.bounds.height - local.y)
+  }
+
   private func zoom(_ factor: CGFloat, anchoredAt point: CGPoint) {
+    // The editing stage is modal: pan/zoom events that leak through its scrim (scrollWheel and
+    // magnify land on the NSViews beneath SwiftUI layers) must not shift the board or, worse,
+    // tear down an in-flight draft the way ending the session would. Swallow them.
+    guard board.editingCardID == nil else { return }
     let oldScale = max(scale, 0.01)
     let nextScale = clampZoom(oldScale * factor)
     guard nextScale != scale else { return }
-    dismissEditorOverlays()
     let boardPoint = CGPoint(
       x: (point.x - pan.width) / oldScale,
       y: (point.y - pan.height) / oldScale
@@ -1078,8 +1045,8 @@ struct ComposerCanvas: View {
   }
 
   private func handleScroll(_ delta: CGSize) {
+    guard board.editingCardID == nil else { return }
     viewportThrottle.enqueueScroll(delta) { applied in
-      dismissEditorOverlays()
       pan.width += applied.width
       pan.height += applied.height
     }
@@ -1180,7 +1147,8 @@ struct ComposerCanvas: View {
   private func handlePasteSelection() { if canEditBoard { pasteSelectedCards() } }
   private func handleSelectAllCards() { if canEditBoard { board.selectAll() } }
   private func handleEscapeBoard() {
-    if focusedCardID != nil { closeFocus(); return }
+    // While a card is being edited the stage owns Esc (its own editor consumes it, per-kind), so the
+    // board Esc cascade must not also fire — return before touching the tool/selection underneath.
     if board.editingInteraction != nil { return }
     // Esc mid-draw abandons the in-flight shape/freehand: clear the preview state here (the
     // InputView, listening for the same escape, drops its own drag so the pending mouse-up can't
@@ -1222,28 +1190,23 @@ struct ComposerCanvas: View {
   // Rename only touches the board's name, never its cards — no flush/reload needed.
   private func renameBoard(_ id: PersistentIdentifier, to name: String) { store.rename(id, to: name) }
 
+  /// A fresh board's first card opens into its editing stage so the caret is ready. Only a text card
+  /// has a caret-first stage; a non-text first card is left selected.
   private func focusFirstCard() {
-    guard let id = board.cards.first?.id else { return }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.interaction(for: id).controller.focus() }
+    guard let id = board.cards.first?.id,
+          board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.beginEditing(id) }
   }
 
-  /// On panel open: enter editing on the active (or first) card so the caret is ready to type.
-  /// Never steals focus mid-edit or while an overlay/settings is up.
+  /// On panel open: enter editing on the active (or first) text card so the caret is ready to type.
+  /// The stage owns focus, so this just arms edit mode. Never steals it mid-edit or while an
+  /// overlay/settings is up.
   private func enterEditingForEntry() {
     guard board.editingInteraction == nil, !store.isSettingsOpen, store.compiledDraft == nil,
           !store.isHistoryOpen else { return }
     let id = board.primarySelectedCardID ?? board.cards.first?.id
     guard let id, board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
     board.beginEditing(id)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { board.interaction(for: id).controller.focus() }
-  }
-
-  /// A pan or zoom would strand caret-anchored overlays at a stale point, so close them.
-  private func dismissEditorOverlays() {
-    guard let editing = board.editingInteraction else { return }
-    if editing.mentions.isOpen { editing.mentions.isOpen = false; editing.mentions.items = [] }
-    if editing.appSearch.isOpen { editing.appSearch.isOpen = false }
-    if editing.lint.activeFlagID != nil { editing.lint.activeFlagID = nil }
   }
 
   /// The sidebar gear toggles Settings the way ⌘J / the rail toggle Agent: a second click on the
@@ -1305,10 +1268,10 @@ struct ComposerCanvas: View {
     // The compiled-draft overlay is a focused modal — dismiss it before opening the palette.
     guard store.compiledDraft == nil else { return }
     store.isHistoryOpen = false
-    // Capture the editing card now: mounting the palette's search field resigns the editor's
-    // first responder (async), which clears `board.editingCardID` before a later dismiss can read it.
+    // Capture the editing card, then end the edit session so its stage (zIndex 70) doesn't sit over
+    // the palette (zIndex 50). Cancel hands editing back by reopening the stage on the same card.
     paletteReturnCardID = board.editingCardID
-    dismissEditorOverlays()
+    if let id = board.editingCardID { board.endEditing(id) }
     showPalette = true
   }
 
@@ -1318,15 +1281,16 @@ struct ComposerCanvas: View {
     paletteReturnCardID = nil
   }
 
-  /// Cancel (Esc / click-away / a second ⌘K) closes the palette and returns the caret to the card
-  /// you were writing in when you summoned it — the palette stole first responder, so without this
-  /// you'd land back on the board instead of mid-sentence.
+  /// Cancel (Esc / click-away / a second ⌘K) closes the palette and hands editing back to the card
+  /// you summoned it from — reopening its stage (the palette dropped the edit session so it could sit
+  /// on top). Without this you'd land back on the bare board instead of mid-edit.
   private func dismissPalette() {
     showPalette = false
     guard let id = paletteReturnCardID else { return }
     paletteReturnCardID = nil
+    guard board.cards.contains(where: { $0.id == id }) else { return }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
-      board.interaction(for: id).controller.focus()
+      board.beginEditing(id)
     }
   }
 
@@ -1534,14 +1498,25 @@ struct ComposerCanvas: View {
     if let data = pasteboard.data(forType: cardPasteboardType) {
       do {
         let cards = try JSONDecoder().decode([CardState].self, from: data)
-        board.insertCopies(cards)
+        // Paste lands under the pointer (the set's bounding-box center on the cursor, relative
+        // layout preserved); the 28pt stagger only remains for pointer-less paste (menu-driven,
+        // cursor outside the window) so copies never stack invisibly on their originals.
+        if let pointer = pointerViewportLocation(), !cards.isEmpty {
+          let target = boardPoint(forViewport: pointer)
+          let midX = ((cards.map(\.x).min() ?? 0) + (cards.map { $0.x + $0.w }.max() ?? 0)) / 2
+          let midY = ((cards.map(\.y).min() ?? 0) + (cards.map { $0.y + $0.h }.max() ?? 0)) / 2
+          board.insertCopies(cards, offset: CGSize(width: target.x - CGFloat(midX),
+                                                   height: target.y - CGFloat(midY)))
+        } else {
+          board.insertCopies(cards)
+        }
       } catch {
         show(Toast(text: UserFacingError.message(for: error, while: "Reading selected cards from the clipboard"), symbol: "exclamationmark.triangle.fill", tint: .orange))
       }
       return
     }
     if let image = firstImage(from: pasteboard), let filename = image.ingest() {
-      board.addImageObject(path: filename, at: boardPoint(forViewport: viewportCenter))
+      board.addImageObject(path: filename, at: boardPoint(forViewport: pointerViewportLocation() ?? viewportCenter))
     }
   }
 
@@ -2344,7 +2319,6 @@ struct BoardCardLayer: View, Equatable {
   /// The graph card a parseable equation is currently dragged over (its accent drop-ring). Included
   /// in `==` so the ring appears/clears mid-drag even though nothing in `cards` changes.
   let equationDropTargetID: UUID?
-  var onEscape: () -> Void
 
   static func == (lhs: BoardCardLayer, rhs: BoardCardLayer) -> Bool {
     lhs.cards == rhs.cards &&
@@ -2367,8 +2341,7 @@ struct BoardCardLayer: View, Equatable {
           isEditing: editingCardID == card.id,
           scale: scale,
           board: board,
-          selectable: selectable,
-          onEscape: onEscape
+          selectable: selectable
         )
         .zIndex(Double(card.z) + (primarySelectedCardID == card.id ? 10_000 : 0))
       }

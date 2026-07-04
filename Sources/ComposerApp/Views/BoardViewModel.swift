@@ -126,6 +126,9 @@ final class BoardViewModel: ObservableObject {
   private var interactions: [UUID: CardInteraction] = [:]
   private var movePreviewIDs: Set<UUID> = []
   private var movePreviewDelta: CGSize = .zero
+  /// Set by `beginDragDuplicate` so the drag's finishMovePreview joins the duplicate's undo
+  /// checkpoint instead of opening a second one — the whole ⌥-drag gesture is one intention.
+  private var foldNextMoveUndo = false
   private var nextZ = 1
   private var undoStack: [HistorySnapshot] = []
   private var redoStack: [HistorySnapshot] = []
@@ -1268,15 +1271,40 @@ final class BoardViewModel: ObservableObject {
     for id in moving {
       interactions[id]?.dragDelta = delta
     }
+    // finishMovePreview absorbs a lone unlocked equation into the graph under it, so the drop ring
+    // must track this path too (it used to light up only for single-card drags — an absorb the
+    // affordance never promised). ⌥-drag duplicates also flow through here.
+    if moving.count == 1, let movedID = moving.first, let moved = card(id: movedID) {
+      updateEquationDropTarget(movedID: movedID, center: CGPoint(
+        x: moved.frame.midX + delta.width, y: moved.frame.midY + delta.height))
+    }
+  }
+
+  /// ⌥-drag duplicate, called once when an option-drag leaves the click dead-zone: snapshot the
+  /// board, leave the pressed selection in place (ids and arrow bindings intact), and insert bare
+  /// in-place copies that become the selection — the rest of the drag moves the copies through the
+  /// regular move preview. The paired finishMovePreview folds into this checkpoint, so one undo
+  /// removes the copies and the gesture entirely.
+  func beginDragDuplicate() {
+    let source = selectedCardsForClipboard()
+    guard !source.isEmpty else { return }
+    registerUndo()
+    let previousSuppressUndo = suppressUndo
+    suppressUndo = true
+    _ = insertCopies(source, offset: .zero)
+    suppressUndo = previousSuppressUndo
+    foldNextMoveUndo = true
   }
 
   func finishMovePreview(commit: Bool) {
     let ids = movePreviewIDs
     let delta = movePreviewDelta
+    let folded = foldNextMoveUndo
+    foldNextMoveUndo = false
     clearMovePreview()
     clearEquationDropTarget()
     guard commit, !ids.isEmpty, delta != .zero else { return }
-    registerUndo()
+    if !folded { registerUndo() }
     for i in cards.indices where ids.contains(cards[i].id) {
       cards[i].x += Double(delta.width)
       cards[i].y += Double(delta.height)
