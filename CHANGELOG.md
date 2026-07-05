@@ -12,6 +12,53 @@ under the new version heading.
 ## [Unreleased]
 
 
+## [1.4.1] - 2026-07-04
+
+### Added
+- **Sketch a shape, get the real thing.** Draw a rough rectangle, ellipse, diamond, line, or arrow
+  with the freehand tool and a quiet chip appears offering to snap it into the clean element — same
+  spot, same size, same color, one undo. Recognition is deliberately conservative: scribbles,
+  spirals, and handwriting never trigger it. A promoted arrow even binds to nearby cards exactly
+  like a drawn one.
+- **The canvas now whispers what your cards could become.** The same chip watches for other
+  promotions: a text card holding a single line of LaTeX (`$E = mc^2$`) offers **Make equation**; a
+  bulleted list offers **Split into cards** — one card per line, same width and tint, ready to
+  arrange; and the moment you sketch two roughly perpendicular arrows, **Make graph** appears before
+  you even double-click. Every promotion is one undo step, and the chip retracts on its own — Esc,
+  any new gesture, or six seconds of being ignored.
+- **Alignment guides.** Dragging cards now snaps their edges and centers to nearby cards, with
+  hairline guides flashing across the aligned cards while they hold. What snaps in the preview is
+  exactly what lands. Works for single cards, multi-selections, and duplicate-drags, at every zoom.
+- **Tidy, for humans.** The agent could always re-flow a board into a clean layered layout; now ⌘K
+  carries **Tidy board** (re-flow everything, then fit it into view) and **Tidy selection** (re-flow
+  just the selected cards, in place — the tidied corner never jumps across the board).
+- **⌥-drag duplicates.** Hold Option and drag a card (or a whole selection): the originals stay
+  put — arrows still bound — and fresh copies follow the pointer. One undo removes the copies
+  entirely. A bare ⌥-click still just selects.
+
+### Changed
+- **Structured edits open on a stage.** Editing an equation, a graph's axes, or a shape/line label
+  now recedes the board and centers the editor on glass — the same shape Focus Write always had —
+  instead of cramming fields into strips and popovers under the card. Equations get a large live
+  preview that doubles as parse feedback while you type; graph config previews the draft axes and
+  series live; lines keep the "Make graph" handoff with Esc stepping back to the label. Text is
+  untouched: double-click writes directly on the board, exactly as before, and ⇧⌘F remains the
+  explicit way to summon the big writing sheet. Everywhere, the contract is uniform — Esc cancels
+  the draft, Return or click-away commits.
+- **Zoom follows the pointer.** ⌘+/⌘−, the zoom buttons, and pinch all anchor at the cursor, so the
+  spot you're pointing at stays put while the board scales around it.
+- **Paste lands under the cursor.** ⌘V centers the pasted cards (or image) on the pointer instead of
+  the middle of the window; the old 28pt stagger remains only when the pointer is off-window, so
+  copies never stack invisibly.
+
+### Fixed
+- **The equation drop ring no longer misses one path.** Dragging a lone equation over a graph as
+  part of a multi-selection absorbed it on release without ever showing the accent drop ring; the
+  affordance now lights up on every path that will absorb.
+- **A stray scroll can no longer eat an in-flight edit.** Trackpad momentum leaking under a
+  structured editor used to tear it down mid-thought; the stage now holds the board still while
+  it's open, and inline text editing keeps pan and zoom live.
+
 ## [1.4.0] - 2026-07-03
 
 ### Added

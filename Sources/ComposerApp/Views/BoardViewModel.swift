@@ -123,9 +123,17 @@ final class BoardViewModel: ObservableObject {
   /// leaves or ends. Graph cards read it to draw the accent drop-target ring.
   @Published private(set) var equationDropTargetID: UUID?
 
+  /// Alignment guide lines to draw while a card MOVE drag is snapping (board space). Set from the
+  /// live preview via `snappedDelta(for:proposed:)`, and ALWAYS cleared on commit/cancel/clear so
+  /// the hairlines never outlive the gesture.
+  @Published private(set) var snapGuides: [SnapEngine.Guide] = []
+
   private var interactions: [UUID: CardInteraction] = [:]
   private var movePreviewIDs: Set<UUID> = []
   private var movePreviewDelta: CGSize = .zero
+  /// Set by `beginDragDuplicate` so the drag's finishMovePreview joins the duplicate's undo
+  /// checkpoint instead of opening a second one — the whole ⌥-drag gesture is one intention.
+  private var foldNextMoveUndo = false
   private var nextZ = 1
   private var undoStack: [HistorySnapshot] = []
   private var redoStack: [HistorySnapshot] = []
@@ -836,6 +844,166 @@ final class BoardViewModel: ObservableObject {
     if committed.isEmpty { delete(id) }
   }
 
+  // MARK: Promotions (the "promotion seam" — rough matter promoted into richer matter)
+
+  /// Promote a recognized freehand stroke into the clean shape/line/arrow it was read as, keeping
+  /// the card's id, tint, and z (continuity of matter) in a single undo step. Box shapes take the
+  /// recognition's rect; lines/arrows mirror `addDrawnElement`'s two-point geometry exactly so a
+  /// promoted line is indistinguishable from a drawn one. No-op unless the card is still a freehand.
+  func convertFreehand(_ id: UUID, to kind: ShapeRecognizer.Kind) {
+    guard let i = index(for: id), cards[i].elementKind == .freehand else { return }
+    registerUndo()
+
+    switch kind {
+    case .rectangle(let rect), .ellipse(let rect), .diamond(let rect):
+      cards[i].kind = shapeKind(for: kind)
+      cards[i].frame = rect
+      cards[i].points = nil
+    case .line(let start, let end), .arrow(let start, let end):
+      // Mirror `addDrawnElement`: a padded bounding box respecting `lineMinSize`, endpoints stored
+      // normalized into that frame, so the promoted line reads exactly like a drawn one.
+      let minSize = CardState.lineMinSize
+      var minX = min(start.x, end.x), minY = min(start.y, end.y)
+      var maxX = max(start.x, end.x), maxY = max(start.y, end.y)
+      if maxX - minX < minSize.width { let pad = (minSize.width - (maxX - minX)) / 2; minX -= pad; maxX += pad }
+      if maxY - minY < minSize.height { let pad = (minSize.height - (maxY - minY)) / 2; minY -= pad; maxY += pad }
+      let frame = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+      cards[i].kind = (kind.isArrow ? .arrow : .line)
+      cards[i].frame = frame
+      cards[i].points = [
+        CanvasPoint(x: Double((start.x - frame.minX) / frame.width), y: Double((start.y - frame.minY) / frame.height)),
+        CanvasPoint(x: Double((end.x - frame.minX) / frame.width), y: Double((end.y - frame.minY) / frame.height)),
+      ]
+    }
+    cards[i].whoWrote = nextAuthor
+    // Rebuild the interaction from the rewritten card so the label/selection chrome reads the new kind.
+    interactions[cards[i].id] = CardInteraction(cards[i])
+    if cards[i].elementKind == .arrow { bindArrowIfPossible(id) }
+    select(id)
+    scheduleSave()
+  }
+
+  private func shapeKind(for kind: ShapeRecognizer.Kind) -> CanvasElementKind {
+    switch kind {
+    case .rectangle: .rectangle
+    case .ellipse: .ellipse
+    case .diamond: .diamond
+    case .line: .line
+    case .arrow: .arrow
+    }
+  }
+
+  /// Promote a math-like text card into an equation card in one undo step, keeping id/frame/tint.
+  /// The LaTeX is the text stripped of surrounding `$`/`$$` (mirroring how equation cards store raw
+  /// math-mode source without delimiters), and the card's `text` is cleared the way an equation card
+  /// carries none. No-op unless the card is still text.
+  func convertTextToEquation(_ id: UUID) {
+    guard let i = index(for: id), cards[i].elementKind == .text else { return }
+    let latex = Self.strippedEquationLatex(plainText(for: cards[i]))
+    registerUndo()
+    cards[i].kind = .equation
+    cards[i].latex = latex
+    cards[i].text = ""
+    cards[i].ink = nil
+    cards[i].whoWrote = nextAuthor
+    interactions[cards[i].id] = CardInteraction(cards[i])
+    select(id)
+    scheduleSave()
+  }
+
+  /// Promote a bullet-list text card into one text card per non-empty line, stacked from the
+  /// original's origin: same width, auto-fit text height, 12pt board-unit gaps, all inheriting the
+  /// original's tint. The original is deleted in the SAME undo step (its delete is suppressed, the
+  /// way `convertElementToGraph` absorbs its partner). Non-bullet lines (e.g. a heading) become
+  /// cards too, in order. Selects the new cards. No-op unless the card is still text.
+  func splitTextCard(_ id: UUID) {
+    guard let i = index(for: id), cards[i].elementKind == .text else { return }
+    let lines = plainText(for: cards[i])
+      .components(separatedBy: .newlines)
+      .map { Self.strippedBulletMarker($0) }
+      .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    guard lines.count > 1 else { return }
+
+    let origin = CGPoint(x: cards[i].x, y: cards[i].y)
+    let width = cards[i].w
+    let tint = cards[i].tint
+    let gap: CGFloat = 12
+
+    registerUndo()
+    // Append the new cards FIRST, then remove the original directly (not through `delete`, whose
+    // empty-board guard would resurrect a blank first card if this split card were the board's only
+    // one). One `registerUndo` above covers both, so a single undo restores the original card.
+    var newIDs: [UUID] = []
+    var y = origin.y
+    for line in lines {
+      let height = Self.fittedTextHeight(line, width: width)
+      let card = CardState(text: line, x: Double(origin.x), y: Double(y),
+                           w: Double(width), h: Double(height), z: nextZ,
+                           whoWrote: nextAuthor, tint: tint)
+      nextZ += 1
+      cards.append(card)
+      interactions[card.id] = CardInteraction(card)
+      newIDs.append(card.id)
+      y += height + gap
+    }
+    cards.removeAll { $0.id == id }
+    interactions[id] = nil
+    selectedCardIDs = Set(newIDs)
+    primarySelectedCardID = newIDs.last
+    editingCardID = nil
+    refreshBoundArrows()
+    scheduleSave()
+  }
+
+  // MARK: Promotion detection (pure, testable — precision first, false offers are worse than none)
+
+  /// A text card is promotable to an equation only when its trimmed text is non-empty, single-line,
+  /// and reads as math: either wrapped in `$…$`/`$$…$$` delimiters, or carrying a LaTeX command
+  /// (`\command`). Precision-biased so prose never offers to become an equation.
+  static func isMathLike(_ text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, !trimmed.contains(where: { $0.isNewline }) else { return false }
+    if (trimmed.hasPrefix("$$") && trimmed.hasSuffix("$$") && trimmed.count > 4)
+      || (trimmed.hasPrefix("$") && trimmed.hasSuffix("$") && trimmed.count > 2) {
+      return true
+    }
+    return trimmed.range(of: "\\\\[a-zA-Z]+", options: .regularExpression) != nil
+  }
+
+  /// A text card is promotable to a split only when its text has ≥3 lines and ≥3 non-empty lines
+  /// begin with a bullet marker (`- `, `* `, or `• `). A single stray dash never triggers a split.
+  static func isBulletList(_ text: String) -> Bool {
+    let lines = text.components(separatedBy: .newlines)
+    guard lines.count >= 3 else { return false }
+    let bulleted = lines.filter { line in
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      return !trimmed.isEmpty && (trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• "))
+    }
+    return bulleted.count >= 3
+  }
+
+  /// Strip surrounding `$$…$$` or `$…$` delimiters and trim — the raw math-mode source an equation
+  /// card stores (`latex`, no delimiters).
+  static func strippedEquationLatex(_ text: String) -> String {
+    var body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if body.hasPrefix("$$"), body.hasSuffix("$$"), body.count > 4 {
+      body = String(body.dropFirst(2).dropLast(2))
+    } else if body.hasPrefix("$"), body.hasSuffix("$"), body.count > 2 {
+      body = String(body.dropFirst().dropLast())
+    }
+    return body.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// Strip a leading bullet marker (`- `, `* `, `• `) from a line, leaving the content; a line with
+  /// no marker (a heading) is returned trimmed of trailing space but otherwise intact.
+  static func strippedBulletMarker(_ line: String) -> String {
+    let trimmedLeading = String(line.drop(while: { $0 == " " || $0 == "\t" }))
+    for marker in ["- ", "* ", "• "] where trimmedLeading.hasPrefix(marker) {
+      return String(trimmedLeading.dropFirst(marker.count))
+    }
+    return line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+  }
+
   /// Height a text card needs to show `text` at `width`, measured the way the non-editing card
   /// renders it. Used for agent/programmatic edits and on load, where no live editor reports it.
   static func fittedTextHeight(_ text: String, width: CGFloat) -> CGFloat {
@@ -990,6 +1158,59 @@ final class BoardViewModel: ObservableObject {
       cards[i].x = Double(point.x)
       cards[i].y = Double(point.y)
     }
+  }
+
+  /// Human "Tidy selection": re-flow ONLY the selected cards through the same `BoardLayout`
+  /// machinery as `relayout`, using the selected subset as nodes and the arrows/lines among them as
+  /// edges. The laid-out result is then translated so the subset's new bounding-box center matches
+  /// its old one — tidying a corner of the board never teleports it. One undo step; the selection
+  /// stays selected. No-ops with fewer than two layout nodes selected.
+  func relayoutSelection(direction: LayoutDirection = .down) {
+    let selectedNodes = cards.filter { selectedCardIDs.contains($0.id) && Self.isLayoutNode($0) }
+    guard selectedNodes.count > 1 else { return }
+    let nodeIDs = Set(selectedNodes.map(\.id))
+    // Edges are the bound arrows/lines whose BOTH endpoints are in the selected subset — the same
+    // rule relayout uses, narrowed to the subset so an edge to an off-board node never pulls layout.
+    let edges: [BoardLayout.Edge] = cards.compactMap { card in
+      guard card.elementKind == .arrow || card.elementKind == .line,
+            let from = card.startBindingID, let to = card.endBindingID,
+            nodeIDs.contains(from), nodeIDs.contains(to), from != to
+      else { return nil }
+      return BoardLayout.Edge(from: from, to: to)
+    }
+
+    let oldCenter = Self.centerOfRects(selectedNodes.map(\.frame))
+
+    registerUndo()
+    suppressUndo = true
+    defer { suppressUndo = false; refreshBoundArrows(); scheduleSave() }
+
+    var config = BoardLayout.Config()
+    config.direction = direction
+    config.origin = CGPoint(x: selectedNodes.map(\.x).min() ?? 120, y: selectedNodes.map(\.y).min() ?? 120)
+    let layoutNodes = selectedNodes.map { BoardLayout.Node(id: $0.id, size: CGSize(width: $0.w, height: $0.h)) }
+    let positions = BoardLayout.layout(nodes: layoutNodes, edges: edges, config: config)
+
+    // Recentre: BoardLayout places from `origin`, so the laid-out subset can drift. Shift it back so
+    // its new bounding box shares the old center — the corner tidies in place.
+    let laidRects = positions.compactMap { id, point -> CGRect? in
+      guard let card = cards.first(where: { $0.id == id }) else { return nil }
+      return CGRect(x: point.x, y: point.y, width: card.w, height: card.h)
+    }
+    let newCenter = Self.centerOfRects(laidRects)
+    let shift = CGSize(width: oldCenter.x - newCenter.x, height: oldCenter.y - newCenter.y)
+
+    for (id, point) in positions {
+      guard let i = cards.firstIndex(where: { $0.id == id }) else { continue }
+      cards[i].x = Double(point.x + shift.width)
+      cards[i].y = Double(point.y + shift.height)
+    }
+  }
+
+  /// Center of the union bounding box of `rects` (empty → origin).
+  private static func centerOfRects(_ rects: [CGRect]) -> CGPoint {
+    guard let union = unionRect(rects) else { return .zero }
+    return CGPoint(x: union.midX, y: union.midY)
   }
 
   /// Insert a text card and let the board pick a non-overlapping spot — used when an agent adds a
@@ -1254,7 +1475,46 @@ final class BoardViewModel: ObservableObject {
     scheduleSave()
   }
 
+  /// The single source of truth for move snapping: snaps `proposed` (board-space delta) so the
+  /// union bounding rect of `movingIDs` aligns to nearby peers, publishes the resulting guide lines,
+  /// and returns the adjusted delta. Both move paths call this so preview and commit share the exact
+  /// same rule (the bind-preview house rule) and both publish the same guides. `tolerance` is in
+  /// board space (callers pass `8 / zoom` for the 8pt screen-space threshold). Peers are every
+  /// non-moving, non-archived card frame. Returns `proposed` unchanged (and clears guides) when the
+  /// moving set is empty or nothing lands within tolerance.
+  func snappedDelta(for movingIDs: Set<UUID>, proposed: CGSize, tolerance: CGFloat) -> CGSize {
+    guard !movingIDs.isEmpty else {
+      if !snapGuides.isEmpty { snapGuides = [] }
+      return proposed
+    }
+    let movingFrames = cards.filter { movingIDs.contains($0.id) }.map(\.frame)
+    guard let union = Self.unionRect(movingFrames) else {
+      if !snapGuides.isEmpty { snapGuides = [] }
+      return proposed
+    }
+    let peers = cards
+      .filter { !movingIDs.contains($0.id) && !$0.isArchived }
+      .map(\.frame)
+    let result = SnapEngine.snap(moving: union, proposedDelta: proposed, others: peers, tolerance: tolerance)
+    if snapGuides != result.guides { snapGuides = result.guides }
+    return result.delta
+  }
+
+  /// The tight bounding box of `frames`, or nil when empty. Used to snap a multi-card move as one
+  /// rigid unit (a single card is its own frame).
+  private static func unionRect(_ frames: [CGRect]) -> CGRect? {
+    guard var union = frames.first else { return nil }
+    for frame in frames.dropFirst() { union = union.union(frame) }
+    return union
+  }
+
   func updateMovePreview(by delta: CGSize) {
+    updateMovePreview(by: delta, tolerance: 0)
+  }
+
+  /// Move preview with alignment snapping. `tolerance` is the board-space snap threshold (the view
+  /// passes `8 / zoom`); `0` disables snapping for callers that don't thread a zoom.
+  func updateMovePreview(by rawDelta: CGSize, tolerance: CGFloat) {
     let moving = unlockedIDs(in: selectedCardIDs)
     // A multi-selection can contain locked cards. Preview the unlocked subset even when it has
     // only one member, because BoardCardView still commits through finishMovePreview for the
@@ -1264,19 +1524,45 @@ final class BoardViewModel: ObservableObject {
       clearMovePreview()
       movePreviewIDs = moving
     }
+    let delta = snappedDelta(for: moving, proposed: rawDelta, tolerance: tolerance)
     movePreviewDelta = delta
     for id in moving {
       interactions[id]?.dragDelta = delta
     }
+    // finishMovePreview absorbs a lone unlocked equation into the graph under it, so the drop ring
+    // must track this path too (it used to light up only for single-card drags — an absorb the
+    // affordance never promised). ⌥-drag duplicates also flow through here.
+    if moving.count == 1, let movedID = moving.first, let moved = card(id: movedID) {
+      updateEquationDropTarget(movedID: movedID, center: CGPoint(
+        x: moved.frame.midX + delta.width, y: moved.frame.midY + delta.height))
+    }
+  }
+
+  /// ⌥-drag duplicate, called once when an option-drag leaves the click dead-zone: snapshot the
+  /// board, leave the pressed selection in place (ids and arrow bindings intact), and insert bare
+  /// in-place copies that become the selection — the rest of the drag moves the copies through the
+  /// regular move preview. The paired finishMovePreview folds into this checkpoint, so one undo
+  /// removes the copies and the gesture entirely.
+  func beginDragDuplicate() {
+    let source = selectedCardsForClipboard()
+    guard !source.isEmpty else { return }
+    registerUndo()
+    let previousSuppressUndo = suppressUndo
+    suppressUndo = true
+    _ = insertCopies(source, offset: .zero)
+    suppressUndo = previousSuppressUndo
+    foldNextMoveUndo = true
   }
 
   func finishMovePreview(commit: Bool) {
     let ids = movePreviewIDs
     let delta = movePreviewDelta
+    let folded = foldNextMoveUndo
+    foldNextMoveUndo = false
     clearMovePreview()
     clearEquationDropTarget()
     guard commit, !ids.isEmpty, delta != .zero else { return }
-    registerUndo()
+    if !folded { registerUndo() }
     for i in cards.indices where ids.contains(cards[i].id) {
       cards[i].x += Double(delta.width)
       cards[i].y += Double(delta.height)
@@ -1387,12 +1673,21 @@ final class BoardViewModel: ObservableObject {
     clearMovePreview()
   }
 
+  /// Retire the alignment hairlines. The single-card move path publishes guides directly (it doesn't
+  /// go through `clearMovePreview`), so its commit/cancel branches call this to end the gesture.
+  func clearSnapGuides() {
+    if !snapGuides.isEmpty { snapGuides = [] }
+  }
+
   private func clearMovePreview() {
     for id in movePreviewIDs {
       interactions[id]?.dragDelta = .zero
     }
     movePreviewIDs = []
     movePreviewDelta = .zero
+    // Guides belong to a live drag only — every commit/cancel/clear routes through here, so this is
+    // the one place that guarantees the hairlines vanish the instant the gesture ends.
+    if !snapGuides.isEmpty { snapGuides = [] }
   }
 
   private func detachMovedArrows(_ ids: Set<UUID>) {

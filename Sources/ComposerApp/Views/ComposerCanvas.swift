@@ -37,8 +37,6 @@ struct ComposerCanvas: View {
   @State private var showAgent = false
   /// The ⌘K command palette (board switcher + buried board-level actions) is showing.
   @State private var showPalette = false
-  /// The card expanded into the centered focus-writing sheet (nil = normal board).
-  @State private var focusedCardID: UUID?
   /// The tint swatch row in the bottom bar is expanded.
   @State private var tintPickerOpen = false
   /// The board picker opens on hover; a short grace timer stops it flickering while the pointer
@@ -69,6 +67,22 @@ struct ComposerCanvas: View {
   @State private var scale: CGFloat = 1
   @State private var pan: CGSize = .zero
   @State private var panLive: CGSize = .zero
+
+  /// The ⇧⌘F writing sheet's card. Separate from `editingCardID` on purpose: text edits inline on
+  /// the board; the centered sheet is an explicit summon, not what double-click does.
+  @State private var focusedCardID: UUID?
+
+  /// The promotion seam's one live offer (freehand→shape, text→equation/cards, axes→graph) — the
+  /// floating chip near the recognized card. At most one at a time; nil hides the chip. Armed at the
+  /// human-gesture hooks (freehand/draw commit, edit end, single selection) and dismissed on any new
+  /// gesture, selection change, undo/redo, board switch, or Esc — plus the auto-dismiss timer below.
+  @State private var promotion: PromotionOffer?
+  /// The 6s auto-dismiss for the live chip; invalidated whenever the offer changes or clears so a
+  /// stale timer can never retract a newer chip.
+  @State private var promotionDismissWork: DispatchWorkItem?
+  /// A pending intent to open the label stage straight in graph-config mode (axes→graph promotion),
+  /// consumed by `EditingStage` on appear then cleared.
+  @State private var openGraphConfigCardID: UUID?
 
   private let service = HeadlessPromptService()
   private let cardPasteboardType = NSPasteboard.PasteboardType("dev.jow.Composer.cards")
@@ -129,11 +143,14 @@ struct ComposerCanvas: View {
 
       // Floating chrome: board identity top-left (the pill IS the board manager), agent top-right,
       // everything hands-on (tools, zoom, settings) in one bottom command bar.
+      // The promotion chip floats above the cards but below the command bar/pills and the agent dock
+      // — it's a whisper over the canvas, not chrome that competes with the tools.
+      promotionOverlay(in: inner)
       boardSwitcherPill(in: proxy.size)
       boardActionsPill(in: proxy.size)
       bottomCommandBar(fit: inner)
       dockOverlay(in: proxy.size)
-      focusOverlay(in: proxy.size)
+      editingStageOverlay(in: proxy.size)
       commandPaletteOverlay(in: proxy.size)
       commandBridge
     }
@@ -148,6 +165,16 @@ struct ComposerCanvas: View {
       }
     }
     .onChange(of: inner) { _, value in lastViewportSize = value }
+    // Promotion lifecycle: a tool change starts a fresh intent, so any live chip is stale.
+    .onChange(of: tool) { _, _ in dismissPromotion() }
+    // Editing a card owns the screen; while a stage is open the chip must not hover behind it. When
+    // a text card's edit session ENDS (editingCardID → nil), evaluate it for a text promotion.
+    .onChange(of: board.editingCardID) { previous, current in
+      if current != nil { dismissPromotion() }
+      else if let previous { evaluateTextPromotion(previous) }
+    }
+    // Selection change away from the offer's card retracts it; a single text selection can arm one.
+    .onChange(of: board.selectedCardIDs) { _, _ in promotionSelectionChanged() }
   }
 
   // MARK: Board content (pan / zoom / place)
@@ -270,14 +297,14 @@ struct ComposerCanvas: View {
         isSpacePressed: isSpacePressed,
         onTap: handleTap,
         onDoubleTap: handleDoubleTap,
-        onSelectionChanged: { selectionRect = $0 },
+        onSelectionChanged: { rect in selectionRect = rect; if promotion != nil { dismissPromotion() } },
         onSelectionEnded: selectCards(inViewportRect:modifiers:),
-        onFreehandChanged: { freehandDraft = $0 },
+        onFreehandChanged: { freehandDraft = $0; if promotion != nil { dismissPromotion() } },
         onFreehandEnded: commitFreehandDraft,
         onElementDraftChanged: onElementDraftChanged,
         onElementDraftEnded: commitElementDraft,
         onElementDraftCancelled: { elementDraft = nil; bindTargetID = nil },
-        onPanChanged: { panLive = $0 },
+        onPanChanged: { panLive = $0; if promotion != nil { dismissPromotion() } },
         onPanEnded: { delta in
           pan.width += delta.width
           pan.height += delta.height
@@ -304,8 +331,7 @@ struct ComposerCanvas: View {
         // drag that starts over it draws a new element instead of selecting/moving the card.
         selectable: tool == .select,
         failedShellCommands: board.failedShellCommands,
-        equationDropTargetID: board.equationDropTargetID,
-        onEscape: { dismiss() }
+        equationDropTargetID: board.equationDropTargetID
       )
       .equatable()
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -317,6 +343,7 @@ struct ComposerCanvas: View {
       selectionRectView
       freehandDraftView
       elementDraftView
+      snapGuidesOverlay
 
       // Board-wide pinch-to-zoom, so it works no matter what's under the cursor (card, dock,
       // toolbar, editing text view). Transparent to clicks; only listens for magnify.
@@ -398,6 +425,50 @@ struct ComposerCanvas: View {
     }
   }
 
+  /// Quiet alignment hairlines while a card MOVE drag snaps. Board→viewport maps with the exact
+  /// card-layer transform (× effectiveScale, offset by pan + panLive); each guide spans its own
+  /// start→end with a small overshoot so the alignment reads at a glance. 1pt accent lines at 0.6,
+  /// pointer-transparent, and NEVER animated — snapping must feel instant.
+  @ViewBuilder
+  private var snapGuidesOverlay: some View {
+    if !board.snapGuides.isEmpty {
+      let overshoot: CGFloat = 8
+      Path { path in
+        for guide in board.snapGuides {
+          let position = guide.position * effectiveScale + originOffset(for: guide.axis)
+          let start = guide.start * effectiveScale + originOffset(perpendicularTo: guide.axis) - overshoot
+          let end = guide.end * effectiveScale + originOffset(perpendicularTo: guide.axis) + overshoot
+          switch guide.axis {
+          case .vertical:   // a line at x == position, spanning y
+            path.move(to: CGPoint(x: position, y: start))
+            path.addLine(to: CGPoint(x: position, y: end))
+          case .horizontal: // a line at y == position, spanning x
+            path.move(to: CGPoint(x: start, y: position))
+            path.addLine(to: CGPoint(x: end, y: position))
+          }
+        }
+      }
+      .stroke(Theme.Palette.accent.opacity(0.6), lineWidth: 1)
+      .allowsHitTesting(false)
+    }
+  }
+
+  /// The pan translation along a guide's own axis (vertical guide → x pan, horizontal → y pan).
+  private func originOffset(for axis: SnapEngine.Axis) -> CGFloat {
+    switch axis {
+    case .vertical:   return pan.width + panLive.width
+    case .horizontal: return pan.height + panLive.height
+    }
+  }
+
+  /// The pan translation perpendicular to a guide's axis (used to place its span endpoints).
+  private func originOffset(perpendicularTo axis: SnapEngine.Axis) -> CGFloat {
+    switch axis {
+    case .vertical:   return pan.height + panLive.height
+    case .horizontal: return pan.width + panLive.width
+    }
+  }
+
   @ViewBuilder
   private var selectionRectView: some View {
     if let rect = selectionRect, rect.width > 1, rect.height > 1 {
@@ -447,14 +518,10 @@ struct ComposerCanvas: View {
                              y: (point.y - pan.height) / effectiveScale)
     let id = board.addElement(kind, at: boardPoint)
     tool = .select
-    if kind == .text {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-        board.interaction(for: id).controller.focus()
-      }
-    } else if kind == .equation {
-      // Mirror the text tool: a placed equation is empty and useless until you type LaTeX, so
-      // drop straight into edit mode. Its editor is the SwiftUI strip below the card (no NSTextView
-      // to focus), so the same post-place delay just lets the card mount before edit mode arms it.
+    // Text and equation both drop straight into edit mode — an empty card is useless until you
+    // type. The editor now lives in the centered `EditingStage` (keyed off `editingCardID`), which
+    // owns its own focus delay, so both kinds just arm edit mode after the card mounts.
+    if kind == .text || kind == .equation {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
         board.beginEditing(id)
       }
@@ -466,13 +533,18 @@ struct ComposerCanvas: View {
   private func handleDoubleTap(at point: CGPoint) {
     let id = board.addCard(at: boardPoint(forViewport: point))
     tool = .select
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.interaction(for: id).controller.focus() }
+    // Text edits inline: begin editing, then hand the caret to the in-card editor once it mounts.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+      board.beginEditing(id)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { board.interaction(for: id).controller.focus() }
+    }
   }
 
   /// The draft segment changed (viewport space). Store it, and for a line/arrow resolve the card its
   /// live end would bind to — under the CURRENT drag endpoint, converted to board space — so the
   /// highlight tracks the cursor and matches exactly what `bindArrowIfPossible` will do on commit.
   private func onElementDraftChanged(_ start: CGPoint, _ current: CGPoint) {
+    if promotion != nil { dismissPromotion() }
     elementDraft = DragSegment(start: start, end: current)
     if tool == .line || tool == .arrow {
       bindTargetID = board.bindCandidate(at: boardPoint(forViewport: current), excluding: [])
@@ -487,8 +559,10 @@ struct ComposerCanvas: View {
     // Esc mid-drag cleared the draft; the pending mouse-up must then commit nothing.
     guard elementDraft != nil else { return }
     guard let kind = tool.elementKind else { return }
-    if board.addDrawnElement(kind, from: boardPoint(forViewport: start), to: boardPoint(forViewport: end)) != nil {
+    if let id = board.addDrawnElement(kind, from: boardPoint(forViewport: start), to: boardPoint(forViewport: end)) {
       tool = .select
+      // A perpendicular partner means this pair of lines/arrows reads as axes — offer a graph.
+      if kind == .line || kind == .arrow { offerGraphPromotion(id) }
     }
   }
 
@@ -521,8 +595,10 @@ struct ComposerCanvas: View {
         y: Double(($0.y - frame.minY) / frame.height)
       )
     }
-    if board.addFreehandStroke(frame: frame, points: normalized) != nil {
+    if let id = board.addFreehandStroke(frame: frame, points: normalized) {
       tool = .select
+      // The flagship promotion: a confidently recognized stroke offers to become that clean shape.
+      offerFreehandPromotion(id, boardPoints: boardPoints)
     }
   }
 
@@ -894,10 +970,12 @@ struct ComposerCanvas: View {
     withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
   }
 
-  // MARK: Focus mode — one card as a centered writing sheet
+  // MARK: Editing stage — the centered surface for structured edits (+ the ⇧⌘F writing sheet)
 
-  /// ⇧⌘F: the current text card expands into a comfortable, centered writing surface at 100%
-  /// scale — same text, same editor, same chips — and Esc drops it back on the board.
+  /// ⇧⌘F: the current text card expands into the centered writing sheet — the stage's text surface,
+  /// summoned EXPLICITLY. Double-click writes inline on the board (writing is the core act and it
+  /// stays in place); the sheet is opt-in. Candidate logic unchanged: the editing interaction, else
+  /// the primary selection, else the first text card. A second press drops back to the board.
   private func toggleFocus() {
     if focusedCardID != nil { closeFocus(); return }
     let candidate = board.editingInteraction?.id
@@ -905,7 +983,7 @@ struct ComposerCanvas: View {
       ?? board.cards.first(where: { $0.elementKind == .text })?.id
     guard let id = candidate,
           board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
-    // Hand the single editor over: capture the board editor's state and unmount it first.
+    // Hand the single editor over: capture the inline editor's state and unmount it first.
     board.interaction(for: id).captureEditorState()
     board.endEditing(id)
     withAnimation(Theme.Motion.accessory) { focusedCardID = id }
@@ -918,58 +996,152 @@ struct ComposerCanvas: View {
     board.scheduleSave()
   }
 
+  /// The unified editing surface for STRUCTURED edits — equation, graph, shape/line label — plus
+  /// the ⇧⌘F writing sheet (`focusedCardID`). Text otherwise edits inline on the board and never
+  /// opens a stage from `editingCardID`; freehand/image never open one at all.
   @ViewBuilder
-  private func focusOverlay(in size: CGSize) -> some View {
-    if let id = focusedCardID {
-      let interaction = board.interaction(for: id)
-      ZStack {
-        // The board recedes; a click on it returns you to it.
-        Theme.Palette.windowCanvas.opacity(0.72)
-          .contentShape(Rectangle())
-          .onTapGesture { closeFocus() }
-
-        VStack(spacing: 0) {
-          HStack {
-            Text("Focus")
-              .font(WindowChrome.labelFont)
-              .foregroundStyle(Theme.Palette.menuDesc)
-            Spacer(minLength: 8)
-            SidebarButton(symbol: "arrow.down.right.and.arrow.up.left",
-                          help: "Back to board  ·  Esc", side: 26) { closeFocus() }
-          }
-          .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 6)
-
-          FreeWriteEditor(
-            text: Binding(get: { interaction.text }, set: { interaction.text = $0 }),
-            initialAttributedText: interaction.attributedSnapshot,
-            placeholder: "Brain dump\u{2026}",
-            onCountChange: { interaction.count = $0 },
-            onSelectionChange: { interaction.selection = $0 },
-            onEscape: { closeFocus() },
-            onFocusChange: { _ in },
-            onHeightChange: { _ in },
-            boardContext: { board.lintContext(excluding: id) },
-            definedVariables: { board.definedVariableNames },
-            mentions: interaction.mentions,
-            appSearch: interaction.appSearch,
-            controller: interaction.controller,
-            lint: interaction.lint,
-            refine: interaction.refine,
-            store: DumpStore.shared
-          )
-          .padding(.horizontal, 28)
-          .padding(.bottom, 22)
-        }
-        .frame(width: min(720, size.width * 0.72), height: min(640, size.height * 0.82))
-        .dockPanelSurface()
-        .shadow(color: Theme.Shadow.panel.color, radius: Theme.Shadow.panel.radius, y: Theme.Shadow.panel.y)
-        .onAppear {
-          DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { interaction.controller.focus() }
-        }
-      }
-      .zIndex(70)
-      .transition(.opacity)
+  private func editingStageOverlay(in size: CGSize) -> some View {
+    if let id = focusedCardID,
+       let card = board.cards.first(where: { $0.id == id }), card.elementKind == .text {
+      EditingStage(
+        board: board,
+        card: card,
+        interaction: board.interaction(for: id),
+        size: size,
+        isWorking: isWorking,
+        askEngine: resolvedChatEngine(),
+        onClose: { closeFocus() }
+      )
+      .id(id)
+    } else if let id = board.editingCardID,
+       let card = board.cards.first(where: { $0.id == id }),
+       card.elementKind != .freehand, card.elementKind != .image, card.elementKind != .text {
+      EditingStage(
+        board: board,
+        card: card,
+        interaction: board.interaction(for: id),
+        size: size,
+        isWorking: isWorking,
+        askEngine: resolvedChatEngine(),
+        // Axes→graph promotion opens the label stage straight in graph-config mode; consume the
+        // one-shot intent so a later manual edit of the same card doesn't reopen it.
+        openGraphConfigOnAppear: openGraphConfigCardID == id,
+        onGraphConfigConsumed: { if openGraphConfigCardID == id { openGraphConfigCardID = nil } },
+        onClose: { board.endEditing(id) }
+      )
+      .id(id)
     }
+  }
+
+  // MARK: Promotion chip (the promotion seam's floating affordance)
+
+  /// The live promotion chip, floating just above its card's top edge in viewport space so it tracks
+  /// pan/zoom, clamped to stay on screen. Click promotes; the chip is dismissed by the same call.
+  @ViewBuilder
+  private func promotionOverlay(in size: CGSize) -> some View {
+    if let offer = promotion,
+       let card = board.cards.first(where: { $0.id == offer.cardID }) {
+      let midX = card.frame.midX * effectiveScale + pan.width
+      let topY = card.frame.minY * effectiveScale + pan.height - 30
+      // A rough half-width for clamping; the chip re-centers itself, so keeping its anchor inside a
+      // 90pt inset keeps the whole pill on screen at any pan/zoom.
+      let x = min(max(midX, 90), max(90, size.width - 90))
+      let y = min(max(topY, 30), max(30, size.height - 30))
+      PromotionChip(offer: offer) { promote(offer) }
+        .position(x: x, y: y)
+        .transition(.opacity)
+        .zIndex(45)
+    }
+  }
+
+  /// Arm the single live offer, replacing any current one, and (re)start the 6s auto-dismiss.
+  ///
+  /// Arming hops to the next runloop tick: a commit path flips `tool` back to `.select`, whose
+  /// `.onChange` fires `dismissPromotion()` on THIS tick — arming after it wins, so the freshly
+  /// committed shape/graph offer survives its own tool reset. (Edit-end/selection paths don't touch
+  /// the tool, so the hop is harmless there.)
+  private func armPromotion(_ offer: PromotionOffer) {
+    DispatchQueue.main.async {
+      withAnimation(Theme.Motion.accessory) { promotion = offer }
+      promotionDismissWork?.cancel()
+      let work = DispatchWorkItem { dismissPromotion() }
+      promotionDismissWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
+    }
+  }
+
+  /// Clear the live offer and invalidate its timer — the one retraction path (auto-dismiss, new
+  /// gesture, selection change, undo/redo, board switch, Esc, promote).
+  private func dismissPromotion() {
+    promotionDismissWork?.cancel()
+    promotionDismissWork = nil
+    if promotion != nil {
+      withAnimation(Theme.Motion.accessory) { promotion = nil }
+    }
+  }
+
+  /// Run the offer's promotion (one undo step each), then dismiss the chip.
+  private func promote(_ offer: PromotionOffer) {
+    switch offer.kind {
+    case .freehandToShape(let kind):
+      board.convertFreehand(offer.cardID, to: kind)
+    case .textToEquation:
+      board.convertTextToEquation(offer.cardID)
+    case .textToCards:
+      board.splitTextCard(offer.cardID)
+    case .arrowsToGraph:
+      // Reuse the existing editing-stage conversion, opened straight in graph-config mode.
+      openGraphConfigCardID = offer.cardID
+      board.select(offer.cardID)
+      board.beginEditing(offer.cardID)
+    }
+    dismissPromotion()
+  }
+
+  /// After a freehand stroke commits, offer to promote it to the shape the recognizer read (nil =
+  /// no confident read, no chip). `boardPoints` are the committed stroke in board space.
+  private func offerFreehandPromotion(_ id: UUID, boardPoints: [CGPoint]) {
+    guard let recognition = ShapeRecognizer.recognize(boardPoints) else { return }
+    armPromotion(PromotionOffer(
+      cardID: id,
+      kind: .freehandToShape(recognition.kind),
+      label: recognition.kind.promotionLabel,
+      symbol: recognition.kind.promotionSymbol))
+  }
+
+  /// After a line/arrow finishes drawing, offer a graph if it found a perpendicular partner (an axis
+  /// pair). Armed on the NEW element.
+  private func offerGraphPromotion(_ id: UUID) {
+    guard board.perpendicularPartner(of: id) != nil else { return }
+    armPromotion(PromotionOffer(
+      cardID: id, kind: .arrowsToGraph, label: "Make graph", symbol: "chart.xyaxis.line"))
+  }
+
+  /// Evaluate a text card for the equation/split promotions when its edit session ends. Precision
+  /// first: equation wins over split (they can't both match — bullets are multi-line), and prose
+  /// offers nothing. No-op for a card that's since gone or is no longer text.
+  private func evaluateTextPromotion(_ id: UUID) {
+    guard let card = board.cards.first(where: { $0.id == id }), card.elementKind == .text else { return }
+    let text = board.plainText(for: card)
+    if BoardViewModel.isMathLike(text) {
+      armPromotion(PromotionOffer(cardID: id, kind: .textToEquation, label: "Make equation", symbol: "x.squareroot"))
+    } else if BoardViewModel.isBulletList(text) {
+      armPromotion(PromotionOffer(cardID: id, kind: .textToCards, label: "Split into cards", symbol: "square.on.square"))
+    }
+  }
+
+  /// Selection changed: retract a chip whose card is no longer the single selection, and arm a text
+  /// promotion when a promotable text card becomes the sole selected card (the second evaluation
+  /// moment, alongside edit-end).
+  private func promotionSelectionChanged() {
+    if let offer = promotion, board.selectedCardIDs != [offer.cardID] {
+      dismissPromotion()
+    }
+    guard board.editingCardID == nil,
+          board.selectedCardIDs.count == 1,
+          let id = board.selectedCardIDs.first,
+          promotion?.cardID != id else { return }
+    evaluateTextPromotion(id)
   }
 
   /// Agent and Settings float over the canvas as glass panels (top-right, full-height).
@@ -1050,9 +1222,11 @@ struct ComposerCanvas: View {
     CGPoint(x: lastViewportSize.width / 2, y: lastViewportSize.height / 2)
   }
 
-  /// Toolbar/keyboard zoom targets the current selection's center so the board doesn't lurch
-  /// back to center on every zoom; falls back to the viewport center with nothing selected.
+  /// Toolbar/keyboard zoom anchors at the pointer when it's over the canvas — the least-surprise
+  /// anchor, and the one pinch already uses. With the cursor elsewhere (menu-driven zoom) it falls
+  /// back to the selection's center, then the viewport center, so the board still doesn't lurch.
   private var zoomAnchor: CGPoint {
+    if let pointer = pointerViewportLocation() { return pointer }
     let selected = board.cards.filter { board.selectedCardIDs.contains($0.id) }
     guard !selected.isEmpty else { return viewportCenter }
     let midX = ((selected.map(\.x).min() ?? 0) + (selected.map { $0.x + $0.w }.max() ?? 0)) / 2
@@ -1061,11 +1235,38 @@ struct ComposerCanvas: View {
                    y: CGFloat(midY) * effectiveScale + pan.height)
   }
 
+  /// The pointer in viewport coordinates (top-left origin), or nil when it isn't over the window.
+  /// The canvas fills the content view edge to edge, so the content view IS the viewport; the
+  /// isFlipped check keeps this correct whether AppKit hands us a flipped hosting view or not.
+  private func pointerViewportLocation() -> CGPoint? {
+    guard let window = NSApp.keyWindow, let content = window.contentView else { return nil }
+    let local = content.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+    guard content.bounds.contains(local) else { return nil }
+    return CGPoint(x: local.x, y: content.isFlipped ? local.y : content.bounds.height - local.y)
+  }
+
+  /// Whether the board may pan/zoom right now. Stage edits (equation/graph/label) are modal —
+  /// events that leak through the scrim (scrollWheel/magnify land on the NSViews beneath SwiftUI
+  /// layers) are swallowed so they can't shift the board or tear down an in-flight draft. Inline
+  /// TEXT editing lives ON the board, so pan/zoom stays live there; only the caret-anchored popups
+  /// (mentions, inline search, lint) are dropped first so they don't drift off their anchor.
+  private func allowPanZoom() -> Bool {
+    guard let id = board.editingCardID,
+          let kind = board.cards.first(where: { $0.id == id })?.elementKind else { return true }
+    guard kind == .text else { return false }
+    if let editing = board.editingInteraction {
+      if editing.mentions.isOpen { editing.mentions.isOpen = false; editing.mentions.items = [] }
+      if editing.appSearch.isOpen { editing.appSearch.isOpen = false }
+      if editing.lint.activeFlagID != nil { editing.lint.activeFlagID = nil }
+    }
+    return true
+  }
+
   private func zoom(_ factor: CGFloat, anchoredAt point: CGPoint) {
+    guard allowPanZoom() else { return }
     let oldScale = max(scale, 0.01)
     let nextScale = clampZoom(oldScale * factor)
     guard nextScale != scale else { return }
-    dismissEditorOverlays()
     let boardPoint = CGPoint(
       x: (point.x - pan.width) / oldScale,
       y: (point.y - pan.height) / oldScale
@@ -1078,8 +1279,8 @@ struct ComposerCanvas: View {
   }
 
   private func handleScroll(_ delta: CGSize) {
+    guard allowPanZoom() else { return }
     viewportThrottle.enqueueScroll(delta) { applied in
-      dismissEditorOverlays()
       pan.width += applied.width
       pan.height += applied.height
     }
@@ -1128,7 +1329,7 @@ struct ComposerCanvas: View {
   }
 
 
-  private func resetView() { scale = 1; pan = .zero }
+  private func resetView() { scale = 1; pan = .zero; dismissPromotion() }
 
   // MARK: Export
 
@@ -1180,7 +1381,13 @@ struct ComposerCanvas: View {
   private func handlePasteSelection() { if canEditBoard { pasteSelectedCards() } }
   private func handleSelectAllCards() { if canEditBoard { board.selectAll() } }
   private func handleEscapeBoard() {
+    // The ⇧⌘F writing sheet closes first — it owns the screen while it's up.
     if focusedCardID != nil { closeFocus(); return }
+    // A live promotion chip is the shallowest board-level thing Esc can dismiss — retract it and
+    // swallow the keystroke so it doesn't also revert the tool or drop the selection underneath.
+    if promotion != nil { dismissPromotion(); return }
+    // While a card is being edited its editor owns Esc (inline text resigns focus; stage editors
+    // cancel per-kind), so the board Esc cascade must not also fire.
     if board.editingInteraction != nil { return }
     // Esc mid-draw abandons the in-flight shape/freehand: clear the preview state here (the
     // InputView, listening for the same escape, drops its own drag so the pending mouse-up can't
@@ -1199,8 +1406,8 @@ struct ComposerCanvas: View {
       dismiss()
     }
   }
-  private func handleUndoBoard() { if canEditBoard { board.undo() } }
-  private func handleRedoBoard() { if canEditBoard { board.redo() } }
+  private func handleUndoBoard() { if canEditBoard { dismissPromotion(); board.undo() } }
+  private func handleRedoBoard() { if canEditBoard { dismissPromotion(); board.redo() } }
   private func handleGroupSelection() { if canEditBoard { board.groupSelection() } }
   private func handleUngroupSelection() { if canEditBoard { board.ungroupSelection() } }
   private func handleLockSelection() { if canEditBoard { board.lockSelection(true) } }
@@ -1222,28 +1429,23 @@ struct ComposerCanvas: View {
   // Rename only touches the board's name, never its cards — no flush/reload needed.
   private func renameBoard(_ id: PersistentIdentifier, to name: String) { store.rename(id, to: name) }
 
+  /// A fresh board's first card opens into its editing stage so the caret is ready. Only a text card
+  /// has a caret-first stage; a non-text first card is left selected.
   private func focusFirstCard() {
-    guard let id = board.cards.first?.id else { return }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.interaction(for: id).controller.focus() }
+    guard let id = board.cards.first?.id,
+          board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.beginEditing(id) }
   }
 
-  /// On panel open: enter editing on the active (or first) card so the caret is ready to type.
-  /// Never steals focus mid-edit or while an overlay/settings is up.
+  /// On panel open: enter editing on the active (or first) text card so the caret is ready to type.
+  /// The stage owns focus, so this just arms edit mode. Never steals it mid-edit or while an
+  /// overlay/settings is up.
   private func enterEditingForEntry() {
     guard board.editingInteraction == nil, !store.isSettingsOpen, store.compiledDraft == nil,
           !store.isHistoryOpen else { return }
     let id = board.primarySelectedCardID ?? board.cards.first?.id
     guard let id, board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
     board.beginEditing(id)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { board.interaction(for: id).controller.focus() }
-  }
-
-  /// A pan or zoom would strand caret-anchored overlays at a stale point, so close them.
-  private func dismissEditorOverlays() {
-    guard let editing = board.editingInteraction else { return }
-    if editing.mentions.isOpen { editing.mentions.isOpen = false; editing.mentions.items = [] }
-    if editing.appSearch.isOpen { editing.appSearch.isOpen = false }
-    if editing.lint.activeFlagID != nil { editing.lint.activeFlagID = nil }
   }
 
   /// The sidebar gear toggles Settings the way ⌘J / the rail toggle Agent: a second click on the
@@ -1305,10 +1507,10 @@ struct ComposerCanvas: View {
     // The compiled-draft overlay is a focused modal — dismiss it before opening the palette.
     guard store.compiledDraft == nil else { return }
     store.isHistoryOpen = false
-    // Capture the editing card now: mounting the palette's search field resigns the editor's
-    // first responder (async), which clears `board.editingCardID` before a later dismiss can read it.
+    // Capture the editing card, then end the edit session so its stage (zIndex 70) doesn't sit over
+    // the palette (zIndex 50). Cancel hands editing back by reopening the stage on the same card.
     paletteReturnCardID = board.editingCardID
-    dismissEditorOverlays()
+    if let id = board.editingCardID { board.endEditing(id) }
     showPalette = true
   }
 
@@ -1318,15 +1520,21 @@ struct ComposerCanvas: View {
     paletteReturnCardID = nil
   }
 
-  /// Cancel (Esc / click-away / a second ⌘K) closes the palette and returns the caret to the card
-  /// you were writing in when you summoned it — the palette stole first responder, so without this
-  /// you'd land back on the board instead of mid-sentence.
+  /// Cancel (Esc / click-away / a second ⌘K) closes the palette and hands editing back to the card
+  /// you summoned it from — reopening its stage (the palette dropped the edit session so it could sit
+  /// on top). Without this you'd land back on the bare board instead of mid-edit.
   private func dismissPalette() {
     showPalette = false
     guard let id = paletteReturnCardID else { return }
     paletteReturnCardID = nil
+    guard let card = board.cards.first(where: { $0.id == id }) else { return }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
-      board.interaction(for: id).controller.focus()
+      board.beginEditing(id)
+      // Stage kinds refocus their own fields on appear; the inline text editor needs the caret
+      // handed back explicitly.
+      if card.elementKind == .text {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { board.interaction(for: id).controller.focus() }
+      }
     }
   }
 
@@ -1350,6 +1558,16 @@ struct ComposerCanvas: View {
       PaletteCommand(id: "focus", title: "Focus write", subtitle: "Expand the current card into a writing sheet", symbol: "rectangle.expand.vertical", shortcut: "⇧⌘F") { toggleFocus() },
       PaletteCommand(id: "add-graph", title: "Add graph to board", subtitle: "Blank axes at the center of the view", symbol: "chart.xyaxis.line") { addGraphToBoard() },
     ]
+    // Tidy: the human's reach for the agent's `relayout`. Board-wide re-flow needs ≥2 cards; the
+    // selection variant appears only when ≥2 cards are selected. Symbol probes the running OS so it
+    // degrades below `wand.and.sparkles`'s macOS-15 floor.
+    let tidySymbol = SFSymbolName.resolve("wand.and.sparkles", fallback: "sparkles")
+    if board.cards.count > 1 {
+      commands.append(PaletteCommand(id: "tidy-board", title: "Tidy board", subtitle: "Re-flow every card into a clean layout", symbol: tidySymbol) { tidyBoard() })
+    }
+    if board.selectedCardIDs.count > 1 {
+      commands.append(PaletteCommand(id: "tidy-selection", title: "Tidy selection", subtitle: "Re-flow the selected cards in place", symbol: tidySymbol) { tidySelection() })
+    }
     if let card = solelySelectedCard {
       let kind = card.elementKind
       if kind == .line || kind == .arrow {
@@ -1374,6 +1592,19 @@ struct ComposerCanvas: View {
     let id = board.addGraph(at: boardPoint(forViewport: viewportCenter))
     board.select(id)
     board.beginEditing(id)
+  }
+
+  /// Board-wide tidy: re-flow everything, then fit the result into view (with animation) the way the
+  /// old palette Fit command did, so the user sees the whole cleaned board.
+  private func tidyBoard() {
+    board.relayout()
+    withAnimation(Theme.Motion.accessory) { fitBoard(in: lastViewportSize, forceAll: true) }
+  }
+
+  /// Selection tidy re-flows only the selected cards and keeps them where they were (center held in
+  /// relayoutSelection), so it does NOT fit — a corner tidies without the camera jumping.
+  private func tidySelection() {
+    board.relayoutSelection()
   }
 
   private func convertLineToGraph(_ id: UUID) {
@@ -1534,14 +1765,25 @@ struct ComposerCanvas: View {
     if let data = pasteboard.data(forType: cardPasteboardType) {
       do {
         let cards = try JSONDecoder().decode([CardState].self, from: data)
-        board.insertCopies(cards)
+        // Paste lands under the pointer (the set's bounding-box center on the cursor, relative
+        // layout preserved); the 28pt stagger only remains for pointer-less paste (menu-driven,
+        // cursor outside the window) so copies never stack invisibly on their originals.
+        if let pointer = pointerViewportLocation(), !cards.isEmpty {
+          let target = boardPoint(forViewport: pointer)
+          let midX = ((cards.map(\.x).min() ?? 0) + (cards.map { $0.x + $0.w }.max() ?? 0)) / 2
+          let midY = ((cards.map(\.y).min() ?? 0) + (cards.map { $0.y + $0.h }.max() ?? 0)) / 2
+          board.insertCopies(cards, offset: CGSize(width: target.x - CGFloat(midX),
+                                                   height: target.y - CGFloat(midY)))
+        } else {
+          board.insertCopies(cards)
+        }
       } catch {
         show(Toast(text: UserFacingError.message(for: error, while: "Reading selected cards from the clipboard"), symbol: "exclamationmark.triangle.fill", tint: .orange))
       }
       return
     }
     if let image = firstImage(from: pasteboard), let filename = image.ingest() {
-      board.addImageObject(path: filename, at: boardPoint(forViewport: viewportCenter))
+      board.addImageObject(path: filename, at: boardPoint(forViewport: pointerViewportLocation() ?? viewportCenter))
     }
   }
 
@@ -2344,7 +2586,6 @@ struct BoardCardLayer: View, Equatable {
   /// The graph card a parseable equation is currently dragged over (its accent drop-ring). Included
   /// in `==` so the ring appears/clears mid-drag even though nothing in `cards` changes.
   let equationDropTargetID: UUID?
-  var onEscape: () -> Void
 
   static func == (lhs: BoardCardLayer, rhs: BoardCardLayer) -> Bool {
     lhs.cards == rhs.cards &&
@@ -2367,8 +2608,7 @@ struct BoardCardLayer: View, Equatable {
           isEditing: editingCardID == card.id,
           scale: scale,
           board: board,
-          selectable: selectable,
-          onEscape: onEscape
+          selectable: selectable
         )
         .zIndex(Double(card.z) + (primarySelectedCardID == card.id ? 10_000 : 0))
       }
