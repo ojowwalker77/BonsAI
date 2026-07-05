@@ -11,6 +11,9 @@ under the new version heading.
 
 ## [Unreleased]
 
+
+## [1.4.1] - 2026-07-04
+
 ### Added
 - **Sketch a shape, get the real thing.** Draw a rough rectangle, ellipse, diamond, line, or arrow
   with the freehand tool and a quiet chip appears offering to snap it into the clean element — same
