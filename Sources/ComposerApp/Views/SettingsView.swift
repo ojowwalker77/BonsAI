@@ -204,6 +204,7 @@ private struct SettingsContent: View {
   @StateObject private var appIcons = AppIconStore()
   @ObservedObject private var capabilities = EngineCapabilityStore.shared
   @ObservedObject private var shortcutStore = ShortcutStore.shared
+  @ObservedObject private var updater = UpdaterController.shared
   @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
   @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
   @AppStorage(EnginePreferences.opencodeEnabledKey) private var opencodeEnabled = true
@@ -905,29 +906,40 @@ private struct SettingsContent: View {
 
   private var aboutPage: some View {
     let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+    let available = updater.availableUpdateVersion
     return VStack(alignment: .leading, spacing: 22) {
       VStack(alignment: .leading, spacing: 8) {
         Text("UPDATES").sectionLabel()
         VStack(spacing: 0) {
           // Identity + manual check — the version readout in the mono "instrument" voice the rails
-          // use.
+          // use. When a scheduled check has an update waiting, the row flips to the accent signal
+          // and the button becomes the install path (it opens Sparkle's update flow in focus).
           HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
               Text("BonsAI").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-              Text("Version \(version)")
-                .font(.system(size: 10.5).monospaced())
-                .foregroundStyle(Theme.Palette.menuDesc)
+              if let available {
+                Text("Version \(version)  →  \(available) available")
+                  .font(.system(size: 10.5).monospaced())
+                  .foregroundStyle(Theme.Palette.accent)
+              } else {
+                Text("Version \(version)")
+                  .font(.system(size: 10.5).monospaced())
+                  .foregroundStyle(Theme.Palette.menuDesc)
+              }
             }
             Spacer(minLength: 8)
-            Button(action: { UpdaterController.shared.checkForUpdates() }) {
-              Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+            Button(action: { updater.checkForUpdates() }) {
+              Label(available == nil ? "Check for Updates" : "Install Update",
+                    systemImage: available == nil ? "arrow.triangle.2.circlepath" : "arrow.down.circle")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.Palette.body)
+                .foregroundStyle(available == nil ? Theme.Palette.body : Theme.Palette.accent)
                 .padding(.horizontal, 11)
                 .frame(height: 28)
             }
             .buttonStyle(SettingsPillButtonStyle())
-            .help("Check GitHub for a newer BonsAI now")
+            .help(available == nil
+                  ? "Check GitHub for a newer BonsAI now"
+                  : "Install BonsAI \(available ?? "")")
           }
           .padding(.vertical, 12)
 
@@ -942,12 +954,34 @@ private struct SettingsContent: View {
             }
             Spacer(minLength: 8)
             Toggle("", isOn: Binding(
-              get: { UpdaterController.shared.automaticallyChecksForUpdates },
-              set: { UpdaterController.shared.automaticallyChecksForUpdates = $0 }))
+              get: { updater.automaticallyChecksForUpdates },
+              set: { updater.automaticallyChecksForUpdates = $0 }))
               .labelsHidden()
               .toggleStyle(.switch)
               .controlSize(.small)
           }
+          .padding(.vertical, 12)
+
+          rowDivider
+
+          // Automatic-install toggle — Sparkle downloads a found update on its own and finishes the
+          // install on quit/relaunch. Meaningless without scheduled checks, so it dims with them.
+          HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Install automatically").font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
+              Text("Download updates in the background and install on relaunch")
+                .font(.caption2).foregroundStyle(Theme.Palette.menuDesc)
+            }
+            Spacer(minLength: 8)
+            Toggle("", isOn: Binding(
+              get: { updater.automaticallyDownloadsUpdates },
+              set: { updater.automaticallyDownloadsUpdates = $0 }))
+              .labelsHidden()
+              .toggleStyle(.switch)
+              .controlSize(.small)
+          }
+          .disabled(!updater.automaticallyChecksForUpdates)
+          .opacity(updater.automaticallyChecksForUpdates ? 1 : 0.5)
           .padding(.vertical, 12)
         }
         .padding(.horizontal, 13)
