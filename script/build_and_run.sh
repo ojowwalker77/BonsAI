@@ -170,6 +170,8 @@ cat >"$INFO_PLIST" <<PLIST
   <string>https://github.com/kiwi-init/BonsAI/releases/latest/download/appcast.xml</string>
   <key>SUEnableAutomaticChecks</key>
   <true/>
+  <key>SUAutomaticallyUpdate</key>
+  <true/>
   <key>SUScheduledCheckInterval</key>
   <integer>86400</integer>
 $SPARKLE_KEY_ENTRY
