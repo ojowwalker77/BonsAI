@@ -19,6 +19,14 @@ under the new version heading.
   "→ new version available" with an **Install Update** button. One click brings the update flow
   into focus; the surprise mid-work dialog is gone.
 
+### Changed
+- **Settings presents the way Apple presents it.** The right-docked rail with chip tabs is gone;
+  Settings is now a centered glass sheet over a click-away scrim — a sidebar of sections on the
+  left (Runtime, Appearance, Connectors, Shortcuts, About), inset grouped rows with dividers on
+  the right, intro copy tucked into group footers. It also remembers where you were: switching
+  theme or font no longer bounces the sheet back to Runtime, and Settings reopens on the section
+  you left.
+
 ### Fixed
 - **The update dialog shows real release notes** — rendered headings and bullets in both light and
   dark mode instead of raw `###`/`**` markdown, starting with the next release's appcast.
