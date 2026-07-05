@@ -1,83 +1,124 @@
 import SwiftUI
 
-/// Settings as a right-docked glass panel — a sibling of the agent chat, not a modal over a dimmed
-/// board. It wears the same frosted `ComposerPanelBackground` as the main window and the agent dock,
-/// so it reads as a second panel floating in the gutter. It follows the same quiet-by-default
-/// language as the rails: neutral surfaces, accent reserved as a single signal (the selected tab),
-/// brand marks for identity — no decorative color, glows, or status confetti.
+/// Settings as a centered glass sheet over the board — the System Settings shape (a sidebar of
+/// sections, a pane of inset grouped rows) translated into BonsAI's language: one floating Liquid
+/// Glass panel inside the canvas, never an auxiliary window. A faint scrim catches click-away, and
+/// the sheet follows the same quiet-by-default voice as the rails — neutral surfaces, accent
+/// reserved as a single signal (the selected section), brand marks for identity.
 struct SettingsOverlay: View {
-  /// Sized by the canvas relative to the window so the panel adapts to the display.
-  var width: CGFloat
+  /// The canvas size, so the sheet can size itself against the window.
+  var canvasSize: CGSize
   var onClose: () -> Void
 
-  @State private var destination: SettingsDestination = .runtime
+  /// Stored, not `@State`: theme/font switches rebuild the whole canvas (PanelController.applyTheme),
+  /// which would reset transient state and bounce the sheet back to Runtime mid-click. Persisting the
+  /// section also reopens Settings where you left it, the System Settings way.
+  @AppStorage("settings.destination") private var destination: SettingsDestination = .runtime
 
   var body: some View {
-    VStack(spacing: 0) {
-      header
-      Divider().overlay(Theme.Palette.separator)
-      tabStrip
-      Divider().overlay(Theme.Palette.separator)
-      SettingsContent(destination: destination)
-        .id(destination)
-        .transition(.opacity)
+    ZStack {
+      // Click-away scrim — same weight as the ⌘K palette's.
+      Color.black.opacity(0.12)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onClose)
+
+      sheet
+        .shadow(color: Theme.Shadow.panel.color, radius: Theme.Shadow.panel.radius, y: Theme.Shadow.panel.y)
     }
-    .frame(width: width)
-    .frame(maxHeight: .infinity)
-    // Liquid Glass floating over the canvas.
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private var sheet: some View {
+    HStack(spacing: 0) {
+      sidebar
+      Divider().overlay(Theme.Palette.separator)
+      detail
+    }
+    .frame(width: sheetWidth, height: sheetHeight)
     .dockPanelSurface()
     .onExitCommand(perform: onClose)
-    .animation(Theme.Motion.accessory, value: destination)
   }
 
-  // MARK: Header
+  private var sheetWidth: CGFloat {
+    min(720, max(480, canvasSize.width - WindowChrome.edgeInset * 2 - 48))
+  }
 
-  /// Mirrors the agent dock's header rhythm: a single quiet glyph, the title, and a plain close
-  /// button — no tinted tile.
-  private var header: some View {
-    HStack(spacing: 10) {
-      Image(systemName: "slider.horizontal.3")
-        .font(.system(size: 15, weight: .semibold))
+  private var sheetHeight: CGFloat {
+    // Clear the top pills and the bottom command bar with room to spare.
+    min(560, max(360, canvasSize.height - 140))
+  }
+
+  // MARK: Sidebar
+
+  private var sidebar: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text("Settings")
+        .font(.body.weight(.semibold))
         .foregroundStyle(Theme.Palette.body)
-        .frame(width: 18)
-      Text("Settings").font(.body.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-      Spacer(minLength: 8)
-      Button(action: onClose) {
-        Image(systemName: "xmark")
-          .font(.caption.weight(.medium))
-          .foregroundStyle(Theme.Palette.title)
-          .frame(width: 24, height: 24)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .help("Close Settings  ·  Esc")
-    }
-    .padding(.leading, 16).padding(.trailing, 12).frame(height: 52)
-  }
+        .padding(.horizontal, 18)
+        .frame(height: 52)
 
-  // MARK: Tabs
-
-  /// Modern chip nav: inline icon + label capsules in a horizontal row. Selection is a filled
-  /// chip; everything else stays quiet until hover.
-  private var tabStrip: some View {
-    ScrollView(.horizontal) {
-      HStack(spacing: 5) {
+      VStack(spacing: 2) {
         ForEach(SettingsDestination.allCases) { item in
-          SettingsTab(item: item, selected: destination == item) {
+          SettingsSidebarRow(item: item, selected: destination == item) {
             destination = item
           }
         }
       }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 9)
+      .padding(.horizontal, 10)
+
+      Spacer(minLength: 8)
+
+      // Identity footer in the mono "instrument" voice the rails use.
+      Text("BonsAI \(Self.appVersion)")
+        .font(.caption2.monospaced())
+        .foregroundStyle(Theme.Palette.count)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 14)
     }
-    .scrollIndicators(.never)
+    .frame(width: 178)
+  }
+
+  private static var appVersion: String {
+    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+  }
+
+  // MARK: Detail
+
+  private var detail: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 10) {
+        Text(destination.title)
+          .font(.title3.weight(.semibold))
+          .foregroundStyle(Theme.Palette.body)
+        Spacer(minLength: 8)
+        Button(action: onClose) {
+          Image(systemName: "xmark")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(Theme.Palette.title)
+            .frame(width: 24, height: 24)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Close Settings  ·  Esc")
+      }
+      .padding(.leading, 20).padding(.trailing, 14)
+      .frame(height: 52)
+
+      Divider().overlay(Theme.Palette.separator)
+
+      SettingsContent(destination: destination)
+        .id(destination)
+        .transition(.opacity)
+    }
+    .animation(Theme.Motion.accessory, value: destination)
   }
 }
 
-/// One chip of the settings nav — icon + label inline in a capsule. The selected chip carries a
-/// quiet filled background with accent-tinted content; the rest light up on hover.
-private struct SettingsTab: View {
+/// One sidebar section row — a neutral icon tile and a label, the System Settings rhythm in the
+/// quiet idiom: the selected row carries a filled wash and an accent glyph; the rest brighten on
+/// hover.
+private struct SettingsSidebarRow: View {
   let item: SettingsDestination
   let selected: Bool
   var action: () -> Void
@@ -85,28 +126,35 @@ private struct SettingsTab: View {
 
   var body: some View {
     Button(action: action) {
-      HStack(spacing: 5) {
-        Image(systemName: item.symbol).font(.system(size: 11.5, weight: .medium))
-        Text(item.title).font(.system(size: 11.5, weight: .medium)).fixedSize()
+      HStack(spacing: 9) {
+        Image(systemName: item.symbol)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(selected ? AnyShapeStyle(Theme.Palette.accent) : AnyShapeStyle(Theme.Palette.menuDesc))
+          .frame(width: 24, height: 24)
+          .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.tagFill)
+          )
+          .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+              .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1)
+          )
+        Text(item.title)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(selected || hovering ? Theme.Palette.body : Theme.Palette.menuDesc)
+        Spacer(minLength: 0)
       }
-      .foregroundStyle(foreground)
-      .padding(.horizontal, 10)
-      .frame(height: 26)
+      .padding(.horizontal, 8)
+      .frame(height: 38)
       .background(
-        Capsule().fill(selected ? Theme.Palette.keycapFill : Color.clear)
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .fill(selected ? Theme.Palette.keycapFill : (hovering ? Theme.Palette.hoverWash : Color.clear))
       )
-      .contentShape(Capsule())
+      .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
     .buttonStyle(.plain)
-    // No hover background (and no hover haptics in Settings) — label brightening carries hover.
     .onHover { hovering = $0 }
     .help(item.title)
     .animation(.easeOut(duration: 0.12), value: hovering)
-  }
-
-  private var foreground: AnyShapeStyle {
-    if selected { return AnyShapeStyle(Theme.Palette.accent) }
-    return AnyShapeStyle(hovering ? Theme.Palette.body : Theme.Palette.menuDesc)
   }
 }
 
@@ -181,7 +229,9 @@ private struct SettingsContent: View {
 
   var body: some View {
     ScrollView {
-      page.padding(16)
+      page
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
     }
     .scrollIndicators(.never)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -198,8 +248,7 @@ private struct SettingsContent: View {
     }
   }
 
-  /// A quiet page intro: a plain heading and a single line of guidance. No accent eyebrow, no hero —
-  /// the selected tab is the title; this just orients.
+  /// A quiet sub-section intro inside a page: a plain heading and a single line of guidance.
   private func pageHeader(_ title: String, _ subtitle: String) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(title).font(.headline).foregroundStyle(Theme.Palette.body)
@@ -210,103 +259,121 @@ private struct SettingsContent: View {
     }
   }
 
+  /// The inset divider between rows of one grouped card.
+  private var rowDivider: some View {
+    Divider().overlay(Theme.Palette.separator)
+  }
+
+  /// A group's explanatory footer, slightly inset like the System Settings idiom.
+  private func groupFooter(_ text: String) -> some View {
+    Text(text)
+      .font(.caption)
+      .foregroundStyle(Theme.Palette.count)
+      .fixedSize(horizontal: false, vertical: true)
+      .padding(.horizontal, 2)
+  }
+
   // MARK: Runtime
 
   private var runtimePage: some View {
     let states = HeadlessEngine.allCases.map { capabilities.status(for: $0) } + [capabilities.appleIntelligence]
     let ready = states.filter { $0.isAvailable }.count
 
-    return VStack(alignment: .leading, spacing: 16) {
-      VStack(alignment: .leading, spacing: 10) {
-        pageHeader("Local intelligence",
-                   "Only engines installed and answering on this Mac are offered.")
+    return VStack(alignment: .leading, spacing: 22) {
+      // Engines — one grouped card, the readout and recheck riding the section label row.
+      VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 8) {
-          readout(ready: ready, total: states.count)
+          Text("ENGINES").sectionLabel()
           Spacer(minLength: 8)
+          readout(ready: ready, total: states.count)
           Button(action: capabilities.refresh) {
             Label("Recheck", systemImage: "arrow.clockwise")
               .font(.caption.weight(.semibold))
               .foregroundStyle(Theme.Palette.body)
               .padding(.horizontal, 11)
-              .frame(height: 28)
+              .frame(height: 26)
           }
           .buttonStyle(SettingsPillButtonStyle())
           .help("Re-scan this Mac for installed engines")
         }
-      }
 
-      VStack(spacing: 8) {
-        engineRow(
-          name: HeadlessEngine.claude.title,
-          command: HeadlessEngine.claude.commandLabel,
-          availability: capabilities.status(for: .claude),
-          toggle: $claudeEnabled
-        ) { EngineLogo(engine: .claude).frame(width: 18, height: 18) }
-        engineRow(
-          name: HeadlessEngine.codex.title,
-          command: HeadlessEngine.codex.commandLabel,
-          availability: capabilities.status(for: .codex),
-          toggle: $codexEnabled
-        ) { EngineLogo(engine: .codex).frame(width: 18, height: 18) }
-        engineRow(
-          name: HeadlessEngine.opencode.title,
-          command: HeadlessEngine.opencode.commandLabel,
-          availability: capabilities.status(for: .opencode),
-          toggle: $opencodeEnabled
-        ) { EngineLogo(engine: .opencode).frame(width: 18, height: 18) }
-
-        engineRow(
-          name: "Apple Intelligence",
-          command: "semantic lint",
-          availability: capabilities.appleIntelligence,
-          toggle: nil
-        ) {
-          // The genuine Apple Intelligence mark — brand identity, the same rainbow the agent icon
-          // uses — not decorative color. `apple.intelligence` is macOS 15+, so below the app's
-          // 14 floor it falls back to `sparkles` rather than showing a missing-glyph box.
-          Image(systemName: "apple.intelligence", fallback: "sparkles")
-            .font(.system(size: 19, weight: .medium))
-            .foregroundStyle(AngularGradient(
-              gradient: Gradient(colors: [.orange, .red, .purple, .blue, .cyan, .orange]),
-              center: .center))
+        VStack(spacing: 0) {
+          engineRow(
+            name: HeadlessEngine.claude.title,
+            command: HeadlessEngine.claude.commandLabel,
+            availability: capabilities.status(for: .claude),
+            toggle: $claudeEnabled
+          ) { EngineLogo(engine: .claude).frame(width: 16, height: 16) }
+          rowDivider
+          engineRow(
+            name: HeadlessEngine.codex.title,
+            command: HeadlessEngine.codex.commandLabel,
+            availability: capabilities.status(for: .codex),
+            toggle: $codexEnabled
+          ) { EngineLogo(engine: .codex).frame(width: 16, height: 16) }
+          rowDivider
+          engineRow(
+            name: HeadlessEngine.opencode.title,
+            command: HeadlessEngine.opencode.commandLabel,
+            availability: capabilities.status(for: .opencode),
+            toggle: $opencodeEnabled
+          ) { EngineLogo(engine: .opencode).frame(width: 16, height: 16) }
+          rowDivider
+          engineRow(
+            name: "Apple Intelligence",
+            command: "semantic lint",
+            availability: capabilities.appleIntelligence,
+            toggle: nil
+          ) {
+            // The genuine Apple Intelligence mark — brand identity, the same rainbow the agent icon
+            // uses — not decorative color. `apple.intelligence` is macOS 15+, so below the app's
+            // 14 floor it falls back to `sparkles` rather than showing a missing-glyph box.
+            Image(systemName: "apple.intelligence", fallback: "sparkles")
+              .font(.system(size: 16, weight: .medium))
+              .foregroundStyle(AngularGradient(
+                gradient: Gradient(colors: [.orange, .red, .purple, .blue, .cyan, .orange]),
+                center: .center))
+          }
         }
+        .padding(.horizontal, 13)
+        .settingsCard()
+
+        groupFooter("Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac.")
       }
 
       modelsCard
 
-      Label("CLI prompts stay on your configured agent accounts. Apple Intelligence runs the on-device lint and never sends a draft off your Mac.", systemImage: "lock.fill")
-        .font(.caption)
-        .foregroundStyle(Theme.Palette.count)
-        .fixedSize(horizontal: false, vertical: true)
-
       // Only appears once the agent has standing "Always Allow" grants - lets a user revoke them
       // without editing defaults by hand.
       if agentHasGrants {
-        HStack(spacing: 8) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text("Agent tool permissions")
-              .font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-            Text("Tools you chose \"Always Allow\" for run without asking again.")
-              .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
-              .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 8) {
+          Text("PERMISSIONS").sectionLabel()
+          HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Agent tool permissions")
+                .font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+              Text("Tools you chose \"Always Allow\" for run without asking again.")
+                .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button {
+              AgentPermissionBroker.resetRememberedGrants()
+              agentHasGrants = false
+            } label: {
+              Label("Reset", systemImage: "arrow.counterclockwise")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.Palette.body)
+                .padding(.horizontal, 11)
+                .frame(height: 28)
+            }
+            .buttonStyle(SettingsPillButtonStyle())
+            .help("Ask again next time the agent uses one of these tools")
           }
-          Spacer(minLength: 8)
-          Button {
-            AgentPermissionBroker.resetRememberedGrants()
-            agentHasGrants = false
-          } label: {
-            Label("Reset", systemImage: "arrow.counterclockwise")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(Theme.Palette.body)
-              .padding(.horizontal, 11)
-              .frame(height: 28)
-          }
-          .buttonStyle(SettingsPillButtonStyle())
-          .help("Ask again next time the agent uses one of these tools")
+          .padding(.horizontal, 13)
+          .padding(.vertical, 12)
+          .settingsCard()
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 12)
-        .settingsCard()
       }
     }
     .onAppear {
@@ -331,7 +398,7 @@ private struct SettingsContent: View {
       .padding(.horizontal, 13)
       .settingsCard()
       if availableEngines.isEmpty {
-        Text("No engine is enabled and installed. Enable one in Runtime above.")
+        Text("No engine is enabled and installed. Enable one in Engines above.")
           .font(.caption).foregroundStyle(.orange)
       }
     }
@@ -461,6 +528,8 @@ private struct SettingsContent: View {
     .background(Capsule().fill(Theme.Palette.segmentedFill))
   }
 
+  /// One engine row of the grouped card: a neutral brand tile, name + status dot, the command in
+  /// mono, and the enable switch. The logo is the color; the tile never lights up.
   private func engineRow<Icon: View>(
     name: String,
     command: String,
@@ -470,21 +539,20 @@ private struct SettingsContent: View {
   ) -> some View {
     let available = availability.isAvailable
 
-    return HStack(spacing: 12) {
-      // A neutral tile holds the brand mark — the logo is the color; the tile never lights up.
+    return HStack(spacing: 11) {
       icon()
-        .frame(width: 42, height: 42)
-        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Theme.Palette.tagFill))
+        .frame(width: 32, height: 32)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.Palette.tagFill))
         .overlay(
-          RoundedRectangle(cornerRadius: 11, style: .continuous)
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
             .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1)
         )
         .opacity(available ? 1 : 0.4)
         .saturation(available ? 1 : 0.2)
 
-      VStack(alignment: .leading, spacing: 4) {
+      VStack(alignment: .leading, spacing: 3) {
         HStack(spacing: 7) {
-          Text(name).font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+          Text(name).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
           statusDot(availability)
         }
         HStack(spacing: 6) {
@@ -503,10 +571,7 @@ private struct SettingsContent: View {
 
       trailingControl(availability: availability, toggle: toggle)
     }
-    .padding(.horizontal, 13)
-    .padding(.vertical, 12)
-    .frame(minHeight: 72)
-    .settingsCard()
+    .padding(.vertical, 11)
     .opacity(available ? 1 : 0.78)
   }
 
@@ -562,7 +627,7 @@ private struct SettingsContent: View {
   // MARK: Appearance
 
   private var appearancePage: some View {
-    VStack(alignment: .leading, spacing: 20) {
+    VStack(alignment: .leading, spacing: 22) {
       themeCard
       fontCard
       canvasGlassCard
@@ -589,7 +654,7 @@ private struct SettingsContent: View {
     }
   }
 
-  /// Canvas background transparency — solid by default; the board behind this panel updates live
+  /// Canvas background transparency — solid by default; the board behind this sheet updates live
   /// as the slider moves, so it is its own preview.
   private var canvasGlassCard: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -643,9 +708,8 @@ private struct SettingsContent: View {
   // MARK: Connectors
 
   private var connectorsPage: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      pageHeader("Connectors",
-                 "Type @ in a card to attach live context. Copied drafts become self-contained text — the source is resolved at copy time.")
+    VStack(alignment: .leading, spacing: 22) {
+      groupFooter("Type @ in a card to attach live context. Copied drafts become self-contained text — the source is resolved at copy time.")
 
       agentSkillsCard
 
@@ -654,7 +718,7 @@ private struct SettingsContent: View {
           Text(group.category.title.uppercased()).sectionLabel()
           VStack(spacing: 0) {
             ForEach(Array(group.items.enumerated()), id: \.element.id) { index, app in
-              if index > 0 { Divider().overlay(Theme.Palette.separator) }
+              if index > 0 { rowDivider }
               connectorRow(app)
             }
           }
@@ -673,7 +737,7 @@ private struct SettingsContent: View {
       Text("AGENT SKILLS").sectionLabel()
       VStack(spacing: 0) {
         ForEach(Array(AgentSkillTarget.allCases.enumerated()), id: \.element.id) { index, target in
-          if index > 0 { Divider().overlay(Theme.Palette.separator) }
+          if index > 0 { rowDivider }
           agentSkillRow(target)
         }
       }
@@ -766,66 +830,73 @@ private struct SettingsContent: View {
   // MARK: Shortcuts
 
   private var shortcutsPage: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      pageHeader("Keyboard",
-                 "The essentials for writing, arranging, and exporting without breaking flow.")
-
-      VStack(spacing: 7) {
-        // The summon hotkey is user-configurable (records into ShortcutStore, which HotKeyManager
-        // re-binds); the rest are fixed in-app commands shown for reference.
-        HStack(spacing: 10) {
-          Text("Summon Composer")
-            .font(.callout.weight(.medium))
-            .foregroundStyle(Theme.Palette.body)
-            .lineLimit(1)
-          Spacer(minLength: 8)
-          ShortcutRecorder(shortcut: $shortcutStore.shortcut, defaultValue: .default)
-        }
-        .padding(.horizontal, 13)
-        .frame(minHeight: 46)
-        .settingsCard()
-
-        HStack(spacing: 10) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text("Snap to board")
-              .font(.callout.weight(.medium))
-              .foregroundStyle(Theme.Palette.body)
-              .lineLimit(1)
-            Text("Capture a screen region — read on-device into an agent-ready card.")
-              .font(.caption)
-              .foregroundStyle(Theme.Palette.menuDesc)
-              .lineLimit(1)
-          }
-          Spacer(minLength: 8)
-          ShortcutRecorder(shortcut: $shortcutStore.captureShortcut, defaultValue: .defaultCapture)
-        }
-        .padding(.horizontal, 13)
-        .frame(minHeight: 46)
-        .settingsCard()
-
-        ForEach(shortcuts, id: \.0) { title, key in
+    VStack(alignment: .leading, spacing: 22) {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("SUMMON").sectionLabel()
+        VStack(spacing: 0) {
+          // The summon hotkey is user-configurable (records into ShortcutStore, which HotKeyManager
+          // re-binds); the rest are fixed in-app commands shown for reference.
           HStack(spacing: 10) {
-            Text(title)
+            Text("Summon Composer")
               .font(.callout.weight(.medium))
               .foregroundStyle(Theme.Palette.body)
               .lineLimit(1)
             Spacer(minLength: 8)
-            Text(key)
-              .font(.caption.monospaced().weight(.semibold))
-              .foregroundStyle(Theme.Palette.body)
-              .padding(.horizontal, 7)
-              .padding(.vertical, 4)
-              .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                  .fill(Theme.Palette.keycapFill)
-                  .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1))
-              )
+            ShortcutRecorder(shortcut: $shortcutStore.shortcut, defaultValue: .default)
           }
-          .padding(.horizontal, 13)
-          .frame(minHeight: 46)
-          .settingsCard()
+          .padding(.vertical, 11)
+
+          rowDivider
+
+          HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Snap to board")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(Theme.Palette.body)
+                .lineLimit(1)
+              Text("Capture a screen region — read on-device into an agent-ready card.")
+                .font(.caption)
+                .foregroundStyle(Theme.Palette.menuDesc)
+                .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            ShortcutRecorder(shortcut: $shortcutStore.captureShortcut, defaultValue: .defaultCapture)
+          }
+          .padding(.vertical, 11)
         }
+        .padding(.horizontal, 13)
+        .settingsCard()
+      }
+
+      VStack(alignment: .leading, spacing: 8) {
+        Text("ON THE BOARD").sectionLabel()
+        VStack(spacing: 0) {
+          ForEach(Array(shortcuts.enumerated()), id: \.element.0) { index, pair in
+            if index > 0 { rowDivider }
+            HStack(spacing: 10) {
+              Text(pair.0)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(Theme.Palette.body)
+                .lineLimit(1)
+              Spacer(minLength: 8)
+              Text(pair.1)
+                .font(.caption.monospaced().weight(.semibold))
+                .foregroundStyle(Theme.Palette.body)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(
+                  RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Theme.Palette.keycapFill)
+                    .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                      .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1))
+                )
+            }
+            .frame(minHeight: 42)
+          }
+        }
+        .padding(.horizontal, 13)
+        .settingsCard()
+        groupFooter("The essentials for writing, arranging, and exporting without breaking flow.")
       }
     }
   }
@@ -834,52 +905,54 @@ private struct SettingsContent: View {
 
   private var aboutPage: some View {
     let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
-    return VStack(alignment: .leading, spacing: 16) {
-      pageHeader("Updates",
-                 "BonsAI checks GitHub for new releases automatically, then downloads and installs them in place.")
+    return VStack(alignment: .leading, spacing: 22) {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("UPDATES").sectionLabel()
+        VStack(spacing: 0) {
+          // Identity + manual check — the version readout in the mono "instrument" voice the rails
+          // use.
+          HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("BonsAI").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+              Text("Version \(version)")
+                .font(.system(size: 10.5).monospaced())
+                .foregroundStyle(Theme.Palette.menuDesc)
+            }
+            Spacer(minLength: 8)
+            Button(action: { UpdaterController.shared.checkForUpdates() }) {
+              Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.Palette.body)
+                .padding(.horizontal, 11)
+                .frame(height: 28)
+            }
+            .buttonStyle(SettingsPillButtonStyle())
+            .help("Check GitHub for a newer BonsAI now")
+          }
+          .padding(.vertical, 12)
 
-      VStack(spacing: 8) {
-        // Identity + manual check — the version readout in the mono "instrument" voice the rails use.
-        HStack(spacing: 12) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("BonsAI").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-            Text("Version \(version)")
-              .font(.system(size: 10.5).monospaced())
-              .foregroundStyle(Theme.Palette.menuDesc)
+          rowDivider
+
+          // Automatic-check toggle, bound straight to Sparkle's scheduled-update preference.
+          HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Check automatically").font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
+              Text("Look for updates daily in the background")
+                .font(.caption2).foregroundStyle(Theme.Palette.menuDesc)
+            }
+            Spacer(minLength: 8)
+            Toggle("", isOn: Binding(
+              get: { UpdaterController.shared.automaticallyChecksForUpdates },
+              set: { UpdaterController.shared.automaticallyChecksForUpdates = $0 }))
+              .labelsHidden()
+              .toggleStyle(.switch)
+              .controlSize(.small)
           }
-          Spacer(minLength: 8)
-          Button(action: { UpdaterController.shared.checkForUpdates() }) {
-            Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(Theme.Palette.body)
-              .padding(.horizontal, 11)
-              .frame(height: 28)
-          }
-          .buttonStyle(SettingsPillButtonStyle())
-          .help("Check GitHub for a newer BonsAI now")
+          .padding(.vertical, 12)
         }
         .padding(.horizontal, 13)
-        .frame(minHeight: 56)
         .settingsCard()
-
-        // Automatic-check toggle, bound straight to Sparkle's scheduled-update preference.
-        HStack(spacing: 10) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text("Check automatically").font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
-            Text("Look for updates daily in the background")
-              .font(.caption2).foregroundStyle(Theme.Palette.menuDesc)
-          }
-          Spacer(minLength: 8)
-          Toggle("", isOn: Binding(
-            get: { UpdaterController.shared.automaticallyChecksForUpdates },
-            set: { UpdaterController.shared.automaticallyChecksForUpdates = $0 }))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
-        }
-        .padding(.horizontal, 13)
-        .frame(minHeight: 52)
-        .settingsCard()
+        groupFooter("BonsAI checks GitHub for new releases automatically, then downloads and installs them in place.")
       }
     }
   }
@@ -1098,7 +1171,7 @@ private struct SettingsPillButtonStyle: ButtonStyle {
 }
 
 private extension View {
-  /// Subtle raised tile for the rows and cards inside the panel, over the frosted glass.
+  /// Subtle raised tile for the grouped cards inside the pane, over the frosted glass.
   func settingsCard(radius: CGFloat = 13) -> some View {
     self.background {
       RoundedRectangle(cornerRadius: radius, style: .continuous)

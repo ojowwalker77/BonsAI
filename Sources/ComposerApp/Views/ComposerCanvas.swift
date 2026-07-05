@@ -1144,12 +1144,12 @@ struct ComposerCanvas: View {
     evaluateTextPromotion(id)
   }
 
-  /// Agent and Settings float over the canvas as glass panels (top-right, full-height).
-  /// One slot — they never co-exist.
+  /// Agent floats over the canvas as a right-docked glass panel; Settings presents as a centered
+  /// glass sheet over a click-away scrim. One slot — they never co-exist.
   @ViewBuilder
   private func dockOverlay(in size: CGSize) -> some View {
-    let width = min(360, max(300, size.width * 0.32))
     if showAgent {
+      let width = min(360, max(300, size.width * 0.32))
       AgentDock(agent: agent, width: width, onClose: { toggleAgent() })
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(.top, size.height * 0.10)
@@ -1160,14 +1160,8 @@ struct ComposerCanvas: View {
         .transition(.move(edge: .trailing).combined(with: .opacity))
         .zIndex(40)
     } else if store.isSettingsOpen {
-      SettingsOverlay(width: width, onClose: { toggleSettings() })
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .padding(.top, size.height * 0.10)
-        .padding(.trailing, WindowChrome.edgeInset)
-        // Stop above the bottom command bar rather than covering its right end.
-        .padding(.bottom, WindowChrome.edgeInset + WindowChrome.controlHeight + WindowChrome.padV * 2 + 8)
-        .shadow(color: Theme.Shadow.panel.color, radius: Theme.Shadow.panel.radius, y: Theme.Shadow.panel.y)
-        .transition(.move(edge: .trailing).combined(with: .opacity))
+      SettingsOverlay(canvasSize: size, onClose: { toggleSettings() })
+        .transition(.opacity)
         .zIndex(40)
     }
   }
