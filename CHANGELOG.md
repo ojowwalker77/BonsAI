@@ -11,6 +11,17 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Added
+- **Updates behave like updates now.** BonsAI downloads new releases in the background and
+  installs them on relaunch by default; Settings ▸ About grew an **Install automatically** toggle
+  next to "Check automatically". And when a background check finds a release, nothing interrupts
+  you — an accent **Update** pill appears in the top-right chrome and Settings ▸ About flips to
+  "→ new version available" with an **Install Update** button. One click brings the update flow
+  into focus; the surprise mid-work dialog is gone.
+
+### Fixed
+- **The update dialog shows real release notes** — rendered headings and bullets in both light and
+  dark mode instead of raw `###`/`**` markdown, starting with the next release's appcast.
 
 ## [1.4.1] - 2026-07-04
 

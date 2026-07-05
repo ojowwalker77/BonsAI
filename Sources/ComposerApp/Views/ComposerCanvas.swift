@@ -34,6 +34,7 @@ struct ComposerCanvas: View {
   /// stay in sync. The streaming transcript lives on `agent.transcript`, which the canvas does NOT
   /// observe, so per-token updates re-render only the dock — never the board.
   @ObservedObject private var agent = CanvasAgent.shared
+  @ObservedObject private var updater = UpdaterController.shared
   @State private var showAgent = false
   /// The ⌘K command palette (board switcher + buried board-level actions) is showing.
   @State private var showPalette = false
@@ -792,8 +793,13 @@ struct ComposerCanvas: View {
 
   /// The top-right chrome: an Export pill (hover-expands, like the board picker) to the LEFT of the
   /// agent pill. `.top` alignment keeps the agent pill anchored while the export pill grows down.
+  /// When a scheduled check finds a new release, an Update pill appears at the far left — the one
+  /// accent-tinted control in the chrome, so it reads as the single signal, not decoration.
   private func boardActionsPill(in size: CGSize) -> some View {
     HStack(alignment: .top, spacing: WindowChrome.itemSpacing) {
+      if let version = updater.availableUpdateVersion {
+        updatePill(version: version)
+      }
       exportMenu
       SidebarAgentButton(active: showAgent) { toggleAgent() }
         .chromePill()
@@ -801,6 +807,30 @@ struct ComposerCanvas: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     .padding(.top, WindowChrome.edgeInset)
     .padding(.trailing, WindowChrome.edgeInset)
+    .animation(Theme.Motion.accessory, value: updater.availableUpdateVersion)
+  }
+
+  /// The gentle-reminder surface for a waiting update: same pill grammar as its siblings, accent
+  /// ink for the one-signal rule. Click-through opens Sparkle's update flow in focus.
+  private func updatePill(version: String) -> some View {
+    Button(action: { updater.checkForUpdates() }) {
+      HStack(spacing: 5) {
+        Image(systemName: "arrow.down.circle")
+          .font(WindowChrome.iconFont)
+        Text("Update")
+          .font(WindowChrome.labelFont)
+          .lineLimit(1)
+      }
+      .foregroundStyle(Theme.Palette.accent)
+      .padding(.horizontal, WindowChrome.labelPadH)
+      .frame(height: WindowChrome.controlHeight)
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .onHover { if $0 { Haptics.hover() } }
+    .chromePill()
+    .help("BonsAI \(version) is ready — click to install")
+    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
   }
 
   /// The export pill is ONE glass container. At rest it is the "Export" label; on hover the same

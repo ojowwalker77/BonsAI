@@ -127,6 +127,44 @@ jobs:
       # Build the EdDSA-signed appcast Sparkle reads. sign_update emits the ready-to-embed
       # `sparkle:edSignature="…" length="…"` attributes for the enclosure. (Sparkle's own integrity
       # key — not Apple code signing.)
+      # Sparkle shows the appcast <description> in a WKWebView as HTML — raw markdown reads as
+      # literal ### and ** mush. Render the notes through GitHub's own markdown renderer and wrap
+      # them in a minimal, dark-mode-aware stylesheet so the update dialog shows real release notes.
+      - name: Render release notes to HTML
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BODY_HTML=$(gh api markdown -f mode=gfm -f text="$(cat dist/RELEASE_NOTES.md)") || BODY_HTML=""
+          if [ -z "$BODY_HTML" ]; then
+            # Renderer unreachable — fall back to readable preformatted text rather than HTML-mangled markdown.
+            BODY_HTML="<pre style=\"white-space:pre-wrap\">$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' dist/RELEASE_NOTES.md)</pre>"
+          fi
+          cat > dist/RELEASE_NOTES.html <<HTML
+          <!DOCTYPE html>
+          <html><head><meta charset="utf-8"><style>
+            :root { color-scheme: light dark; }
+            body { font: 13px/1.55 -apple-system, 'Helvetica Neue', sans-serif; margin: 14px 16px;
+                   color: #1d1d1f; }
+            h1, h2, h3 { font-size: 13px; font-weight: 600; margin: 14px 0 4px;
+                         text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.55; }
+            ul { margin: 4px 0 10px; padding-left: 20px; }
+            li { margin: 3px 0; }
+            p { margin: 6px 0; }
+            code { font: 11.5px ui-monospace, 'SF Mono', Menlo, monospace;
+                   background: rgba(127,127,127,0.14); border-radius: 4px; padding: 1px 4px; }
+            pre { background: rgba(127,127,127,0.14); border-radius: 6px; padding: 8px 10px;
+                  overflow-x: auto; }
+            pre code { background: none; padding: 0; }
+            a { color: #0969da; text-decoration: none; }
+            @media (prefers-color-scheme: dark) {
+              body { color: #e8e8ed; }
+              a { color: #6cb2ff; }
+            }
+          </style></head><body>
+          $BODY_HTML
+          </body></html>
+          HTML
+
       - name: Generate appcast.xml
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -142,7 +180,8 @@ jobs:
           SIGN_ATTRS=$("$SIGN_UPDATE" --ed-key-file "$KEYFILE" dist/BonsAI.app.zip)
           rm -f "$KEYFILE"
           PUBDATE=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
-          NOTES=$(cat dist/RELEASE_NOTES.md)
+          # Keep the CDATA section intact even if the rendered notes ever contain "]]>".
+          NOTES=$(sed 's/]]>/]]\&gt;/g' dist/RELEASE_NOTES.html)
           cat > dist/appcast.xml <<XML
           <?xml version="1.0" encoding="utf-8"?>
           <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -153,6 +192,7 @@ jobs:
           <title>BonsAI $version</title>
           <pubDate>$PUBDATE</pubDate>
           <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+          <sparkle:fullReleaseNotesLink>https://github.com/$REPO/releases</sparkle:fullReleaseNotesLink>
           <description><![CDATA[
           $NOTES
           ]]></description>
