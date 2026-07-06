@@ -11,6 +11,9 @@ under the new version heading.
 
 ## [Unreleased]
 
+
+## [1.4.2] - 2026-07-05
+
 ### Added
 - **Updates behave like updates now.** BonsAI downloads new releases in the background and
   installs them on relaunch by default; Settings ▸ About grew an **Install automatically** toggle
