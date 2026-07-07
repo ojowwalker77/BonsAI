@@ -80,7 +80,7 @@ final class HotKeyManager {
       &ref
     )
     if status != noErr {
-      UserFacingError.report("Couldn't register a global keyboard shortcut — the key combination may already be in use by another shortcut or app. Pick a different one in Settings ▸ Keyboard.")
+      UserFacingError.report("Couldn't register a global keyboard shortcut - the key combination may already be in use by another shortcut or app. Pick a different one in Settings > Keyboard.".localizedUI)
     }
     return ref
   }

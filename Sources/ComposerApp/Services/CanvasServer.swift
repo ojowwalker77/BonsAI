@@ -33,7 +33,7 @@ final class CanvasServer {
     do {
       listener = try NWListener(using: params)
     } catch {
-      let message = UserFacingError.message(for: error, while: "Starting Composer’s local canvas service on 127.0.0.1:\(Self.port)")
+      let message = UserFacingError.message(for: error, while: "Starting Composer's local canvas service on 127.0.0.1:%d".localizedUI(Self.port))
       UserFacingError.report(message)
       NSLog("[canvas] \(message)")
       return
@@ -58,7 +58,7 @@ final class CanvasServer {
       if let data { buffer.append(data) }
       guard buffer.count <= Self.maximumRequestBytes else {
         deadline.cancel()
-        self.send(connection, status: "413 Payload Too Large", json: ["ok": false, "error": "request too large"])
+        self.send(connection, status: "413 Payload Too Large", json: ["ok": false, "error": "request too large".localizedUI])
         return
       }
       if let request = HTTPRequest(buffer), request.bodyStart + request.contentLength <= Self.maximumRequestBytes,
@@ -67,10 +67,10 @@ final class CanvasServer {
         self.route(request, buffer: buffer, on: connection)
       } else if let request = HTTPRequest(buffer), request.bodyStart + request.contentLength > Self.maximumRequestBytes {
         deadline.cancel()
-        self.send(connection, status: "413 Payload Too Large", json: ["ok": false, "error": "request too large"])
+        self.send(connection, status: "413 Payload Too Large", json: ["ok": false, "error": "request too large".localizedUI])
       } else if isComplete || error != nil {
         deadline.cancel()
-        self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": "bad request"])
+        self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": "bad request".localizedUI])
       } else {
         self.read(connection, buffer: buffer, deadline: deadline)
       }
@@ -95,7 +95,7 @@ final class CanvasServer {
         } catch {
           self.send(connection, status: "500 Internal Server Error", json: [
             "ok": false,
-            "error": UserFacingError.message(for: error, while: "Encoding the canvas graph"),
+            "error": UserFacingError.message(for: error, while: "Encoding the canvas graph".localizedUI),
           ])
         }
       }
@@ -106,12 +106,12 @@ final class CanvasServer {
         let payload: [String: Any]
         do {
           guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-            self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": "Capture request must be a JSON object."])
+            self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": "Capture request must be a JSON object.".localizedUI])
             return
           }
           payload = decoded
         } catch {
-          self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": UserFacingError.message(for: error, while: "Decoding the capture request")])
+          self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": UserFacingError.message(for: error, while: "Decoding the capture request".localizedUI)])
           return
         }
         let text = payload["text"]
@@ -128,12 +128,12 @@ final class CanvasServer {
         let op: [String: Any]
         do {
           guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-            self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": "Canvas request must be a JSON object."])
+            self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": "Canvas request must be a JSON object.".localizedUI])
             return
           }
           op = decoded
         } catch {
-          self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": UserFacingError.message(for: error, while: "Decoding the canvas request")])
+          self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": UserFacingError.message(for: error, while: "Decoding the canvas request".localizedUI)])
           return
         }
         let result = CanvasBridge.shared.apply(op)
@@ -150,12 +150,12 @@ final class CanvasServer {
       let message: [String: Any]
       do {
         guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-          self.send(connection, status: "400 Bad Request", json: ["error": "MCP request must be a JSON object."])
+          self.send(connection, status: "400 Bad Request", json: ["error": "MCP request must be a JSON object.".localizedUI])
           return
         }
         message = decoded
       } catch {
-        self.send(connection, status: "400 Bad Request", json: ["error": UserFacingError.message(for: error, while: "Decoding the MCP request")])
+        self.send(connection, status: "400 Bad Request", json: ["error": UserFacingError.message(for: error, while: "Decoding the MCP request".localizedUI)])
         return
       }
       switch CanvasMCP.dispatch(message) {
@@ -180,12 +180,12 @@ final class CanvasServer {
         let message: [String: Any]
         do {
           guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-            self.send(connection, status: "400 Bad Request", json: ["error": "MCP request must be a JSON object."])
+            self.send(connection, status: "400 Bad Request", json: ["error": "MCP request must be a JSON object.".localizedUI])
             return
           }
           message = decoded
         } catch {
-          self.send(connection, status: "400 Bad Request", json: ["error": UserFacingError.message(for: error, while: "Decoding the MCP request")])
+          self.send(connection, status: "400 Bad Request", json: ["error": UserFacingError.message(for: error, while: "Decoding the MCP request".localizedUI)])
           return
         }
         if let response = PermissionMCP.handle(message) {

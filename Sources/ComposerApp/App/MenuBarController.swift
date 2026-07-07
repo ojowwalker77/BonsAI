@@ -14,7 +14,7 @@ final class MenuBarController: NSObject {
     if let button = item.button {
       button.image = Self.menuBarIcon()
       button.image?.isTemplate = true
-      button.toolTip = "BonsAI — quick capture"
+      button.toolTip = "BonsAI - quick capture".localizedUI
       button.target = self
       button.action = #selector(toggleCapturePanel)
     }
@@ -67,7 +67,7 @@ final class MenuBarController: NSObject {
     panel.hasShadow = true
 
     let field = NSTextField(string: "")
-    field.placeholderString = "Capture a thought…  ↩ to send"
+    field.placeholderString = "Capture a thought...  Return to send".localizedUI
     field.font = .systemFont(ofSize: 14)
     field.isBordered = false
     field.backgroundColor = .clear

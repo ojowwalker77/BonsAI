@@ -104,7 +104,7 @@ struct FreeWriteEditor: NSViewRepresentable {
   /// Persisted per-range ink for the serialized `text`, re-applied when the document is rebuilt
   /// from plain text (a reloaded card with no in-session attributed snapshot).
   var initialInk: [InkRun] = []
-  var placeholder = "Start writing\u{2026}"
+  var placeholder = "Start writing...".localizedUI
   var onCountChange: (Int) -> Void = { _ in }
   var onSelectionChange: (EditorSelection) -> Void = { _ in }
   var onEscape: () -> Void = {}
@@ -730,7 +730,7 @@ extension FreeWriteEditor {
       let matches = query.isEmpty ? names : names.filter { $0.lowercased().hasPrefix(query.lowercased()) }
       return matches.map {
         MentionItem(id: "$\($0)", title: $0.lowercased(), label: "$\($0)",
-                    subtitle: "board variable", symbol: "dollarsign", kind: .skill)
+                    subtitle: "board variable".localizedUI, symbol: "dollarsign", kind: .skill)
       }
     }
 

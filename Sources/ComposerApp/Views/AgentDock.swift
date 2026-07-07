@@ -54,11 +54,11 @@ struct AgentDock: View {
   private var header: some View {
     HStack(spacing: 9) {
       AgentEngineIcon(size: 16)
-      Text("Agent").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+      Text("Agent".localizedUI).font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
       if agent.isRunning { ProgressView().controlSize(.small).scaleEffect(0.55) }
       Spacer(minLength: 8)
-      iconButton("arrow.counterclockwise", help: "New conversation") { agent.reset(); draft = "" }
-      iconButton("xmark", help: "Close  ⌘J", action: onClose)
+      iconButton("arrow.counterclockwise", help: "New conversation".localizedUI) { agent.reset(); draft = "" }
+      iconButton("xmark", help: "Close  ⌘J".localizedUI, action: onClose)
     }
     .padding(.leading, 14).padding(.trailing, 10).frame(height: 46)
   }
@@ -67,7 +67,7 @@ struct AgentDock: View {
 
   private var inputArea: some View {
     VStack(alignment: .leading, spacing: 9) {
-      TextField("Message the agent…", text: $draft, axis: .vertical)
+      TextField("Message the agent...".localizedUI, text: $draft, axis: .vertical)
         .textFieldStyle(.plain)
         .lineLimit(1...6)
         .font(.callout)
@@ -124,7 +124,7 @@ struct AgentDock: View {
     let engines = availableEngines
     if engines.count >= 2, let active = CanvasAgent.resolvedEngine() {
       Menu {
-        Picker("Engine", selection: Binding(get: { active }, set: { chatEngineRaw = $0.rawValue })) {
+        Picker("Engine".localizedUI, selection: Binding(get: { active }, set: { chatEngineRaw = $0.rawValue })) {
           ForEach(engines, id: \.self) { engine in Text(engine.title).tag(engine) }
         }
       } label: {
@@ -142,7 +142,7 @@ struct AgentDock: View {
       .buttonStyle(.plain)
       .menuIndicator(.hidden)
       .fixedSize()
-      .help("Engine for the agent chat — Claude, Codex, or OpenCode")
+      .help("Engine for the agent chat - Claude, Codex, or OpenCode".localizedUI)
     }
   }
 
@@ -160,7 +160,7 @@ struct AgentDock: View {
   /// Quiet Claude model selector chip: the current tier + a chevron, checkmarked menu on click.
   private var claudeModelChip: some View {
     Menu {
-      Picker("Model", selection: $chatModel) {
+      Picker("Model".localizedUI, selection: $chatModel) {
         ForEach(ClaudeModel.allCases) { model in
           Text(model.title).tag(model)
         }
@@ -172,17 +172,17 @@ struct AgentDock: View {
     .buttonStyle(.plain)
     .menuIndicator(.hidden)
     .fixedSize()
-    .help("Model for the agent chat — mirrors Settings ▸ Runtime")
+    .help("Model for the agent chat - mirrors Settings > Runtime".localizedUI)
   }
 
   /// A provider/model chip for Codex / OpenCode, styled like the Claude chip. "Default" leaves the
   /// engine on its own default; OpenCode's list comes from `opencode models`.
   @ViewBuilder
   private func engineModelChip(_ engine: HeadlessEngine, selection raw: Binding<String>) -> some View {
-    let label = raw.wrappedValue.isEmpty ? "Default" : Self.shortModel(raw.wrappedValue)
+    let label = raw.wrappedValue.isEmpty ? "Default".localizedUI : Self.shortModel(raw.wrappedValue)
     Menu {
-      Picker("Model", selection: raw) {
-        Text("Default").tag("")
+      Picker("Model".localizedUI, selection: raw) {
+        Text("Default".localizedUI).tag("")
         ForEach(modelCatalog.models(for: engine), id: \.self) { Text(Self.shortModel($0)).tag($0) }
       }
     } label: {
@@ -192,7 +192,7 @@ struct AgentDock: View {
     .buttonStyle(.plain)
     .menuIndicator(.hidden)
     .fixedSize()
-    .help("Model for \(engine.title) — from its provider list")
+    .help("Model for %@ - from its provider list".localizedUI(engine.title))
     .onAppear { if engine == .opencode { modelCatalog.loadOpenCodeModelsIfNeeded() } }
   }
 
@@ -228,7 +228,7 @@ struct AgentDock: View {
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Grounded in \(dir.path) — click to change")
+        .help("Grounded in %@ - click to change".localizedUI(dir.path))
 
         Button { agent.setGroundingDirectory(nil) } label: {
           Image(systemName: "xmark")
@@ -237,7 +237,7 @@ struct AgentDock: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Remove grounding — back to canvas-only")
+        .help("Remove grounding - back to canvas-only".localizedUI)
       }
       .padding(.horizontal, 9).frame(height: 22)
       .background(Capsule().fill(Theme.Palette.keycapFill))
@@ -245,7 +245,7 @@ struct AgentDock: View {
       Button { agent.chooseDirectory() } label: {
         HStack(spacing: 4) {
           Image(systemName: "folder.badge.plus").font(.system(size: 9.5))
-          Text("Ground").font(.caption.weight(.medium))
+          Text("Ground".localizedUI).font(.caption.weight(.medium))
         }
         .foregroundStyle(Theme.Palette.menuDesc)
         .padding(.horizontal, 9).frame(height: 22)
@@ -253,7 +253,7 @@ struct AgentDock: View {
         .contentShape(Capsule())
       }
       .buttonStyle(.plain)
-      .help("Ground the agent in a folder it can read")
+      .help("Ground the agent in a folder it can read".localizedUI)
     }
   }
 
@@ -271,7 +271,7 @@ struct AgentDock: View {
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help("Stop")
+        .help("Stop".localizedUI)
       } else {
         Button(action: submit) {
           Image(systemName: "arrow.up")
@@ -283,7 +283,7 @@ struct AgentDock: View {
         }
         .buttonStyle(.plain)
         .disabled(!canSend)
-        .help("Send  ·  ⇧↩ for a new line")
+        .help("Send  ·  ⇧↩ for a new line".localizedUI)
       }
     }
     .animation(.easeOut(duration: 0.12), value: canSend)
@@ -345,16 +345,16 @@ private struct AgentTranscriptView: View {
   private var emptyState: some View {
     VStack(alignment: .leading, spacing: 14) {
       VStack(alignment: .leading, spacing: 5) {
-        Text("Think out loud").font(.body.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-        Text("The agent reads your board and edits it as you talk — adding, sharpening, and connecting cards.")
+        Text("Think out loud".localizedUI).font(.body.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+        Text("The agent reads your board and edits it as you talk - adding, sharpening, and connecting cards.".localizedUI)
           .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
       VStack(alignment: .leading, spacing: 6) {
-        SuggestionChip(text: "Read my board and tell me what's missing", onSuggest: onSuggest)
-        SuggestionChip(text: "Tidy the board and group related cards", onSuggest: onSuggest)
-        SuggestionChip(text: "Turn my notes into a build plan", onSuggest: onSuggest)
+        SuggestionChip(text: "Read my board and tell me what's missing".localizedUI, onSuggest: onSuggest)
+        SuggestionChip(text: "Tidy the board and group related cards".localizedUI, onSuggest: onSuggest)
+        SuggestionChip(text: "Turn my notes into a build plan".localizedUI, onSuggest: onSuggest)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -400,7 +400,7 @@ private struct AgentTranscriptView: View {
   private var thinkingRow: some View {
     HStack(spacing: 7) {
       ProgressView().controlSize(.small).scaleEffect(0.6)
-      Text("thinking…").font(.caption).foregroundStyle(Theme.Palette.menuDesc)
+      Text("thinking...".localizedUI).font(.caption).foregroundStyle(Theme.Palette.menuDesc)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }

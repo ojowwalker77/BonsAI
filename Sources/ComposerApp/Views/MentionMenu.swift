@@ -64,9 +64,9 @@ struct MentionMenu: View {
   private var footer: some View {
     HStack(spacing: 6) {
       keycap("↑↓")
-      Text("navigate").font(.caption2).foregroundStyle(Theme.Palette.title)
+      Text("navigate".localizedUI).font(.caption2).foregroundStyle(Theme.Palette.title)
       keycap("↵")
-      Text("insert").font(.caption2).foregroundStyle(Theme.Palette.title)
+      Text("insert".localizedUI).font(.caption2).foregroundStyle(Theme.Palette.title)
       Spacer()
     }
     .padding(.horizontal, 12)

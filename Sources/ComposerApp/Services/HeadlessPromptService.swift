@@ -73,7 +73,7 @@ struct HeadlessPromptService {
     do {
       result = try await Shell.run(arguments)
     } catch {
-      throw HeadlessPromptError.failed(UserFacingError.message(for: error, while: "Composer could not start \(engine.title)"))
+      throw HeadlessPromptError.failed(UserFacingError.message(for: error, while: "Composer could not start %@".localizedUI(engine.title)))
     }
     guard result.status == 0 else {
       throw HeadlessPromptError.failed(UserFacingError.commandFailure(command: engine.title, result: result))

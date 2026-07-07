@@ -269,7 +269,7 @@ struct ComposerCanvas: View {
 
   private func ingestQuickCapture(_ text: String) {
     guard board.captureExternalText(text) != nil else { return }
-    show(Toast(text: "Captured on board", symbol: "leaf.fill", tint: .accentColor))
+      show(Toast(text: "Captured on board".localizedUI, symbol: "leaf.fill", tint: .accentColor))
   }
 
   /// The agent and Settings share the single overlay slot, driven by `showAgent` /
@@ -387,7 +387,7 @@ struct ComposerCanvas: View {
           Image(systemName: "photo.badge.plus")
             .font(WindowChrome.iconFont)
             .foregroundStyle(Theme.Palette.chromeGlyph)
-          Text("Drop to add")
+            Text("Drop to add".localizedUI)
             .font(WindowChrome.labelFont)
             .foregroundStyle(Theme.Palette.chromeText)
             .padding(.trailing, WindowChrome.labelPadH)
@@ -625,7 +625,7 @@ struct ComposerCanvas: View {
   /// pill hugs its content instead of stretching).
   private var currentBoardName: String {
     let name = store.current?.title.trimmed ?? ""
-    guard !name.isEmpty else { return "Untitled" }
+    guard !name.isEmpty else { return "Untitled".localizedUI }
     return name.count > 32 ? String(name.prefix(32)) + "\u{2026}" : name
   }
 
@@ -654,7 +654,7 @@ struct ComposerCanvas: View {
   @ViewBuilder
   private func currentBoardTitleRow(canDelete: Bool) -> some View {
     if renamingCurrentBoard {
-      TextField("Board name", text: $currentBoardDraft)
+      TextField("Board name".localizedUI, text: $currentBoardDraft)
         .textFieldStyle(.plain)
         .font(WindowChrome.labelFont)
         .foregroundStyle(Theme.Palette.body)
@@ -676,9 +676,9 @@ struct ComposerCanvas: View {
         .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
         .contentShape(Rectangle())
         .contextMenu {
-          Button("Rename Board") { beginCurrentBoardRename() }
+          Button("Rename Board".localizedUI) { beginCurrentBoardRename() }
           if canDelete, let id = store.currentID {
-            Button("Delete Board", role: .destructive) { deleteBoard(id) }
+            Button("Delete Board".localizedUI, role: .destructive) { deleteBoard(id) }
           }
         }
     }
@@ -725,7 +725,7 @@ struct ComposerCanvas: View {
               LazyVStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
                 ForEach(others, id: \.persistentModelID) { dump in
                   BoardPickerRow(
-                    title: dump.title.isEmpty ? "Untitled" : String(dump.title.prefix(40)),
+                    title: dump.title.isEmpty ? "Untitled".localizedUI : String(dump.title.prefix(40)),
                     isCurrent: false,
                     onPick: {
                       boardPickerOpen = false
@@ -753,7 +753,7 @@ struct ComposerCanvas: View {
     .composerPopupSurface()
     .onHover { setBoardPickerHover($0) }
     .animation(.easeOut(duration: 0.16), value: boardPickerOpen)
-    .help(boardPickerOpen ? "" : "Switch board")
+    .help(boardPickerOpen ? "" : "Switch board".localizedUI)
   }
 
   /// Full-width "New board" action pinned under the list.
@@ -764,7 +764,7 @@ struct ComposerCanvas: View {
     } label: {
       HStack(spacing: 6) {
         Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
-        Text("New board").font(WindowChrome.labelFont)
+        Text("New board".localizedUI).font(WindowChrome.labelFont)
       }
       .foregroundStyle(Theme.Palette.body)
       .frame(maxWidth: .infinity)
@@ -773,7 +773,7 @@ struct ComposerCanvas: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .help("New board  ⌘N")
+    .help("New board  ⌘N".localizedUI)
   }
 
   /// Opening is immediate; closing waits a beat so crossing the pill→list gap doesn't flicker.
@@ -817,7 +817,7 @@ struct ComposerCanvas: View {
       HStack(spacing: 5) {
         Image(systemName: "arrow.down.circle")
           .font(WindowChrome.iconFont)
-        Text("Update")
+        Text("Update".localizedUI)
           .font(WindowChrome.labelFont)
           .lineLimit(1)
       }
@@ -829,7 +829,7 @@ struct ComposerCanvas: View {
     .buttonStyle(.plain)
     .onHover { if $0 { Haptics.hover() } }
     .chromePill()
-    .help("BonsAI \(version) is ready — click to install")
+    .help("BonsAI %@ is ready - click to install".localizedUI(version))
     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
   }
 
@@ -842,7 +842,7 @@ struct ComposerCanvas: View {
     return VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
       // "Export Board", not "Export": the rows are width-locked to this rest label (the pill only
       // grows downward), so the label must be wide enough that "Copy PNG"/"Save PNG…" don't truncate.
-      Text("Export Board")
+      Text("Export Board".localizedUI)
         .font(WindowChrome.labelFont)
         .foregroundStyle(Theme.Palette.body)
         .lineLimit(1)
@@ -858,11 +858,11 @@ struct ComposerCanvas: View {
         // Width-locked to the rest label so the surface only grows below.
         VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
           Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
-          ExportMenuRow(label: "Copy PNG", help: "Copy board as PNG to the clipboard", enabled: hasCards) {
+          ExportMenuRow(label: "Copy PNG".localizedUI, help: "Copy board as PNG to the clipboard".localizedUI, enabled: hasCards) {
             exportMenuOpen = false
             copyBoardAsPNG()
           }
-          ExportMenuRow(label: "Save PNG", help: "Export board as PNG", enabled: hasCards) {
+          ExportMenuRow(label: "Save PNG".localizedUI, help: "Export board as PNG".localizedUI, enabled: hasCards) {
             exportMenuOpen = false
             exportBoardAsPNG()
           }
@@ -875,7 +875,7 @@ struct ComposerCanvas: View {
     .composerPopupSurface()
     .onHover { setExportMenuHover($0) }
     .animation(.easeOut(duration: 0.16), value: exportMenuOpen)
-    .help(exportMenuOpen ? "" : "Export board")
+    .help(exportMenuOpen ? "" : "Export board".localizedUI)
   }
 
   /// Opening is immediate; closing waits a beat so crossing the glyph→row gap doesn't flicker —
@@ -899,7 +899,7 @@ struct ComposerCanvas: View {
   /// Grounding moved into the agent chat (AgentDock) and the ⌘K palette.
   private func bottomCommandBar(fit innerSize: CGSize) -> some View {
     return HStack(spacing: WindowChrome.itemSpacing) {
-      SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out") { zoom(0.8, anchoredAt: zoomAnchor) }
+      SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out".localizedUI) { zoom(0.8, anchoredAt: zoomAnchor) }
       Button(action: { withAnimation(Theme.Motion.accessory) { scale = 1 } }) {
         Text("\(Int((effectiveScale * 100).rounded()))%")
           .font(WindowChrome.labelFont.monospacedDigit())
@@ -908,9 +908,9 @@ struct ComposerCanvas: View {
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .help("Reset to 100%")
-      SidebarButton(symbol: "plus.magnifyingglass", help: "Zoom in") { zoom(1.25, anchoredAt: zoomAnchor) }
-      SidebarButton(symbol: "arrow.up.left.and.down.right.magnifyingglass", help: "Fit board") {
+      .help("Reset to 100%".localizedUI)
+      SidebarButton(symbol: "plus.magnifyingglass", help: "Zoom in".localizedUI) { zoom(1.25, anchoredAt: zoomAnchor) }
+      SidebarButton(symbol: "arrow.up.left.and.down.right.magnifyingglass", help: "Fit board".localizedUI) {
         withAnimation(Theme.Motion.accessory) { fitBoard(in: innerSize) }
       }
 
@@ -924,7 +924,7 @@ struct ComposerCanvas: View {
 
       barDivider
 
-      SidebarButton(symbol: "gearshape", help: "Settings  ⌘,",
+      SidebarButton(symbol: "gearshape", help: "Settings  ⌘,".localizedUI,
                     active: store.isSettingsOpen) { toggleSettings() }
     }
     .chromePill()
@@ -953,7 +953,7 @@ struct ComposerCanvas: View {
     }
     .buttonStyle(.plain)
     .onHover { if $0 { Haptics.hover() } }
-    .help("Element color — applies to new elements and the selection")
+      .help("Element color - applies to new elements and the selection".localizedUI)
 
     if tintPickerOpen {
       HStack(spacing: 5) {
@@ -1144,7 +1144,7 @@ struct ComposerCanvas: View {
   private func offerGraphPromotion(_ id: UUID) {
     guard board.perpendicularPartner(of: id) != nil else { return }
     armPromotion(PromotionOffer(
-      cardID: id, kind: .arrowsToGraph, label: "Make graph", symbol: "chart.xyaxis.line"))
+      cardID: id, kind: .arrowsToGraph, label: "Make graph".localizedUI, symbol: "chart.xyaxis.line"))
   }
 
   /// Evaluate a text card for the equation/split promotions when its edit session ends. Precision
@@ -1154,9 +1154,9 @@ struct ComposerCanvas: View {
     guard let card = board.cards.first(where: { $0.id == id }), card.elementKind == .text else { return }
     let text = board.plainText(for: card)
     if BoardViewModel.isMathLike(text) {
-      armPromotion(PromotionOffer(cardID: id, kind: .textToEquation, label: "Make equation", symbol: "x.squareroot"))
+      armPromotion(PromotionOffer(cardID: id, kind: .textToEquation, label: "Make equation".localizedUI, symbol: "x.squareroot"))
     } else if BoardViewModel.isBulletList(text) {
-      armPromotion(PromotionOffer(cardID: id, kind: .textToCards, label: "Split into cards", symbol: "square.on.square"))
+      armPromotion(PromotionOffer(cardID: id, kind: .textToCards, label: "Split into cards".localizedUI, symbol: "square.on.square"))
     }
   }
 
@@ -1203,9 +1203,9 @@ struct ComposerCanvas: View {
         text: draft,
         onCopy: {
           if copyToClipboard(draft) {
-            show(Toast(text: "Copied compiled draft", symbol: "doc.on.doc.fill", tint: .accentColor))
+            show(Toast(text: "Copied compiled draft".localizedUI, symbol: "doc.on.doc.fill", tint: .accentColor))
           } else {
-            show(Toast(text: "macOS did not accept the clipboard contents. The compiled draft was not copied.", symbol: "exclamationmark.triangle.fill", tint: .orange))
+            show(Toast(text: "macOS did not accept the clipboard contents. The compiled draft was not copied.".localizedUI, symbol: "exclamationmark.triangle.fill", tint: .orange))
           }
         },
         onClose: { store.compiledDraft = nil }
@@ -1375,11 +1375,11 @@ struct ComposerCanvas: View {
   @MainActor
   private func copyBoardAsPNG() {
     guard let image = BoardExporter.renderBoardImage(cards: board.cards, board: board) else {
-      show(Toast(text: "Nothing to export", symbol: "exclamationmark.triangle.fill", tint: .orange))
+      show(Toast(text: "Nothing to export".localizedUI, symbol: "exclamationmark.triangle.fill", tint: .orange))
       return
     }
     BoardExporter.copyToPasteboard(image: image)
-    show(Toast(text: "PNG copied — paste anywhere", symbol: "doc.on.clipboard", tint: .accentColor))
+      show(Toast(text: "PNG copied - paste anywhere".localizedUI, symbol: "doc.on.clipboard", tint: .accentColor))
   }
 
   // MARK: Board navigation (history stack)
@@ -1575,34 +1575,34 @@ struct ComposerCanvas: View {
   /// selection makes them meaningful. Everything with a pill/bar/shortcut home stays out.
   private var paletteCommands: [PaletteCommand] {
     var commands: [PaletteCommand] = [
-      PaletteCommand(id: "new-board", title: "New board", symbol: "square.and.pencil", shortcut: "⌘N") { newBoard() },
-      PaletteCommand(id: "capture", title: "Capture screen to board", subtitle: "Read on-device into an agent-ready card", symbol: "text.viewfinder", shortcut: ShortcutStore.shared.captureShortcut.displayString) {
+      PaletteCommand(id: "new-board", title: "New board".localizedUI, symbol: "square.and.pencil", shortcut: "⌘N") { newBoard() },
+      PaletteCommand(id: "capture", title: "Capture screen to board".localizedUI, subtitle: "Read on-device into an agent-ready card".localizedUI, symbol: "text.viewfinder", shortcut: ShortcutStore.shared.captureShortcut.displayString) {
         NotificationCenter.default.post(name: .composerCaptureToBoard, object: nil)
       },
-      PaletteCommand(id: "focus", title: "Focus write", subtitle: "Expand the current card into a writing sheet", symbol: "rectangle.expand.vertical", shortcut: "⇧⌘F") { toggleFocus() },
-      PaletteCommand(id: "add-graph", title: "Add graph to board", subtitle: "Blank axes at the center of the view", symbol: "chart.xyaxis.line") { addGraphToBoard() },
+      PaletteCommand(id: "focus", title: "Focus write".localizedUI, subtitle: "Expand the current card into a writing sheet".localizedUI, symbol: "rectangle.expand.vertical", shortcut: "⇧⌘F") { toggleFocus() },
+      PaletteCommand(id: "add-graph", title: "Add graph to board".localizedUI, subtitle: "Blank axes at the center of the view".localizedUI, symbol: "chart.xyaxis.line") { addGraphToBoard() },
     ]
     // Tidy: the human's reach for the agent's `relayout`. Board-wide re-flow needs ≥2 cards; the
     // selection variant appears only when ≥2 cards are selected. Symbol probes the running OS so it
     // degrades below `wand.and.sparkles`'s macOS-15 floor.
     let tidySymbol = SFSymbolName.resolve("wand.and.sparkles", fallback: "sparkles")
     if board.cards.count > 1 {
-      commands.append(PaletteCommand(id: "tidy-board", title: "Tidy board", subtitle: "Re-flow every card into a clean layout", symbol: tidySymbol) { tidyBoard() })
+      commands.append(PaletteCommand(id: "tidy-board", title: "Tidy board".localizedUI, subtitle: "Re-flow every card into a clean layout".localizedUI, symbol: tidySymbol) { tidyBoard() })
     }
     if board.selectedCardIDs.count > 1 {
-      commands.append(PaletteCommand(id: "tidy-selection", title: "Tidy selection", subtitle: "Re-flow the selected cards in place", symbol: tidySymbol) { tidySelection() })
+      commands.append(PaletteCommand(id: "tidy-selection", title: "Tidy selection".localizedUI, subtitle: "Re-flow the selected cards in place".localizedUI, symbol: tidySymbol) { tidySelection() })
     }
     if let card = solelySelectedCard {
       let kind = card.elementKind
       if kind == .line || kind == .arrow {
-        commands.append(PaletteCommand(id: "line-to-graph", title: "Convert line to graph", symbol: "chart.xyaxis.line") { convertLineToGraph(card.id) })
+        commands.append(PaletteCommand(id: "line-to-graph", title: "Convert line to graph".localizedUI, symbol: "chart.xyaxis.line") { convertLineToGraph(card.id) })
       }
       if kind == .equation, !(card.latex ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
          board.cards.contains(where: { $0.elementKind == .graph }) {
-        commands.append(PaletteCommand(id: "plot-equation", title: "Plot equation on graph", symbol: "function") { plotEquationOnGraph(card) })
+        commands.append(PaletteCommand(id: "plot-equation", title: "Plot equation on graph".localizedUI, symbol: "function") { plotEquationOnGraph(card) })
       }
       if kind == .graph {
-        commands.append(PaletteCommand(id: "graph-add-point", title: "Add point to graph…", symbol: "smallcircle.filled.circle") {
+        commands.append(PaletteCommand(id: "graph-add-point", title: "Add point to graph...".localizedUI, symbol: "smallcircle.filled.circle") {
           NotificationCenter.default.post(name: .composerAddGraphPoint, object: card.id)
         })
       }
@@ -1648,9 +1648,9 @@ struct ComposerCanvas: View {
         < hypot(b.frame.midX - eqCenter.x, b.frame.midY - eqCenter.y)
     }!
     if board.absorbEquationIntoGraph(equation.id, into: target.id) {
-      show(Toast(text: "Plotted on graph", symbol: "chart.xyaxis.line", tint: Theme.Palette.accent))
+      show(Toast(text: "Plotted on graph".localizedUI, symbol: "chart.xyaxis.line", tint: Theme.Palette.accent))
     } else {
-      show(Toast(text: "Couldn't plot that expression", symbol: "exclamationmark.triangle.fill", tint: .orange))
+      show(Toast(text: "Couldn't plot that expression".localizedUI, symbol: "exclamationmark.triangle.fill", tint: .orange))
     }
   }
 
@@ -1661,7 +1661,7 @@ struct ComposerCanvas: View {
     guard !isWorking, store.compiledDraft == nil else { return }
     let source = board.joinedPlainText()
     guard !source.trimmed.isEmpty else {
-      show(Toast(text: "Add some cards to compile", symbol: "rectangle.dashed", tint: .orange))
+      show(Toast(text: "Add some cards to compile".localizedUI, symbol: "rectangle.dashed", tint: .orange))
       return
     }
     guard let engine = preferredEngine() else {
@@ -1674,7 +1674,7 @@ struct ComposerCanvas: View {
         let result = try await service.compileBoard(source: source, engine: engine)
         store.compiledDraft = result
       } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Compiling the board"), symbol: "exclamationmark.triangle.fill", tint: .orange))
+        show(Toast(text: UserFacingError.message(for: error, while: "Compiling the board".localizedUI), symbol: "exclamationmark.triangle.fill", tint: .orange))
       }
       isWorking = false
     }
@@ -1685,7 +1685,7 @@ struct ComposerCanvas: View {
     let snapshot = card.selection
     guard !snapshot.isEmpty, !isWorking else { return }
     guard EnginePreferences.isEnabled(engine) else {
-      show(Toast(text: "\(engine.title) is disabled in Settings", symbol: "exclamationmark.triangle.fill", tint: .orange))
+      show(Toast(text: "%@ is disabled in Settings".localizedUI(engine.title), symbol: "exclamationmark.triangle.fill", tint: .orange))
       return
     }
     guard engineCapabilities.isAvailable(engine) else {
@@ -1698,9 +1698,9 @@ struct ComposerCanvas: View {
       do {
         let result = try await service.refineSelection(whole: whole, selection: snapshot.text, engine: engine)
         card.controller.replace(range: snapshot.range, with: result)
-        show(Toast(text: "Refined with \(engine.title)", symbol: "checkmark.circle.fill", tint: .green))
+        show(Toast(text: "Refined with %@".localizedUI(engine.title), symbol: "checkmark.circle.fill", tint: .green))
       } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Refining the selected text with \(engine.title)"), symbol: "exclamationmark.triangle.fill", tint: .orange))
+        show(Toast(text: UserFacingError.message(for: error, while: "Refining the selected text with %@".localizedUI(engine.title)), symbol: "exclamationmark.triangle.fill", tint: .orange))
       }
       isWorking = false
     }
@@ -1721,9 +1721,9 @@ struct ComposerCanvas: View {
       do {
         let result = try await service.refineSelection(whole: whole, selection: flag.phrase, engine: engine)
         card.controller.applyLintFix(range: flag.range, expecting: flag.phrase, with: result)
-        show(Toast(text: "Clarified with \(engine.title)", symbol: "checkmark.circle.fill", tint: .green))
+        show(Toast(text: "Clarified with %@".localizedUI(engine.title), symbol: "checkmark.circle.fill", tint: .green))
       } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Clarifying the selected text with \(engine.title)"), symbol: "exclamationmark.triangle.fill", tint: .orange))
+        show(Toast(text: UserFacingError.message(for: error, while: "Clarifying the selected text with %@".localizedUI(engine.title)), symbol: "exclamationmark.triangle.fill", tint: .orange))
       }
       isWorking = false
     }
@@ -1745,17 +1745,17 @@ struct ComposerCanvas: View {
   private func unavailableEngineMessage() -> String {
     let enabled = HeadlessEngine.allCases.filter { EnginePreferences.isEnabled($0) }
     guard !enabled.isEmpty else {
-      return "All engines are disabled in Settings → Runtime. Enable one before using this action."
+      return "All engines are disabled in Settings > Runtime. Enable one before using this action.".localizedUI
     }
     let reasons = enabled.compactMap { engine -> String? in
       switch engineCapabilities.status(for: engine) {
-      case .checking: return "\(engine.title) is still being checked"
-      case let .unavailable(reason): return "\(engine.title): \(reason)"
+      case .checking: return "%@ is still being checked".localizedUI(engine.title)
+      case let .unavailable(reason): return "%@: %@".localizedUI(engine.title, reason)
       case .available: return nil
       }
     }
     if reasons.isEmpty {
-      return "No engine could be selected. Open Settings → Runtime → Recheck."
+      return "No engine could be selected. Open Settings > Runtime > Recheck.".localizedUI
     }
     return reasons.joined(separator: " · ")
   }
@@ -1773,13 +1773,13 @@ struct ComposerCanvas: View {
     do {
       data = try JSONEncoder().encode(selected)
     } catch {
-      show(Toast(text: UserFacingError.message(for: error, while: "Encoding the selected cards for copy"), symbol: "exclamationmark.triangle.fill", tint: .orange))
+      show(Toast(text: UserFacingError.message(for: error, while: "Encoding the selected cards for copy".localizedUI), symbol: "exclamationmark.triangle.fill", tint: .orange))
       return
     }
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     guard pasteboard.setData(data, forType: cardPasteboardType) else {
-      show(Toast(text: "macOS did not accept the selected-card clipboard data. The cards were not copied.", symbol: "exclamationmark.triangle.fill", tint: .orange))
+      show(Toast(text: "macOS did not accept the selected-card clipboard data. The cards were not copied.".localizedUI, symbol: "exclamationmark.triangle.fill", tint: .orange))
       return
     }
   }
@@ -1802,7 +1802,7 @@ struct ComposerCanvas: View {
           board.insertCopies(cards)
         }
       } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Reading selected cards from the clipboard"), symbol: "exclamationmark.triangle.fill", tint: .orange))
+        show(Toast(text: UserFacingError.message(for: error, while: "Reading selected cards from the clipboard".localizedUI), symbol: "exclamationmark.triangle.fill", tint: .orange))
       }
       return
     }
@@ -1824,19 +1824,19 @@ struct ComposerCanvas: View {
         ocr = await ImageUnderstanding.recognizeText(in: captured)
       } else if let understanding = await ImageUnderstanding.analyze(imagePath: path) {
         board.setImageUnderstanding(id, understanding)
-        show(Toast(text: "Screenshot read \u{00b7} ready for the prompt", symbol: "checkmark.circle.fill", tint: .green))
+        show(Toast(text: "Screenshot read - ready for the prompt".localizedUI, symbol: "checkmark.circle.fill", tint: .green))
         return
       } else {
-        show(Toast(text: "Added screenshot \u{00b7} no text found", symbol: "photo", tint: .accentColor))
+        show(Toast(text: "Added screenshot - no text found".localizedUI, symbol: "photo", tint: .accentColor))
         return
       }
 
       // Stage 1: show the OCR text immediately so the card is useful within a beat.
       if !ocr.isEmpty {
         board.setImageUnderstanding(id, "[Screenshot]\n\(ocr)")
-        show(Toast(text: "Screenshot read \u{00b7} ready for the prompt", symbol: "checkmark.circle.fill", tint: .green))
+        show(Toast(text: "Screenshot read - ready for the prompt".localizedUI, symbol: "checkmark.circle.fill", tint: .green))
       } else {
-        show(Toast(text: "Added screenshot \u{00b7} no text found", symbol: "photo", tint: .accentColor))
+        show(Toast(text: "Added screenshot - no text found".localizedUI, symbol: "photo", tint: .accentColor))
       }
 
       // Stage 2: upgrade to the cleaned, classified version in the background if the model can.
@@ -2689,9 +2689,9 @@ private struct BoardPickerRow: View {
           .lineLimit(1)
         Spacer(minLength: 10)
         if hovering {
-          rowIcon("pencil", help: "Rename board", tint: nil) { beginRename() }
+          rowIcon("pencil", help: "Rename board".localizedUI, tint: nil) { beginRename() }
           if let onDelete {
-            rowIcon("trash", help: confirmingDelete ? "Click again to permanently delete" : "Delete board",
+            rowIcon("trash", help: confirmingDelete ? "Click again to permanently delete".localizedUI : "Delete board".localizedUI,
                     tint: confirmingDelete ? .red : nil) {
               if confirmingDelete { onDelete() } else { setConfirmingDelete(true) }
             }
@@ -2710,7 +2710,7 @@ private struct BoardPickerRow: View {
       Circle()
         .fill(isCurrent ? Theme.Palette.accent : Color.clear)
         .frame(width: 5, height: 5)
-      TextField("Board name", text: $draftName)
+      TextField("Board name".localizedUI, text: $draftName)
         .textFieldStyle(.plain)
         .font(WindowChrome.labelFont)
         .foregroundStyle(Theme.Palette.body)

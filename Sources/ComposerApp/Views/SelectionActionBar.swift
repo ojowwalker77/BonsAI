@@ -39,7 +39,7 @@ struct SelectionActionBar: View {
       if isWorking {
         HStack(spacing: 7) {
           ProgressView().controlSize(.small).scaleEffect(0.7)
-          Text("Refining\u{2026}").font(Theme.Typography.actionLabel)
+          Text("Refining...".localizedUI).font(Theme.Typography.actionLabel)
         }
         .padding(.horizontal, 12)
         .frame(height: Theme.Size.actionBarItemHeight)
@@ -79,7 +79,7 @@ struct SelectionActionBar: View {
               .contentShape(Rectangle())
           }
           .buttonStyle(HoverButtonStyle())
-          .help("Text color")
+          .help("Text color".localizedUI)
         }
       }
     }
@@ -94,11 +94,11 @@ struct SelectionActionBar: View {
   private var unavailableEngineMessage: String {
     if enabledEngines.isEmpty {
       if HeadlessEngine.allCases.allSatisfy({ !isEnabled($0) }) {
-        return "All engines disabled in Settings → Runtime"
+        return "All engines disabled in Settings > Runtime".localizedUI
       }
-      return "No engines ready — open Settings → Runtime → Recheck"
+      return "No engines ready - open Settings > Runtime > Recheck".localizedUI
     }
-    return "No engines ready"
+    return "No engines ready".localizedUI
   }
 
   @ViewBuilder
@@ -139,7 +139,7 @@ struct SelectionActionBar: View {
         .contentShape(Rectangle())
     }
     .buttonStyle(HoverButtonStyle())
-    .help(slot == nil ? "Default ink" : "Theme color \((slot ?? 0) + 1)")
+    .help(slot == nil ? "Default ink".localizedUI : "Theme color %d".localizedUI((slot ?? 0) + 1))
   }
 
   @ViewBuilder
@@ -152,7 +152,7 @@ struct SelectionActionBar: View {
     }
     .buttonStyle(HoverButtonStyle())
     .foregroundStyle(Theme.Palette.body)
-    .help(help)
+    .help(help.localizedUI)
   }
 }
 

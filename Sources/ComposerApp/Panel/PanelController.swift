@@ -19,6 +19,9 @@ final class PanelController: NSObject, NSWindowDelegate {
     NotificationCenter.default.addObserver(
       forName: .composerFontFamilyChanged, object: nil, queue: .main
     ) { [weak self] _ in MainActor.assumeIsolated { self?.rebuildCanvas() } }
+    NotificationCenter.default.addObserver(
+      forName: .composerLanguageChanged, object: nil, queue: .main
+    ) { [weak self] _ in MainActor.assumeIsolated { self?.rebuildCanvas() } }
   }
 
   @objc private func handleDismiss() { hide() }

@@ -20,7 +20,7 @@ struct FigmaService {
 
   func render(_ reference: FigmaReference) async throws -> String {
     guard let token = ConnectorSecretStore.token(for: "@figma") else {
-      throw AppSearchError.message("Add a Figma access token in Settings → Connectors → Figma.")
+      throw AppSearchError.message("Add a Figma access token in Settings > Connectors > Figma.".localizedUI)
     }
     if reference.nodeId.isEmpty {
       return try await renderFile(reference, token: token)
@@ -57,7 +57,7 @@ struct FigmaService {
       imageDiagnostic = nil
     } catch {
       image = nil
-      imageDiagnostic = UserFacingError.message(for: error, while: "Fetching the Figma screenshot")
+      imageDiagnostic = UserFacingError.message(for: error, while: "Fetching the Figma screenshot".localizedUI)
     }
 
     guard let nodes = json["nodes"] as? [String: Any],
@@ -151,21 +151,21 @@ struct FigmaService {
     request.setValue(token, forHTTPHeaderField: "X-Figma-Token")   // personal token — NOT Bearer
     request.timeoutInterval = 15
     let (data, response) = try await URLSession.shared.data(for: request)
-    guard let http = response as? HTTPURLResponse else { throw AppSearchError.message("No response from Figma.") }
+    guard let http = response as? HTTPURLResponse else { throw AppSearchError.message("No response from Figma.".localizedUI) }
     guard (200..<300).contains(http.statusCode) else {
-      if http.statusCode == 403 { throw AppSearchError.message("Figma rejected the token (403). Check Settings → Connectors → Figma.") }
-      if http.statusCode == 404 { throw AppSearchError.message("Figma file not found (404) — does the token have access to it?") }
-      throw AppSearchError.message("Figma returned HTTP \(http.statusCode) and did not provide an error message.")
+      if http.statusCode == 403 { throw AppSearchError.message("Figma rejected the token (403). Check Settings > Connectors > Figma.".localizedUI) }
+      if http.statusCode == 404 { throw AppSearchError.message("Figma file not found (404) - does the token have access to it?".localizedUI) }
+      throw AppSearchError.message("Figma returned HTTP %d and did not provide an error message.".localizedUI(http.statusCode))
     }
     do {
       guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        throw AppSearchError.message("Figma returned JSON in an unexpected shape.")
+        throw AppSearchError.message("Figma returned JSON in an unexpected shape.".localizedUI)
       }
       return json
     } catch let error as AppSearchError {
       throw error
     } catch {
-      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Figma’s response"))
+      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Figma's response".localizedUI))
     }
   }
 }

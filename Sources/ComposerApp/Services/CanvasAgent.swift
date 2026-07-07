@@ -172,7 +172,7 @@ final class CanvasAgent: ObservableObject {
     do {
       try process.run()
     } catch {
-      transcript.append(AgentMessage(role: .error, text: UserFacingError.message(for: error, while: "Starting \(engine.title)")))
+      transcript.append(AgentMessage(role: .error, text: UserFacingError.message(for: error, while: "Starting %@".localizedUI(engine.title))))
       finish {}
       return
     }
@@ -217,7 +217,7 @@ final class CanvasAgent: ObservableObject {
     case let .success(text):
       stderrText = text
     case let .failure(error):
-      stderrText = UserFacingError.message(for: error, while: "Reading \(engine.title)’s error output")
+      stderrText = UserFacingError.message(for: error, while: "Reading %@'s error output".localizedUI(engine.title))
     }
     finish {
       if process.terminationStatus != 0, !didRequestStop {
@@ -232,7 +232,7 @@ final class CanvasAgent: ObservableObject {
         let diagnostic = UserFacingError.commandOutput(
           stdout: nonProtocolOutput.joined(separator: "\n"), stderr: stderrText)
         if !diagnostic.isEmpty {
-          transcript.append(AgentMessage(role: .error, text: "\(engine.title) returned output BonsAI could not read: \(diagnostic)"))
+          transcript.append(AgentMessage(role: .error, text: "%@ returned output BonsAI could not read: %@".localizedUI(engine.title, diagnostic)))
         }
       }
     }
@@ -287,7 +287,7 @@ final class CanvasAgent: ObservableObject {
     do {
       try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     } catch {
-      UserFacingError.report(error, while: "Creating Claude’s Composer workspace")
+      UserFacingError.report(error, while: "Creating Claude's Composer workspace".localizedUI)
     }
     return dir
   }()

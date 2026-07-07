@@ -90,7 +90,7 @@ struct LintPopover: View {
     Button(action: onEscalate) {
       HStack(spacing: 7) {
         EngineLogo(engine: engine)
-        Text("Refine with \(engine.title)").font(Theme.Typography.actionLabel)
+          Text("Refine with %@".localizedUI(engine.title)).font(Theme.Typography.actionLabel)
         Spacer(minLength: 0)
       }
       .foregroundStyle(Theme.Palette.body)

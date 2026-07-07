@@ -27,7 +27,7 @@ struct XcodeService {
     let path = reference.resultPath
     let header = "## Xcode — \(projectName(forResult: path))"
     guard FileManager.default.fileExists(atPath: path) else {
-      throw AppSearchError.message("Xcode result bundle no longer exists: \(path)")
+      throw AppSearchError.message("Xcode result bundle no longer exists: %@".localizedUI(path))
     }
     async let build = buildResults(path)
     async let tests = testSummary(path)
@@ -109,7 +109,7 @@ struct XcodeService {
     do {
       projects = try fm.contentsOfDirectory(atPath: derived)
     } catch {
-      throw AppSearchError.message(UserFacingError.message(for: error, while: "Reading Xcode’s DerivedData folder"))
+      throw AppSearchError.message(UserFacingError.message(for: error, while: "Reading Xcode's DerivedData folder".localizedUI))
     }
     var out: [ResultBundle] = []
     for project in projects where !project.hasPrefix(".") {
@@ -120,7 +120,7 @@ struct XcodeService {
         do {
           entries = try fm.contentsOfDirectory(atPath: dir)
         } catch {
-          throw AppSearchError.message(UserFacingError.message(for: error, while: "Reading Xcode’s \(kind.lowercased())-result folder"))
+          throw AppSearchError.message(UserFacingError.message(for: error, while: "Reading Xcode's %@-result folder".localizedUI(kind.lowercased())))
         }
         for entry in entries where entry.hasSuffix(".xcresult") {
           let path = "\(dir)/\(entry)"
@@ -152,13 +152,13 @@ struct XcodeService {
     guard !output.isEmpty else { return [:] }
     do {
       guard let json = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any] else {
-        throw AppSearchError.message("Xcode result reader returned JSON in an unexpected shape.")
+        throw AppSearchError.message("Xcode result reader returned JSON in an unexpected shape.".localizedUI)
       }
       return json
     } catch let error as AppSearchError {
       throw error
     } catch {
-      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Xcode result output"))
+      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Xcode result output".localizedUI))
     }
   }
 

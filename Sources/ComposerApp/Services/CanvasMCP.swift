@@ -80,15 +80,15 @@ enum CanvasMCP {
       do {
         let data = try JSONEncoder().encode(graph)
         guard let text = String(data: data, encoding: .utf8) else {
-          return content("Composer encoded the canvas graph into non-UTF-8 data.", isError: true)
+          return content("Composer encoded the canvas graph into non-UTF-8 data.".localizedUI, isError: true)
         }
         return content(text)
       } catch {
-        return content(UserFacingError.message(for: error, while: "Encoding the canvas graph"), isError: true)
+        return content(UserFacingError.message(for: error, while: "Encoding the canvas graph".localizedUI), isError: true)
       }
     }
     guard let op = opForTool[name] else {
-      return content("unknown tool: \(name)", isError: true)
+      return content("unknown tool: %@".localizedUI(name), isError: true)
     }
     var payload = arguments
     payload["op"] = op
@@ -96,11 +96,11 @@ enum CanvasMCP {
     do {
       let data = try JSONSerialization.data(withJSONObject: result)
       guard let text = String(data: data, encoding: .utf8) else {
-        return content("Composer encoded the canvas-tool result into non-UTF-8 data.", isError: true)
+        return content("Composer encoded the canvas-tool result into non-UTF-8 data.".localizedUI, isError: true)
       }
       return content(text, isError: (result["ok"] as? Bool) == false)
     } catch {
-      return content(UserFacingError.message(for: error, while: "Encoding the canvas-tool result"), isError: true)
+      return content(UserFacingError.message(for: error, while: "Encoding the canvas-tool result".localizedUI), isError: true)
     }
   }
 

@@ -125,7 +125,7 @@ private struct ToolButton: View {
       hovering = over
       if over, !disabled, !busy { Haptics.hover() }
     }
-    .help(help)
+    .help(help.localizedUI)
     .animation(.easeOut(duration: 0.12), value: hovering)
   }
 

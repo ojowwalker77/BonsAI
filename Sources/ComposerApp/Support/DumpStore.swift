@@ -105,10 +105,10 @@ final class DumpStore: ObservableObject {
       container = try ModelContainer(for: schema, configurations: config)
     } catch {
       // Never block the editor on a storage failure — fall back to memory-only.
-      UserFacingError.report(error, while: "Opening Composer’s on-disk board storage")
+      UserFacingError.report(error, while: "Opening Composer's on-disk board storage".localizedUI)
       do {
         container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-        UserFacingError.report("Composer is running with temporary memory-only storage. Boards created in this session will not survive a restart.")
+      UserFacingError.report("Composer is running with temporary memory-only storage. Boards created in this session will not survive a restart.".localizedUI)
       } catch {
         fatalError("Composer could not create either persistent or temporary board storage: \(error.localizedDescription)")
       }
@@ -142,7 +142,7 @@ final class DumpStore: ObservableObject {
         if !decoded.isEmpty { return migrateImagePaths(in: decoded, for: dump) }
         reportUnreadableBoard(dump, message: "A saved board contained no cards. Composer loaded its text fallback instead.")
       } catch {
-        reportUnreadableBoard(dump, message: UserFacingError.message(for: error, while: "Reading this saved board"))
+      reportUnreadableBoard(dump, message: UserFacingError.message(for: error, while: "Reading this saved board".localizedUI))
       }
     }
     return [CardState.firstCard(text: dump.text)]
@@ -172,7 +172,7 @@ final class DumpStore: ObservableObject {
       dump.cardsData = try JSONEncoder().encode(migrated)
       _ = save("Migrating board image attachments")
     } catch {
-      UserFacingError.report(error, while: "Encoding migrated board image attachments")
+      UserFacingError.report(error, while: "Encoding migrated board image attachments".localizedUI)
     }
     return migrated
   }
@@ -209,7 +209,7 @@ final class DumpStore: ObservableObject {
     do {
       data = try JSONEncoder().encode(cards)
     } catch {
-      UserFacingError.report(error, while: "Encoding the board before autosave")
+      UserFacingError.report(error, while: "Encoding the board before autosave".localizedUI)
       return
     }
     let mirror = Self.titleMirror(for: cards)
@@ -312,7 +312,7 @@ final class DumpStore: ObservableObject {
     do {
       dumps = try context.fetch(descriptor)
     } catch {
-      UserFacingError.report(error, while: "Loading saved boards")
+      UserFacingError.report(error, while: "Loading saved boards".localizedUI)
     }
   }
 
@@ -325,7 +325,7 @@ final class DumpStore: ObservableObject {
     do {
       existing = try context.fetchCount(FetchDescriptor<Dump>())
     } catch {
-      UserFacingError.report(error, while: "Checking whether Composer has existing boards")
+      UserFacingError.report(error, while: "Checking whether Composer has existing boards".localizedUI)
       return
     }
     guard existing == 0, let cards = WelcomeBoard.seedCards() else {
@@ -337,7 +337,7 @@ final class DumpStore: ObservableObject {
     do {
       data = try JSONEncoder().encode(cards)
     } catch {
-      UserFacingError.report(error, while: "Encoding the welcome board")
+      UserFacingError.report(error, while: "Encoding the welcome board".localizedUI)
       return
     }
     context.insert(Dump(text: Self.titleMirror(for: cards), cardsData: data, customTitle: WelcomeBoard.title))
@@ -355,7 +355,7 @@ final class DumpStore: ObservableObject {
     do {
       data = try JSONEncoder().encode(cards)
     } catch {
-      UserFacingError.report(error, while: "Encoding the BonsAI 1.3 welcome board")
+      UserFacingError.report(error, while: "Encoding the BonsAI 1.3 welcome board".localizedUI)
       return
     }
 
@@ -363,7 +363,7 @@ final class DumpStore: ObservableObject {
     do {
       existing = try context.fetch(FetchDescriptor<Dump>())
     } catch {
-      UserFacingError.report(error, while: "Checking saved boards for the BonsAI 1.3 welcome board")
+      UserFacingError.report(error, while: "Checking saved boards for the BonsAI 1.3 welcome board".localizedUI)
       return
     }
 
@@ -398,7 +398,7 @@ final class DumpStore: ObservableObject {
     do {
       existing = try context.fetchCount(FetchDescriptor<Dump>())
     } catch {
-      UserFacingError.report(error, while: "Checking whether Composer has existing boards")
+      UserFacingError.report(error, while: "Checking whether Composer has existing boards".localizedUI)
       return
     }
     let legacy = NotePersistence.load()

@@ -60,12 +60,12 @@ struct RefineConfirmBar: View {
   var body: some View {
     HStack(spacing: 9) {
       Image(systemName: intent.symbol).font(.caption).foregroundStyle(Theme.Palette.accent)
-      Text("Refined · \(intent.label)")
+      Text("Refined - %@".localizedUI(intent.label))
         .font(Theme.Typography.actionLabel)
         .foregroundStyle(Theme.Palette.body)
       Divider().frame(height: 14).opacity(0.4)
-      RefineBarButton(title: "Revert", prominent: false, action: onRevert)
-      RefineBarButton(title: "Keep", prominent: true, action: onKeep)
+      RefineBarButton(title: "Revert".localizedUI, prominent: false, action: onRevert)
+      RefineBarButton(title: "Keep".localizedUI, prominent: true, action: onKeep)
     }
     .padding(.leading, 14)
     .padding(.trailing, 5)

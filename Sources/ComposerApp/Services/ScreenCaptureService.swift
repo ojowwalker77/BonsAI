@@ -176,8 +176,8 @@ final class ScreenCaptureService {
       return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     } catch {
       UserFacingError.report(
-        UserFacingError.message(for: error, while: "Capturing the screen") +
-        " If this keeps failing, grant Screen Recording to BonsAI in System Settings ▸ Privacy & Security.")
+        UserFacingError.message(for: error, while: "Capturing the screen".localizedUI) +
+        " " + "If this keeps failing, grant Screen Recording to BonsAI in System Settings > Privacy & Security.".localizedUI)
       return nil
     }
   }

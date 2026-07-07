@@ -93,6 +93,8 @@ enum ComposerPreferences {
   static let themeKey = "composer.appearance.theme"
   /// App-wide body font family. Defaults to `.system` (San Francisco) — zero visual change.
   static let appFontFamilyKey = "composer.appearance.fontFamily"
+  /// App language override. `.system` follows macOS language preferences.
+  static let languageKey = "composer.appearance.language"
   /// Canvas background transparency (0 = solid, default). Sliding it up lets the desktop blur
   /// through the board surface.
   static let canvasTransparencyKey = "composer.canvas.backgroundTransparency"

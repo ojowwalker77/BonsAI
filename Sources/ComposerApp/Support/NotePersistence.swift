@@ -13,7 +13,7 @@ enum NotePersistence {
     do {
       return try String(contentsOf: url, encoding: .utf8)
     } catch {
-      UserFacingError.report(error, while: "Reading the previous Composer note")
+      UserFacingError.report(error, while: "Reading the previous Composer note".localizedUI)
       return ""
     }
   }
@@ -31,7 +31,7 @@ enum NotePersistence {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       try text.write(to: url, atomically: true, encoding: .utf8)
     } catch {
-      UserFacingError.report(error, while: "Saving the Composer note")
+      UserFacingError.report(error, while: "Saving the Composer note".localizedUI)
     }
   }
 }

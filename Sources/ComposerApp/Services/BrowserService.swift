@@ -216,7 +216,7 @@ struct BrowserService {
   private func browserError(_ result: Shell.Result, app: String) -> AppSearchError {
     let text = result.diagnostic
     if text.contains("-1743") || text.localizedCaseInsensitiveContains("not authorized") {
-      return .message("Allow Composer to control \(app) in System Settings → Privacy & Security → Automation.")
+      return .message("Allow Composer to control %@ in System Settings > Privacy & Security > Automation.".localizedUI(app))
     }
     if text.localizedCaseInsensitiveContains("execution error") {
       return .message(String(text.prefix(160)))
