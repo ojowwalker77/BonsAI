@@ -47,7 +47,7 @@ struct HeadlessPromptService {
   /// Codex/OpenCode's `provider/model` via `-m`. nil ⇒ the CLI's own default (used by Refine/Compile).
   private func run(prompt: String, engine: HeadlessEngine, model: String? = nil) async throws -> String {
     guard let executable = CommandLineToolLocator.executableURL(for: engine) else {
-      throw HeadlessPromptError.failed("\(engine.title) CLI is not installed. Check Settings to install or re-detect it.")
+      throw HeadlessPromptError.failed("%@ CLI is not installed. Check Settings to install or re-detect it.".localizedUI(engine.title))
     }
     var arguments: [String]
     switch engine {
@@ -73,14 +73,14 @@ struct HeadlessPromptService {
     do {
       result = try await Shell.run(arguments)
     } catch {
-      throw HeadlessPromptError.failed(UserFacingError.message(for: error, while: "Composer could not start \(engine.title)"))
+      throw HeadlessPromptError.failed(UserFacingError.message(for: error, while: "Composer could not start %@".localizedUI(engine.title)))
     }
     guard result.status == 0 else {
       throw HeadlessPromptError.failed(UserFacingError.commandFailure(command: engine.title, result: result))
     }
     let out = engine == .opencode ? Self.openCodeText(from: result.stdout) : result.stdout.trimmed
     guard !out.isEmpty else {
-      throw HeadlessPromptError.failed("\(engine.title) exited successfully but returned no text.")
+      throw HeadlessPromptError.failed("%@ exited successfully but returned no text.".localizedUI(engine.title))
     }
     return out
   }

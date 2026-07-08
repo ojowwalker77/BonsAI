@@ -63,6 +63,9 @@ extension Notification.Name {
   /// Fires when the app-wide body font family changes — the canvas rebuilds (like a theme switch)
   /// so measurement caches and chrome labels re-resolve against the new face.
   static let composerFontFamilyChanged = Notification.Name("composerFontFamilyChanged")
+  /// Fires when the app language override changes — the canvas rebuilds so localized labels
+  /// re-resolve immediately.
+  static let composerLanguageChanged = Notification.Name("composerLanguageChanged")
   /// Fires on the capture hotkey ("Snap to board") — grab a screen region, understand it on-device,
   /// and drop it on the board as an agent-ready card.
   static let composerCaptureToBoard = Notification.Name("composerCaptureToBoard")

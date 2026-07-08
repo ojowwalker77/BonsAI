@@ -4,6 +4,7 @@ import PackageDescription
 
 let package = Package(
   name: "Composer",
+  defaultLocalization: "en",
   platforms: [
     // macOS 14 (Sonoma) is the floor: the board's persistence layer is SwiftData (`@Model` in
     // DumpStore), which requires 14. Everything Tahoe-only — Apple Intelligence (FoundationModels,

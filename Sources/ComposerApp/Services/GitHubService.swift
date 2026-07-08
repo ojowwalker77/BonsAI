@@ -100,7 +100,7 @@ enum AppSearchError: LocalizedError {
   static func fromGH(_ result: Shell.Result) -> AppSearchError {
     let text = result.diagnostic
     if text.localizedCaseInsensitiveContains("auth") || text.localizedCaseInsensitiveContains("logged in") {
-      return .message("Run `gh auth login` to search GitHub.")
+      return .message("Run `gh auth login` to search GitHub.".localizedUI)
     }
     return .message(UserFacingError.commandFailure(command: "GitHub CLI", result: result))
   }

@@ -231,7 +231,7 @@ enum ShellTemplate {
     if let cached = cache[command] { return cached }   // already ran (success or failure) — reuse, no re-run
     guard runCommands, !command.isEmpty else { return nil }   // disabled → leave the `$(…)` literal, don't cache
     guard let result = await run(command) else {
-      failures.append("`\(command)`: could not launch the shell.")
+      failures.append("`%@`: could not launch the shell.".localizedUI(command))
       cache.updateValue(nil, forKey: command)
       return nil
     }
@@ -239,7 +239,7 @@ enum ShellTemplate {
       let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
       let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
       let diagnostic = stderr.isEmpty ? stdout : stderr
-      failures.append("`\(command)` exited \(result.status): \(diagnostic.isEmpty ? "no output" : diagnostic)")
+      failures.append("`%@` exited %d: %@".localizedUI(command, Int(result.status), diagnostic.isEmpty ? "no output".localizedUI : diagnostic))
       cache.updateValue(nil, forKey: command)
       return nil
     }

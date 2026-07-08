@@ -129,7 +129,7 @@ struct BoardCardView: View {
           text: $interaction.text,
           initialAttributedText: interaction.attributedSnapshot,
           initialInk: interaction.ink,
-          placeholder: "Brain dump\u{2026}",
+          placeholder: "Brain dump...".localizedUI,
           onCountChange: { interaction.count = $0 },
           onSelectionChange: { interaction.selection = $0 },
           onEscape: { interaction.controller.resignFocus() },
@@ -580,7 +580,7 @@ struct BoardCardView: View {
           .contentShape(Circle())
       }
       .buttonStyle(.plain)
-      .help("Delete card")
+    .help("Delete card".localizedUI)
       .offset(x: selectionGap + 4, y: -(selectionGap + 4))
     }
   }
@@ -639,7 +639,7 @@ private struct CanvasElementContent: View {
         case .text:
           Group {
             if text.trimmed.isEmpty {
-              Text("Brain dump\u{2026}")
+              Text("Brain dump...".localizedUI)
                 .font(ComposerPreferences.appSwiftUIFont(size: Theme.Typography.body.pointSize * zoom))
                 .lineSpacing(Theme.Typography.bodyLineSpacing * zoom)
                 .foregroundStyle(Theme.Palette.placeholder)
@@ -678,7 +678,7 @@ private struct CanvasElementContent: View {
                   .padding(5)
                   .background(Color.black.opacity(0.55), in: Circle())
                   .padding(6)
-                  .help("Read on-device — this screenshot adds text to the compiled prompt")
+                  .help("Read on-device - this screenshot adds text to the compiled prompt".localizedUI)
               }
             }
         case .equation:
@@ -1621,7 +1621,7 @@ private struct PointTintSwatchRow: View {
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .help(slot == nil ? "Series default" : "Theme color \((slot ?? 0) + 1)")
+    .help(slot == nil ? "Series default".localizedUI : "Theme color %d".localizedUI((slot ?? 0) + 1))
   }
 
   /// A 14pt swatch. The "series default" (nil) reads as a neutral outlined ring; each slot fills with
@@ -1662,7 +1662,7 @@ private struct PointComposerStrip: View {
         TextField("0", text: $draft.xText).graphFieldChrome().onSubmit(onCommit).frame(width: 52)
         Text("Y").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.Palette.placeholder)
         TextField("0", text: $draft.yText).graphFieldChrome().onSubmit(onCommit).frame(width: 52)
-        TextField("label", text: $draft.label)
+        TextField("label".localizedUI, text: $draft.label)
           .graphFieldChrome().onSubmit(onCommit)
           .focused($labelFocused)
           .frame(width: 70)
@@ -1672,7 +1672,7 @@ private struct PointComposerStrip: View {
         PointTintSwatchRow(tint: $draft.tint)
         Spacer()
         Button(action: onCommit) {
-          Text("Add Point")
+          Text("Add Point".localizedUI)
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(Theme.Palette.accent)
             .padding(.horizontal, 12)
@@ -1728,7 +1728,7 @@ private struct ImageObjectPlaceholder: View {
             VStack(spacing: 8) {
               Image(systemName: "photo")
                 .font(.system(size: 24, weight: .medium))
-              Text(path.map { ($0 as NSString).lastPathComponent } ?? "Image")
+              Text(path.map { ($0 as NSString).lastPathComponent } ?? "Image".localizedUI)
                 .font(.caption.weight(.medium))
                 .lineLimit(1)
             }
@@ -1824,7 +1824,7 @@ struct EquationView: View {
         }
         .foregroundStyle(Theme.Palette.placeholder)
         .padding(10)
-        .help("LaTeX didn't parse")
+        .help("LaTeX didn't parse".localizedUI)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -50,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     for url in urls {
       var error: Unmanaged<CFError>?
       if !CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) {
-        let message = error?.takeRetainedValue().localizedDescription ?? "unknown error"
+        let message = error?.takeRetainedValue().localizedDescription ?? "unknown error".localizedUI
         NSLog("BonsAI: skipped font registration for \(url.lastPathComponent): \(message)")
       }
     }
@@ -106,18 +106,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let alert = NSAlert()
     alert.alertStyle = .informational
-    alert.messageText = "Teach your coding agent the BonsAI board?"
+    alert.messageText = "Teach your coding agent the BonsAI board?".localizedUI
     let names = detected.map(\.displayName).joined(separator: ", ")
-    alert.informativeText = "BonsAI found \(names) on this Mac. Install a short skill doc so it knows how to read and write your board over the local canvas API? You can redo this anytime in Settings ▸ Connectors."
-    alert.addButton(withTitle: "Install")
-    alert.addButton(withTitle: "Not Now")
+    alert.informativeText = "BonsAI found %@ on this Mac. Install a short skill doc so it knows how to read and write your board over the local canvas API? You can redo this anytime in Settings > Connectors.".localizedUI(names)
+    alert.addButton(withTitle: "Install".localizedUI)
+    alert.addButton(withTitle: "Not Now".localizedUI)
     guard alert.runModal() == .alertFirstButtonReturn else { return }
 
     let failures = AgentSkillsInstaller.installAllDetected()
     guard !failures.isEmpty else { return }
     let failure = NSAlert()
     failure.alertStyle = .warning
-    failure.messageText = "Couldn't install for everyone"
+    failure.messageText = "Couldn't install for everyone".localizedUI
     failure.informativeText = failures.map { "\($0.key.displayName): \($0.value.localizedDescription)" }.joined(separator: "\n")
     failure.runModal()
   }
@@ -143,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Services menu: "BonsAI → Send to BonsAI" on selected text in any app.
   @objc func captureFromService(_ pboard: NSPasteboard, userData: String, error: AutoreleasingUnsafeMutablePointer<NSString?>?) {
     guard let text = pboard.string(forType: .string), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      error?.pointee = "No text was selected." as NSString
+      error?.pointee = "No text was selected.".localizedUI as NSString
       return
     }
     panelController.show()

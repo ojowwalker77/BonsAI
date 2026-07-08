@@ -47,11 +47,11 @@ extension ShapeRecognizer.Kind {
 
   var promotionLabel: String {
     switch self {
-    case .rectangle: "Make rectangle"
-    case .ellipse: "Make ellipse"
-    case .diamond: "Make diamond"
-    case .line: "Make line"
-    case .arrow: "Make arrow"
+    case .rectangle: "Make rectangle".localizedUI
+    case .ellipse: "Make ellipse".localizedUI
+    case .diamond: "Make diamond".localizedUI
+    case .line: "Make line".localizedUI
+    case .arrow: "Make arrow".localizedUI
     }
   }
 

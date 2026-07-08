@@ -12,7 +12,7 @@ enum WelcomeBoard {
   /// just falls back to a blank first board.
   static func seedCards() -> [CardState]? {
     guard let url = Bundle.appResources.url(forResource: "WelcomeBoard", withExtension: "json") else {
-      UserFacingError.report("Composer’s bundled welcome board is missing. A blank board was created instead.")
+      UserFacingError.report("Composer's bundled welcome board is missing. A blank board was created instead.".localizedUI)
       return nil
     }
     let cards: [CardState]
@@ -20,11 +20,11 @@ enum WelcomeBoard {
       let data = try Data(contentsOf: url)
       cards = try JSONDecoder().decode([CardState].self, from: data)
     } catch {
-      UserFacingError.report(error, while: "Loading Composer’s bundled welcome board")
+      UserFacingError.report(error, while: "Loading Composer's bundled welcome board".localizedUI)
       return nil
     }
     guard !cards.isEmpty else {
-      UserFacingError.report("Composer’s bundled welcome board contains no cards. A blank board was created instead.")
+      UserFacingError.report("Composer's bundled welcome board contains no cards. A blank board was created instead.".localizedUI)
       return nil
     }
 

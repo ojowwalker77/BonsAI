@@ -113,7 +113,7 @@ enum BoardExporter {
     }
 
     guard let rep = hosting.bitmapImageRepForCachingDisplay(in: pointRect) else {
-      UserFacingError.report("BonsAI could not allocate a bitmap to render the board for export.")
+      UserFacingError.report("BonsAI could not allocate a bitmap to render the board for export.".localizedUI)
       return nil
     }
     // Upscale the cache rep to `renderScale` device pixels for crisp text (points stay the same;
@@ -163,8 +163,8 @@ enum BoardExporter {
     panel.allowedContentTypes = [.png]
     panel.canCreateDirectories = true
     panel.nameFieldStringValue = sanitizedFileName(suggestedName) + ".png"
-    panel.title = "Export Board"
-    panel.message = "Export this board as a PNG image."
+    panel.title = "Export Board".localizedUI
+    panel.message = "Export this board as a PNG image.".localizedUI
 
     let apply: (NSApplication.ModalResponse) -> Void = { response in
       if response == .OK, let url = panel.url { write(image: image, to: url) }
@@ -196,13 +196,13 @@ enum BoardExporter {
     guard let tiff = image.tiffRepresentation,
           let rep = NSBitmapImageRep(data: tiff),
           let png = rep.representation(using: .png, properties: [:]) else {
-      UserFacingError.report("BonsAI could not convert the board into PNG data. The board was not exported.")
+      UserFacingError.report("BonsAI could not convert the board into PNG data. The board was not exported.".localizedUI)
       return
     }
     do {
       try png.write(to: url)
     } catch {
-      UserFacingError.report(error, while: "Exporting the board as PNG")
+      UserFacingError.report(error, while: "Exporting the board as PNG".localizedUI)
     }
   }
 
@@ -213,6 +213,6 @@ enum BoardExporter {
       .replacingOccurrences(of: "/", with: "-")
       .replacingOccurrences(of: ":", with: "-")
       .replacingOccurrences(of: "\n", with: " ")
-    return cleaned.isEmpty ? "Board" : String(cleaned.prefix(80))
+    return cleaned.isEmpty ? "Board".localizedUI : String(cleaned.prefix(80))
   }
 }

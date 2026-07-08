@@ -17,19 +17,19 @@ enum RefineIntent: String, CaseIterable, Identifiable {
 
   var label: String {
     switch self {
-    case .tighten: "Tighten"
-    case .concise: "Concise"
-    case .spec: "Spec"
-    case .checklist: "Checklist"
+    case .tighten: "Tighten".localizedUI
+    case .concise: "Concise".localizedUI
+    case .spec: "Spec".localizedUI
+    case .checklist: "Checklist".localizedUI
     }
   }
 
   var detail: String {
     switch self {
-    case .tighten: "Sharpen into a clear, unambiguous prompt"
-    case .concise: "Cut to the essentials"
-    case .spec: "Restructure as goal · requirements · constraints"
-    case .checklist: "Turn into ordered, actionable steps"
+    case .tighten: "Sharpen into a clear, unambiguous prompt".localizedUI
+    case .concise: "Cut to the essentials".localizedUI
+    case .spec: "Restructure as goal / requirements / constraints".localizedUI
+    case .checklist: "Turn into ordered, actionable steps".localizedUI
     }
   }
 

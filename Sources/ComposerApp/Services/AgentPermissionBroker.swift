@@ -60,11 +60,11 @@ enum AgentPermissionBroker {
     NSApp.activate(ignoringOtherApps: true)
     let alert = NSAlert()
     alert.alertStyle = .warning
-    alert.messageText = "Allow the agent to use \(friendlyName(toolName))?"
+    alert.messageText = "Allow the agent to use %@?".localizedUI(friendlyName(toolName))
     alert.informativeText = informative(toolName: toolName, input: input)
-    alert.addButton(withTitle: "Allow Once")
-    alert.addButton(withTitle: "Always Allow")
-    alert.addButton(withTitle: "Deny")
+    alert.addButton(withTitle: "Allow Once".localizedUI)
+    alert.addButton(withTitle: "Always Allow".localizedUI)
+    alert.addButton(withTitle: "Deny".localizedUI)
     switch alert.runModal() {
     case .alertFirstButtonReturn: return .allowOnce
     case .alertSecondButtonReturn: return .allowAlways
@@ -75,14 +75,14 @@ enum AgentPermissionBroker {
   private static func informative(toolName: String, input: [String: Any]) -> String {
     var lines: [String] = []
     if let parts = mcpParts(toolName) {
-      lines.append("\"\(parts.server)\" is a connected tool outside Composer's canvas. The agent wants to run its \(parts.tool) action.")
+      lines.append("\"%@\" is a connected tool outside Composer's canvas. The agent wants to run its %@ action.".localizedUI(parts.server, parts.tool))
     } else {
-      lines.append("The agent wants to run the built-in \(toolName) tool, which Composer doesn't grant by default.")
+      lines.append("The agent wants to run the built-in %@ tool, which Composer doesn't grant by default.".localizedUI(toolName))
     }
     if let summary = inputSummary(input) {
-      lines.append("\nRequest: \(summary)")
+      lines.append("\n" + "Request: %@".localizedUI(summary))
     }
-    lines.append("\nAllow Once runs it just this time. Always Allow won't ask again for this tool.")
+    lines.append("\n" + "Allow Once runs it just this time. Always Allow won't ask again for this tool.".localizedUI)
     return lines.joined(separator: "\n")
   }
 
@@ -107,7 +107,7 @@ enum AgentPermissionBroker {
     let tool = String(body[separator.upperBound...])
     if server.hasPrefix("claude_ai_") { server.removeFirst("claude_ai_".count) }
     server = server.replacingOccurrences(of: "_", with: " ")
-    return (server.isEmpty ? "a connected app" : server, tool.isEmpty ? toolName : tool)
+    return (server.isEmpty ? "a connected app".localizedUI : server, tool.isEmpty ? toolName : tool)
   }
 
   private static func inputSummary(_ input: [String: Any]) -> String? {

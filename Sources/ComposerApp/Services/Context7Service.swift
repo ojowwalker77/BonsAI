@@ -48,7 +48,7 @@ struct Context7Service {
     }
     let (data, response) = try await URLSession.shared.data(for: request)
     if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-      throw AppSearchError.message("Context7 returned HTTP \(http.statusCode) and did not provide an error message.")
+      throw AppSearchError.message("Context7 returned HTTP %d and did not provide an error message.".localizedUI(http.statusCode))
     }
     return data
   }
@@ -68,8 +68,8 @@ private struct Library: Decodable {
   /// "★ 9.5 · <description>" trimmed to one line for the dropdown.
   var subtitleLine: String {
     var bits: [String] = []
-    if let trustScore { bits.append("Trust \(trimZero(trustScore))") }
-    if let totalSnippets, totalSnippets > 0 { bits.append("\(totalSnippets) snippets") }
+    if let trustScore { bits.append("Trust %@".localizedUI(trimZero(trustScore))) }
+    if let totalSnippets, totalSnippets > 0 { bits.append("%d snippets".localizedUI(totalSnippets)) }
     let meta = bits.joined(separator: " · ")
     let desc = (description ?? "").replacingOccurrences(of: "\n", with: " ").trimmed
     switch (meta.isEmpty, desc.isEmpty) {

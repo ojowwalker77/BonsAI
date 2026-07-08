@@ -125,7 +125,7 @@ struct CommandPalette: View {
         .frame(width: iconSlot)
       FocusedSearchField(
         text: Binding(get: { query }, set: { query = $0; selection = 0 }),
-        placeholder: "Search boards and actions…",
+        placeholder: "Search boards and actions...".localizedUI,
         // System font, not the editor font: the palette is chrome (its rows are all system fonts),
         // and the custom app fonts' lying vertical metrics clip ascenders in NSTextField.
         font: .systemFont(ofSize: 15),
@@ -150,7 +150,7 @@ struct CommandPalette: View {
           .font(.system(size: 13))
           .foregroundStyle(Theme.Palette.placeholder)
           .frame(width: iconSlot)
-        Text("No matches").font(Theme.Typography.menuName).foregroundStyle(Theme.Palette.placeholder)
+        Text("No matches".localizedUI).font(Theme.Typography.menuName).foregroundStyle(Theme.Palette.placeholder)
         Spacer(minLength: 0)
       }
       .padding(.horizontal, contentInset).padding(.vertical, 14)
@@ -159,7 +159,7 @@ struct CommandPalette: View {
         ScrollView(.vertical) {
           VStack(alignment: .leading, spacing: 2) {
             if !filteredBoards.isEmpty {
-              sectionHeader("Boards")
+              sectionHeader("Boards".localizedUI)
               ForEach(Array(filteredBoards.enumerated()), id: \.element.persistentModelID) { index, dump in
                 boardRow(dump, selected: safeSelection == index)
                   .brightness(hovered == index && safeSelection != index ? 0.12 : 0)
@@ -169,7 +169,7 @@ struct CommandPalette: View {
               }
             }
             if !filteredCommands.isEmpty {
-              sectionHeader("Actions")
+              sectionHeader("Actions".localizedUI)
               ForEach(Array(filteredCommands.enumerated()), id: \.element.id) { index, command in
                 let row = filteredBoards.count + index
                 commandRow(command, selected: safeSelection == row)
@@ -232,7 +232,7 @@ struct CommandPalette: View {
         .fill(dump.persistentModelID == store.currentID ? Theme.Palette.accent : Color.clear)
         .frame(width: 6, height: 6)
         .frame(width: iconSlot)
-      Text(isEmpty ? "Empty draft" : dump.title)
+      Text(isEmpty ? "Empty draft".localizedUI : dump.title)
         .font(Theme.Typography.menuName)
         .foregroundStyle(isEmpty ? Theme.Palette.placeholder : Theme.Palette.body)
         .lineLimit(1)

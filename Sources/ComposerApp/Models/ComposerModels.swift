@@ -64,9 +64,9 @@ enum ClaudeModel: String, Codable, CaseIterable, Identifiable, Hashable, Sendabl
   /// A one-line tier hint shown beneath the name in a picker.
   var tagline: String {
     switch self {
-    case .opus: "Most capable"
-    case .sonnet: "Balanced"
-    case .haiku: "Fastest"
+    case .opus: "Most capable".localizedUI
+    case .sonnet: "Balanced".localizedUI
+    case .haiku: "Fastest".localizedUI
     }
   }
 }

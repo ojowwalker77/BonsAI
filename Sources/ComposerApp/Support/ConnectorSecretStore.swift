@@ -18,7 +18,7 @@ enum ConnectorSecretStore {
     do {
       try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     } catch {
-      UserFacingError.report(error, while: "Creating secure connector-token storage")
+      UserFacingError.report(error, while: "Creating secure connector-token storage".localizedUI)
     }
     return dir.appendingPathComponent("connector-secrets.json")
   }()
@@ -57,7 +57,7 @@ enum ConnectorSecretStore {
       let data = try Data(contentsOf: fileURL)
       dict = try JSONDecoder().decode([String: String].self, from: data)
     } catch {
-      UserFacingError.report(error, while: "Reading saved connector tokens")
+      UserFacingError.report(error, while: "Reading saved connector tokens".localizedUI)
       dict = [:]
     }
     cache = dict
@@ -71,7 +71,7 @@ enum ConnectorSecretStore {
       try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
       return true
     } catch {
-      UserFacingError.report(error, while: "Saving the connector token")
+      UserFacingError.report(error, while: "Saving the connector token".localizedUI)
       return false
     }
   }

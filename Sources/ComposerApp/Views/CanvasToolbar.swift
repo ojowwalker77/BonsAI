@@ -52,23 +52,23 @@ struct CanvasToolbar: View {
 
   var body: some View {
     HStack(spacing: 5) {
-      ToolButton(symbol: "cursorarrow", help: "Select  ·  move & edit cards  ⌘1",
+      ToolButton(symbol: "cursorarrow", help: "Select  ·  move & edit cards  ⌘1".localizedUI,
                  active: tool == .select, shortcut: 1) { tool = .select }
-      ToolButton(symbol: "character", help: "Text  ·  click the board, then type  ⌘2",
+      ToolButton(symbol: "character", help: "Text  ·  click the board, then type  ⌘2".localizedUI,
                  active: tool == .text, shortcut: 2) { tool = .text }
-      ToolButton(symbol: "rectangle", help: "Rectangle  ·  drag to draw  ⌘3",
+      ToolButton(symbol: "rectangle", help: "Rectangle  ·  drag to draw  ⌘3".localizedUI,
                  active: tool == .rectangle, shortcut: 3) { tool = .rectangle }
-      ToolButton(symbol: "circle", help: "Ellipse  ·  drag to draw  ⌘4",
+      ToolButton(symbol: "circle", help: "Ellipse  ·  drag to draw  ⌘4".localizedUI,
                  active: tool == .ellipse, shortcut: 4) { tool = .ellipse }
-      ToolButton(symbol: "diamond", help: "Diamond  ·  drag to draw  ⌘5",
+      ToolButton(symbol: "diamond", help: "Diamond  ·  drag to draw  ⌘5".localizedUI,
                  active: tool == .diamond, shortcut: 5) { tool = .diamond }
-      ToolButton(symbol: "line.diagonal", help: "Line  ·  drag to draw  ⌘6",
+      ToolButton(symbol: "line.diagonal", help: "Line  ·  drag to draw  ⌘6".localizedUI,
                  active: tool == .line, shortcut: 6) { tool = .line }
-      ToolButton(symbol: "arrow.up.right", help: "Arrow  ·  drag to draw  ⌘7",
+      ToolButton(symbol: "arrow.up.right", help: "Arrow  ·  drag to draw  ⌘7".localizedUI,
                  active: tool == .arrow, shortcut: 7) { tool = .arrow }
-      ToolButton(symbol: "scribble.variable", help: "Freehand stroke  ·  drag to draw  ⌘8",
+      ToolButton(symbol: "scribble.variable", help: "Freehand stroke  ·  drag to draw  ⌘8".localizedUI,
                  active: tool == .freehand, shortcut: 8) { tool = .freehand }
-      ToolButton(symbol: "x.squareroot", help: "Equation  ·  click the board, then type LaTeX  ⌘9",
+      ToolButton(symbol: "x.squareroot", help: "Equation  ·  click the board, then type LaTeX  ⌘9".localizedUI,
                  active: tool == .equation, shortcut: 9) { tool = .equation }
     }
   }
@@ -125,7 +125,7 @@ private struct ToolButton: View {
       hovering = over
       if over, !disabled, !busy { Haptics.hover() }
     }
-    .help(help)
+    .help(help.localizedUI)
     .animation(.easeOut(duration: 0.12), value: hovering)
   }
 

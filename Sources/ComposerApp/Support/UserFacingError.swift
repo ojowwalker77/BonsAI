@@ -32,7 +32,7 @@ enum UserFacingError {
     if !diagnostic.isEmpty, !isGeneric(diagnostic) { return diagnostic }
 
     let code = "\(nsError.domain) \(nsError.code)"
-    return "\(action) could not complete (\(code)); the underlying service did not provide a diagnostic."
+    return "%@ could not complete (%@); the underlying service did not provide a diagnostic.".localizedUI(action, code)
   }
 
   static func commandFailure(command: String, result: Shell.Result) -> String {
@@ -45,17 +45,17 @@ enum UserFacingError {
 
     if command.localizedCaseInsensitiveCompare("Claude") == .orderedSame {
       if lower.contains("401") && (lower.contains("auth") || lower.contains("credential")) {
-        return "Claude authentication was rejected by the API (HTTP 401: \(diagnostic)). Run `claude auth login`, then retry."
+        return "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry.".localizedUI(diagnostic)
       }
       if lower.contains("auth") || lower.contains("credential") || lower.contains("login") {
-        return "Claude authentication failed: \(diagnostic). Run `claude auth login`, then retry."
+        return "Claude authentication failed: %@. Run `claude auth login`, then retry.".localizedUI(diagnostic)
       }
     }
 
     guard !diagnostic.isEmpty else {
-      return "\(command) exited with code \(status) but returned no diagnostic."
+      return "%@ exited with code %d but returned no diagnostic.".localizedUI(command, status)
     }
-    return "\(command) exited with code \(status): \(diagnostic)"
+    return "%@ exited with code %d: %@".localizedUI(command, status, diagnostic)
   }
 
   /// A single, compact diagnostic suitable for the app's error surfaces. Preserve stdout too:
@@ -75,39 +75,39 @@ enum UserFacingError {
   private static func networkMessage(for error: URLError, while action: String) -> String {
     switch error.code {
     case .notConnectedToInternet:
-      return "\(action) could not reach the internet. Check your connection and try again."
+      return "%@ could not reach the internet. Check your connection and try again.".localizedUI(action)
     case .timedOut:
-      return "\(action) timed out before the service responded. Check your connection and try again."
+      return "%@ timed out before the service responded. Check your connection and try again.".localizedUI(action)
     case .cannotFindHost:
-      return "\(action) could not find the service host. Check your DNS or network connection."
+      return "%@ could not find the service host. Check your DNS or network connection.".localizedUI(action)
     case .cannotConnectToHost:
-      return "\(action) could not connect to the service. The service may be down or blocked by your network."
+      return "%@ could not connect to the service. The service may be down or blocked by your network.".localizedUI(action)
     case .networkConnectionLost:
-      return "\(action) lost its network connection before it finished. Try again."
+      return "%@ lost its network connection before it finished. Try again.".localizedUI(action)
     case .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted:
-      return "\(action) could not verify the service's secure connection (\(error.code.rawValue))."
+      return "%@ could not verify the service's secure connection (%d).".localizedUI(action, error.code.rawValue)
     default:
-      return "\(action) failed with network error \(error.code.rawValue): \(normalized(error.localizedDescription))"
+      return "%@ failed with network error %d: %@".localizedUI(action, error.code.rawValue, normalized(error.localizedDescription))
     }
   }
 
   private static func decodingMessage(for error: DecodingError, while action: String) -> String {
     func location(_ context: DecodingError.Context) -> String {
       let path = context.codingPath.map(\.stringValue).filter { !$0.isEmpty }.joined(separator: ".")
-      return path.isEmpty ? "the response root" : "`\(path)`"
+      return path.isEmpty ? "the response root".localizedUI : "`\(path)`"
     }
 
     switch error {
     case let .dataCorrupted(context):
-      return "\(action) received invalid data at \(location(context)): \(context.debugDescription)"
+      return "%@ received invalid data at %@: %@".localizedUI(action, location(context), context.debugDescription)
     case let .keyNotFound(key, context):
-      return "\(action) received data missing `\(key.stringValue)` at \(location(context))."
+      return "%@ received data missing `%@` at %@.".localizedUI(action, key.stringValue, location(context))
     case let .typeMismatch(type, context):
-      return "\(action) received \(location(context)) in the wrong format (expected \(type)): \(context.debugDescription)"
+      return "%@ received %@ in the wrong format (expected %@): %@".localizedUI(action, location(context), String(describing: type), context.debugDescription)
     case let .valueNotFound(type, context):
-      return "\(action) received no value at \(location(context)) (expected \(type)): \(context.debugDescription)"
+      return "%@ received no value at %@ (expected %@): %@".localizedUI(action, location(context), String(describing: type), context.debugDescription)
     @unknown default:
-      return "\(action) received data Composer could not decode: \(error.localizedDescription)"
+      return "%@ received data Composer could not decode: %@".localizedUI(action, error.localizedDescription)
     }
   }
 

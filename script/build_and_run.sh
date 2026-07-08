@@ -64,6 +64,9 @@ chmod +x "$APP_BINARY"
 while IFS= read -r -d '' resource_bundle; do
   mkdir -p "$APP_CONTENTS/Resources"
   cp -R "$resource_bundle" "$APP_CONTENTS/Resources/"
+  while IFS= read -r -d '' localization_dir; do
+    cp -R "$localization_dir" "$APP_CONTENTS/Resources/"
+  done < <(find "$resource_bundle" -maxdepth 1 -type d -name "*.lproj" -print0)
 done < <(find "$BUILD_DIR" -maxdepth 1 -type d -name "*.bundle" -print0)
 
 # Sparkle auto-updater. SwiftPM links Sparkle but does not bundle it into our hand-staged .app, so copy
@@ -123,6 +126,15 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>ja</string>
+    <string>zh-Hans</string>
+    <string>ko</string>
+  </array>
   <key>CFBundleShortVersionString</key>
   <string>$VERSION</string>
   <key>CFBundleVersion</key>

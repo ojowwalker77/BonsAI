@@ -29,9 +29,9 @@ final class AppSearchState: ObservableObject {
   var connector: (any ComposerAppConnector)? { AppConnectorRegistry.connector(for: appID) }
   var context: AppSearchContext { AppSearchContext(githubKind: githubKind) }
   var isGitHub: Bool { connector?.supportsGitHubKindToggle == true }
-  var placeholder: String { connector?.placeholder(context: context) ?? "Search…" }
-  var idleMessage: String { connector?.idleMessage(context: context) ?? "Type to search." }
-  var noResultsMessage: String { connector?.noResultsMessage(query: query.trimmed, context: context) ?? "No results." }
+  var placeholder: String { connector?.placeholder(context: context).localizedUI ?? "Search...".localizedUI }
+  var idleMessage: String { connector?.idleMessage(context: context).localizedUI ?? "Type to search.".localizedUI }
+  var noResultsMessage: String { connector?.noResultsMessage(query: query.trimmed, context: context).localizedUI ?? "No results.".localizedUI }
 
   func queryChanged(_ text: String) {
     query = text
@@ -65,7 +65,7 @@ final class AppSearchState: ObservableObject {
     searchTask?.cancel()
     let q = query.trimmed, app = appID, kind = githubKind, context = AppSearchContext(githubKind: githubKind)
     guard let connector = AppConnectorRegistry.connector(for: app) else {
-      results = []; isLoading = false; hasSearched = false; errorText = "Unknown app connector."
+      results = []; isLoading = false; hasSearched = false; errorText = "Unknown app connector.".localizedUI
       return
     }
     guard q.count >= connector.minimumQueryLength else {
@@ -88,7 +88,7 @@ final class AppSearchState: ObservableObject {
         self.results = []
         self.isLoading = false
         self.hasSearched = true
-        self.errorText = UserFacingError.message(for: error, while: "\(self.app?.title ?? "Connector") search")
+        self.errorText = UserFacingError.message(for: error, while: "%@ search".localizedUI(self.app?.title ?? "Connector".localizedUI))
       }
     }
   }
@@ -173,7 +173,7 @@ struct AppSearchPanel: View {
       message(error, symbol: "exclamationmark.triangle")
     } else if state.results.isEmpty {
       if state.isLoading {
-        message("Searching…", symbol: nil)
+        message("Searching...".localizedUI, symbol: nil)
       } else if state.hasSearched {
         message(state.noResultsMessage, symbol: nil)
       } else {
@@ -244,9 +244,9 @@ struct AppSearchPanel: View {
 
   private var footer: some View {
     HStack(spacing: 6) {
-      keycap("↑↓"); Text("navigate").font(.caption2).foregroundStyle(Theme.Palette.title)
-      keycap("↵"); Text("select").font(.caption2).foregroundStyle(Theme.Palette.title)
-      keycap("esc"); Text("close").font(.caption2).foregroundStyle(Theme.Palette.title)
+        keycap("↑↓"); Text("navigate".localizedUI).font(.caption2).foregroundStyle(Theme.Palette.title)
+        keycap("↵"); Text("select".localizedUI).font(.caption2).foregroundStyle(Theme.Palette.title)
+        keycap("esc"); Text("close".localizedUI).font(.caption2).foregroundStyle(Theme.Palette.title)
       Spacer()
     }
     .padding(.horizontal, 12)

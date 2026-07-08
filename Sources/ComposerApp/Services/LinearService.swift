@@ -11,7 +11,7 @@ struct LinearService {
     let trimmed = query.trimmed
     guard !trimmed.isEmpty else { return [] }
     guard let key = ConnectorSecretStore.token(for: "@linear") else {
-      throw AppSearchError.message("Add a Linear API key in Settings → Connectors → Linear.")
+      throw AppSearchError.message("Add a Linear API key in Settings > Connectors > Linear.".localizedUI)
     }
     let gql = """
     query Search($q: String!) {
@@ -34,7 +34,7 @@ struct LinearService {
   func render(_ reference: LinearReference) async throws -> String {
     let header = "## Linear — \(reference.identifier)"
     guard let key = ConnectorSecretStore.token(for: "@linear") else {
-      throw AppSearchError.message("Add a Linear API key in Settings → Connectors → Linear.")
+      throw AppSearchError.message("Add a Linear API key in Settings > Connectors > Linear.".localizedUI)
     }
     let gql = """
     query Issue($id: String!) {
@@ -114,16 +114,16 @@ struct LinearService {
     request.httpBody = try JSONSerialization.data(withJSONObject: ["query": query, "variables": variables])
 
     let (data, response) = try await URLSession.shared.data(for: request)
-    guard let http = response as? HTTPURLResponse else { throw AppSearchError.message("No response from Linear.") }
+    guard let http = response as? HTTPURLResponse else { throw AppSearchError.message("No response from Linear.".localizedUI) }
     guard (200..<300).contains(http.statusCode) else {
       if http.statusCode == 401 || http.statusCode == 403 {
-        throw AppSearchError.message("Linear rejected the API key (\(http.statusCode)). Check Settings → Connectors → Linear.")
+        throw AppSearchError.message("Linear rejected the API key (%d). Check Settings > Connectors > Linear.".localizedUI(http.statusCode))
       }
-      throw AppSearchError.message("Linear returned HTTP \(http.statusCode) and did not provide an error message.")
+      throw AppSearchError.message("Linear returned HTTP %d and did not provide an error message.".localizedUI(http.statusCode))
     }
     let envelope = try JSONDecoder().decode(GraphQLResponse<T>.self, from: data)
-    if let message = envelope.errors?.first?.message { throw AppSearchError.message("Linear: \(message)") }
-    guard let payload = envelope.data else { throw AppSearchError.message("Linear returned no data.") }
+    if let message = envelope.errors?.first?.message { throw AppSearchError.message("Linear: %@".localizedUI(message)) }
+    guard let payload = envelope.data else { throw AppSearchError.message("Linear returned no data.".localizedUI) }
     return payload
   }
 }
