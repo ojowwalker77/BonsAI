@@ -68,8 +68,8 @@ private struct Library: Decodable {
   /// "★ 9.5 · <description>" trimmed to one line for the dropdown.
   var subtitleLine: String {
     var bits: [String] = []
-    if let trustScore { bits.append("Trust \(trimZero(trustScore))") }
-    if let totalSnippets, totalSnippets > 0 { bits.append("\(totalSnippets) snippets") }
+    if let trustScore { bits.append("Trust %@".localizedUI(trimZero(trustScore))) }
+    if let totalSnippets, totalSnippets > 0 { bits.append("%d snippets".localizedUI(totalSnippets)) }
     let meta = bits.joined(separator: " · ")
     let desc = (description ?? "").replacingOccurrences(of: "\n", with: " ").trimmed
     switch (meta.isEmpty, desc.isEmpty) {

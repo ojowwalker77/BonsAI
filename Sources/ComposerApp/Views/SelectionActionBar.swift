@@ -58,11 +58,11 @@ struct SelectionActionBar: View {
         Divider().frame(height: 16).opacity(0.35)
 
         // Markdown formatting — literal syntax in the plain text, styled live.
-        iconAction(icon: "textformat.size", help: "Heading  ·  cycles # / ## / ###") { onFormat(.heading) }
-        iconAction(icon: "bold", help: "Bold  ·  **text**") { onFormat(.bold) }
-        iconAction(icon: "italic", help: "Italic  ·  *text*") { onFormat(.italic) }
-        iconAction(icon: "chevron.left.forwardslash.chevron.right", help: "Code  ·  `text`") { onFormat(.code) }
-        iconAction(icon: "text.quote", help: "Quote  ·  > line") { onFormat(.quote) }
+        iconAction(icon: "textformat.size", help: "Heading  ·  cycles # / ## / ###".localizedUI) { onFormat(.heading) }
+        iconAction(icon: "bold", help: "Bold  ·  **text**".localizedUI) { onFormat(.bold) }
+        iconAction(icon: "italic", help: "Italic  ·  *text*".localizedUI) { onFormat(.italic) }
+        iconAction(icon: "chevron.left.forwardslash.chevron.right", help: "Code  ·  `text`".localizedUI) { onFormat(.code) }
+        iconAction(icon: "text.quote", help: "Quote  ·  > line".localizedUI) { onFormat(.quote) }
 
         Divider().frame(height: 16).opacity(0.35)
 

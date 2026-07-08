@@ -140,7 +140,7 @@ final class DumpStore: ObservableObject {
       do {
         let decoded = try JSONDecoder().decode([CardState].self, from: data)
         if !decoded.isEmpty { return migrateImagePaths(in: decoded, for: dump) }
-        reportUnreadableBoard(dump, message: "A saved board contained no cards. Composer loaded its text fallback instead.")
+        reportUnreadableBoard(dump, message: "A saved board contained no cards. Composer loaded its text fallback instead.".localizedUI)
       } catch {
       reportUnreadableBoard(dump, message: UserFacingError.message(for: error, while: "Reading this saved board".localizedUI))
       }
@@ -170,7 +170,7 @@ final class DumpStore: ObservableObject {
     guard changed else { return cards }
     do {
       dump.cardsData = try JSONEncoder().encode(migrated)
-      _ = save("Migrating board image attachments")
+      _ = save("Migrating board image attachments".localizedUI)
     } catch {
       UserFacingError.report(error, while: "Encoding migrated board image attachments".localizedUI)
     }
@@ -216,7 +216,7 @@ final class DumpStore: ObservableObject {
     guard let dump = current else {
       let dump = Dump(text: mirror, cardsData: data)
       context.insert(dump)
-      guard save("Creating a new board") else { return }
+      guard save("Creating a new board".localizedUI) else { return }
       reload()
       currentID = dump.persistentModelID
       return
@@ -225,7 +225,7 @@ final class DumpStore: ObservableObject {
     dump.cardsData = data
     dump.text = mirror
     dump.updatedAt = Date()
-    guard save("Autosaving the board") else { return }
+    guard save("Autosaving the board".localizedUI) else { return }
     objectWillChange.send()   // the array identity is unchanged; nudge the list
   }
 
@@ -261,7 +261,7 @@ final class DumpStore: ObservableObject {
     if let dump = current, dump.isBlank { isHistoryOpen = false; return }
     let dump = Dump()
     context.insert(dump)
-    guard save("Creating a new board") else { return }
+    guard save("Creating a new board".localizedUI) else { return }
     reload()
     currentID = dump.persistentModelID
     isHistoryOpen = false
@@ -271,7 +271,7 @@ final class DumpStore: ObservableObject {
     guard let dump = dumps.first(where: { $0.persistentModelID == id }) else { return }
     let wasCurrent = id == currentID
     context.delete(dump)
-    guard save("Deleting the board") else { return }
+    guard save("Deleting the board".localizedUI) else { return }
     reload()
     if wasCurrent { currentID = dumps.first?.persistentModelID }
     ensureCurrent()
@@ -293,7 +293,7 @@ final class DumpStore: ObservableObject {
   private func pruneCurrentIfEmpty() {
     guard dumps.count > 1, let dump = current, dump.isBlank else { return }
     context.delete(dump)
-    guard save("Removing the empty board") else { return }
+    guard save("Removing the empty board".localizedUI) else { return }
     reload()
   }
 
@@ -301,7 +301,7 @@ final class DumpStore: ObservableObject {
     if dumps.isEmpty {
       let dump = Dump()
       context.insert(dump)
-      guard save("Creating the first board") else { return }
+      guard save("Creating the first board".localizedUI) else { return }
       reload()
     }
     if current == nil { currentID = dumps.first?.persistentModelID }
@@ -341,7 +341,7 @@ final class DumpStore: ObservableObject {
       return
     }
     context.insert(Dump(text: Self.titleMirror(for: cards), cardsData: data, customTitle: WelcomeBoard.title))
-    if save("Saving the welcome board") {
+    if save("Saving the welcome board".localizedUI) {
       UserDefaults.standard.set(true, forKey: Self.welcomeSeededKey)
     }
   }
@@ -376,7 +376,7 @@ final class DumpStore: ObservableObject {
       context.insert(Dump(text: Self.titleMirror(for: cards), cardsData: data, customTitle: WelcomeBoard.title))
     }
 
-    if save("Installing the BonsAI 1.3 welcome board") {
+    if save("Installing the BonsAI 1.3 welcome board".localizedUI) {
       UserDefaults.standard.set(true, forKey: Self.welcomeBoard13InstalledKey)
     }
   }
@@ -404,7 +404,7 @@ final class DumpStore: ObservableObject {
     let legacy = NotePersistence.load()
     guard existing == 0, !legacy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     context.insert(Dump(text: legacy))
-    _ = save("Importing the previous Composer note")
+    _ = save("Importing the previous Composer note".localizedUI)
   }
 
   private func save(_ action: String) -> Bool {

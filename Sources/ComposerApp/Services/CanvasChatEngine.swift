@@ -184,7 +184,7 @@ struct CodexChatEngine: CanvasChatEngine {
         // Grounded reads run as shell commands; show a compact line so the work is visible.
         let command = (item["command"] as? String ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
         let short = command.count > 44 ? String(command.prefix(44)) + "…" : command
-        return short.isEmpty ? [] : [.toolSummary("ran \(short)")]
+        return short.isEmpty ? [] : [.toolSummary("ran %@".localizedUI(short))]
       default:
         // reasoning / error / web_search / etc. — recognized framing, nothing to surface.
         return [.session("")]
@@ -262,21 +262,21 @@ struct OpenCodeChatEngine: CanvasChatEngine {
 enum CanvasToolSummary {
   static func summarize(_ name: String, _ input: [String: Any]?) -> String {
     switch name {
-    case "get_canvas": return "read the board"
+    case "get_canvas": return "read the board".localizedUI
     case "draw_diagram":
       let count = (input?["nodes"] as? [[String: Any]])?.count ?? 0
-      return "drew a diagram · \(count) card\(count == 1 ? "" : "s")"
-    case "tidy": return "tidied the layout"
-    case "add_text": return "added a card · \(snippet(input?["text"]))"
-    case "add_shape": return "drew a \(input?["kind"] as? String ?? "shape")"
-    case "set_text": return "rewrote a card · \(snippet(input?["text"]))"
-    case "move_node": return "moved a card"
-    case "resize_node": return "resized a card"
-    case "delete_node": return "removed a card"
-    case "connect": return "connected two cards"
-    case "archive": return "archived a card"
-    case "supersede": return "evolved an idea · \(snippet(input?["text"]))"
-    default: return name.isEmpty ? "used a tool" : name
+      return "drew a diagram · %d cards".localizedUI(count)
+    case "tidy": return "tidied the layout".localizedUI
+    case "add_text": return "added a card · %@".localizedUI(snippet(input?["text"]))
+    case "add_shape": return "drew a %@".localizedUI(input?["kind"] as? String ?? "shape".localizedUI)
+    case "set_text": return "rewrote a card · %@".localizedUI(snippet(input?["text"]))
+    case "move_node": return "moved a card".localizedUI
+    case "resize_node": return "resized a card".localizedUI
+    case "delete_node": return "removed a card".localizedUI
+    case "connect": return "connected two cards".localizedUI
+    case "archive": return "archived a card".localizedUI
+    case "supersede": return "evolved an idea · %@".localizedUI(snippet(input?["text"]))
+    default: return name.isEmpty ? "used a tool".localizedUI : name
     }
   }
 

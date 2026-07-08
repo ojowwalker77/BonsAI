@@ -980,7 +980,7 @@ struct ComposerCanvas: View {
     }
     .buttonStyle(.plain)
     .onHover { if $0 { Haptics.hover() } }
-    .help(slot == nil ? "Default ink" : "Theme color \((slot ?? 0) + 1)")
+    .help(slot == nil ? "Default ink".localizedUI : "Theme color %d".localizedUI((slot ?? 0) + 1))
   }
 
   private func tintSwatch(for slot: Int?, diameter: CGFloat) -> some View {

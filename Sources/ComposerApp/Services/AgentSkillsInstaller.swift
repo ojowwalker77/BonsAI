@@ -96,7 +96,7 @@ enum AgentSkillsInstallerError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .missingBundledResource(let target):
-      return "BonsAI's bundled skill file for \(target.displayName) is missing."
+      return "BonsAI's bundled skill file for %@ is missing.".localizedUI(target.displayName)
     }
   }
 }

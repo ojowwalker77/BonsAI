@@ -229,8 +229,8 @@ struct BrowserService {
   private func result(for tab: BrowserTabReference) -> AppSearchResult {
     let title = displayTitle(tab)
     let host = tab.host.isEmpty ? tab.url : tab.host
-    var bits = [host, tab.browser, "Window \(tab.windowIndex), Tab \(tab.tabIndex)"]
-    if tab.isActive { bits.append("active") }
+    var bits = [host, tab.browser, "Window %d, Tab %d".localizedUI(tab.windowIndex, tab.tabIndex)]
+    if tab.isActive { bits.append("active".localizedUI) }
     return AppSearchResult(
       id: "\(tab.bundleID):\(tab.windowIndex):\(tab.tabIndex):\(tab.url)",
       title: title,
@@ -289,5 +289,5 @@ private func displayTitle(_ reference: BrowserTabReference) -> String {
   let title = reference.title.trimmed
   if !title.isEmpty { return title }
   if !reference.host.isEmpty { return reference.host }
-  return reference.url.isEmpty ? "Browser tab" : reference.url
+  return reference.url.isEmpty ? "Browser tab".localizedUI : reference.url
 }

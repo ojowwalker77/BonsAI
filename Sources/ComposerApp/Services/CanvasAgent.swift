@@ -64,8 +64,8 @@ final class CanvasAgent: ObservableObject {
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
     panel.allowsMultipleSelection = false
-    panel.prompt = "Ground"
-    panel.message = "Pick a folder the agent can read to ground its suggestions in real files."
+    panel.prompt = "Ground".localizedUI
+    panel.message = "Pick a folder the agent can read to ground its suggestions in real files.".localizedUI
     if let dir = groundingDirectory { panel.directoryURL = dir }
     let apply: (NSApplication.ModalResponse) -> Void = { [weak self] response in
       if response == .OK, let url = panel.url { self?.setGroundingDirectory(url) }
@@ -90,7 +90,7 @@ final class CanvasAgent: ObservableObject {
     guard let engine = Self.resolvedEngine() else {
       transcript.append(AgentMessage(
         role: .error,
-        text: "No coding-agent engine is enabled and installed for chat. Enable one in Settings → Runtime."))
+        text: "No coding-agent engine is enabled and installed for chat. Enable one in Settings → Runtime.".localizedUI))
       return
     }
     didRequestStop = false
@@ -139,7 +139,7 @@ final class CanvasAgent: ObservableObject {
     guard let executable = adapter.executableURL else {
       transcript.append(AgentMessage(
         role: .error,
-        text: "Couldn't find the `\(engine.rawValue)` CLI. Install \(engine.title), then reopen BonsAI."))
+        text: "Couldn't find the `%@` CLI. Install %@, then reopen BonsAI.".localizedUI(engine.rawValue, engine.title)))
       finish {}
       return
     }

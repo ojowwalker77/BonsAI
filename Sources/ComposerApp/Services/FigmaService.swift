@@ -10,10 +10,10 @@ struct FigmaService {
 
   func search(_ query: String) async throws -> [AppSearchResult] {
     guard let reference = Self.parseURL(query) else { return [] }
-    let detail = reference.nodeId.isEmpty ? "whole file" : "node \(reference.nodeId)"
+    let detail = reference.nodeId.isEmpty ? "whole file".localizedUI : "node %@".localizedUI(reference.nodeId)
     return [AppSearchResult(
       id: "\(reference.fileKey):\(reference.nodeId)",
-      title: reference.name.isEmpty ? "Figma file" : reference.name,
+      title: reference.name.isEmpty ? "Figma file".localizedUI : reference.name,
       subtitle: "Figma · \(detail)",
       selection: .figma(reference))]
   }

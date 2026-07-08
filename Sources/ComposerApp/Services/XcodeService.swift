@@ -135,7 +135,7 @@ struct XcodeService {
   // MARK: - Helpers
 
   private func result(forPath path: String) -> AppSearchResult {
-    let kind = path.contains("/Logs/Test/") ? "Test" : (path.contains("/Logs/Build/") ? "Build" : "Result")
+    let kind = path.contains("/Logs/Test/") ? "Test".localizedUI : (path.contains("/Logs/Build/") ? "Build".localizedUI : "Result".localizedUI)
     return AppSearchResult(
       id: path,
       title: projectName(forResult: path),

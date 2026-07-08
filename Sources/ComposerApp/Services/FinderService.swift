@@ -77,7 +77,7 @@ struct FinderService {
     }
     let score = baseScore + pathScoreAdjustment(for: path)
 
-    let kind = isDirectory.boolValue ? "Folder" : "File"
+    let kind = isDirectory.boolValue ? "Folder".localizedUI : "File".localizedUI
     let subtitle = [kind, abbreviatedPath(resultPath), lightMetadata(for: url)].filter { !$0.isEmpty }.joined(separator: " · ")
     return SearchHit(
       score: score,
@@ -257,7 +257,7 @@ struct FinderService {
     var bits: [String] = []
     if values.isDirectory != true, let size = values.fileSize { bits.append(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)) }
     if let modified = values.contentModificationDate {
-      bits.append("modified " + DateFormatter.localizedString(from: modified, dateStyle: .medium, timeStyle: .short))
+      bits.append("modified %@".localizedUI(DateFormatter.localizedString(from: modified, dateStyle: .medium, timeStyle: .short)))
     }
     return bits.joined(separator: " · ")
   }

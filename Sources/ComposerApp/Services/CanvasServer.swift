@@ -197,10 +197,10 @@ final class CanvasServer {
 
     case ("GET", "/mcp"), ("GET", "/permission"):
       // No server-initiated SSE stream; these servers are request/response only.
-      send(connection, status: "405 Method Not Allowed", json: ["error": "use POST"])
+      send(connection, status: "405 Method Not Allowed", json: ["error": "use POST".localizedUI])
 
     default:
-      send(connection, status: "404 Not Found", json: ["ok": false, "error": "not found"])
+      send(connection, status: "404 Not Found", json: ["ok": false, "error": "not found".localizedUI])
     }
   }
 

@@ -540,7 +540,7 @@ struct GraphConfigStrip: View {
         .frame(width: 12, alignment: .leading)
       field(labelPlaceholder, text: label, focusFirst: focusFirst)
         .frame(maxWidth: .infinity)
-      field("unit", text: unit).frame(width: 48)
+      field("unit".localizedUI, text: unit).frame(width: 48)
       field("0", text: minText).frame(width: 52)
       field("10", text: maxText).frame(width: 52)
     }
@@ -587,7 +587,7 @@ struct GraphConfigStrip: View {
       }
       .buttonStyle(.plain)
       .help(row.wrappedValue.tint == nil ? "Series default".localizedUI : "Theme color %d".localizedUI((row.wrappedValue.tint ?? 0) + 1))
-      field("label", text: row.label).frame(width: 60)
+      field("label".localizedUI, text: row.label).frame(width: 60)
       field("0", text: row.xText).frame(width: 52)
       field("0", text: row.yText).frame(width: 52)
       Spacer(minLength: 0)

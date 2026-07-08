@@ -39,7 +39,7 @@ enum MentionCatalog {
   static let all: [MentionItem] = [
     // On this Mac — local context, no account
     .init(id: "@finder", title: "finder", label: "Finder", subtitle: "Local file or folder".localizedUI, symbol: "folder", kind: .app),
-    .init(id: "@browser", title: "browser", label: "Browser", subtitle: "Open Safari or Chromium tab".localizedUI, symbol: "safari", kind: .app),
+    .init(id: "@browser", title: "browser", label: "Browser".localizedUI, subtitle: "Open Safari or Chromium tab".localizedUI, symbol: "safari", kind: .app),
     .init(id: "@xcode", title: "xcode", label: "Xcode", subtitle: "Build errors & test failures".localizedUI, symbol: "hammer", kind: .app),
     // Services — external tools and APIs
     .init(id: "@github", title: "github", label: "GitHub", subtitle: "Issue or PR URL".localizedUI, symbol: "chevron.left.forwardslash.chevron.right", kind: .app),
