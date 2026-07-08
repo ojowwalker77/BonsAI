@@ -11,6 +11,12 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Changed
+- **Broader localization.** Japanese, Korean, and Simplified Chinese now cover the surfaces the
+  first pass missed — tool and format tooltips, the agent chat activity log, permission dialogs,
+  every connector search panel, the Settings section descriptions, error notices, and the
+  relative-time labels. Brand, palette, and font names stay in their original form.
+
 
 ## [1.4.2] - 2026-07-05
 

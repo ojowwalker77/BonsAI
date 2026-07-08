@@ -412,6 +412,7 @@
 "ran %@" = "已运行 %@";
 "read the board" = "已读取画板";
 "drew a diagram · %d cards" = "已绘制示意图 · %d 张卡片";
+"drew a diagram · %d card" = "已绘制示意图 · %d 张卡片";
 "tidied the layout" = "已整理布局";
 "added a card · %@" = "已添加卡片 · %@";
 "drew a %@" = "已绘制 %@";

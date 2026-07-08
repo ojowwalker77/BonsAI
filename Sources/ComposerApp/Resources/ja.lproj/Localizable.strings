@@ -412,6 +412,7 @@
 "ran %@" = "%@ を実行しました";
 "read the board" = "ボードを読みました";
 "drew a diagram · %d cards" = "図を描きました · %d 枚のカード";
+"drew a diagram · %d card" = "図を描きました · %d 枚のカード";
 "tidied the layout" = "レイアウトを整えました";
 "added a card · %@" = "カードを追加しました · %@";
 "drew a %@" = "%@ を描きました";

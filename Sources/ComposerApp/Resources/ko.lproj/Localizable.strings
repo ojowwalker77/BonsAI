@@ -412,6 +412,7 @@
 "ran %@" = "%@ 실행함";
 "read the board" = "보드를 읽음";
 "drew a diagram · %d cards" = "다이어그램을 그림 · 카드 %d개";
+"drew a diagram · %d card" = "다이어그램을 그림 · 카드 %d개";
 "tidied the layout" = "레이아웃을 정리함";
 "added a card · %@" = "카드를 추가함 · %@";
 "drew a %@" = "%@을(를) 그림";

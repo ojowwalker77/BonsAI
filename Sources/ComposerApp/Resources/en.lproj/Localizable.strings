@@ -413,6 +413,7 @@
 "ran %@" = "ran %@";
 "read the board" = "read the board";
 "drew a diagram · %d cards" = "drew a diagram · %d cards";
+"drew a diagram · %d card" = "drew a diagram · %d card";
 "tidied the layout" = "tidied the layout";
 "added a card · %@" = "added a card · %@";
 "drew a %@" = "drew a %@";

@@ -265,7 +265,9 @@ enum CanvasToolSummary {
     case "get_canvas": return "read the board".localizedUI
     case "draw_diagram":
       let count = (input?["nodes"] as? [[String: Any]])?.count ?? 0
-      return "drew a diagram · %d cards".localizedUI(count)
+      return count == 1
+        ? "drew a diagram · %d card".localizedUI(count)
+        : "drew a diagram · %d cards".localizedUI(count)
     case "tidy": return "tidied the layout".localizedUI
     case "add_text": return "added a card · %@".localizedUI(snippet(input?["text"]))
     case "add_shape": return "drew a %@".localizedUI(input?["kind"] as? String ?? "shape".localizedUI)
