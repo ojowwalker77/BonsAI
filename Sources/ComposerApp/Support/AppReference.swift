@@ -5,8 +5,8 @@ import Foundation
 /// Which kind of GitHub item the search is scoped to.
 enum GitHubItemKind: String, Equatable, Hashable, CaseIterable {
   case issue, pr
-  var pluralLabel: String { self == .issue ? "Issues" : "Pull Requests" }
-  var shortLabel: String { self == .issue ? "Issues" : "PRs" }
+  var pluralLabel: String { self == .issue ? "Issues".localizedUI : "Pull Requests".localizedUI }
+  var shortLabel: String { self == .issue ? "Issues".localizedUI : "PRs".localizedUI }
   /// `gh search <subcommand>` and `gh <subcommand> view`.
   var ghSubcommand: String { self == .issue ? "issues" : "prs" }
   var ghViewNoun: String { self == .issue ? "issue" : "pr" }
@@ -312,7 +312,7 @@ enum AppToken {
   }
 
   private static func shortBrowserTitle(url: String) -> String {
-    URL(string: url)?.host(percentEncoded: false) ?? "Browser tab"
+    URL(string: url)?.host(percentEncoded: false) ?? "Browser tab".localizedUI
   }
 
   /// `…/DerivedData/MyApp-<hash>/Logs/Test/X.xcresult` → `MyApp`; a pasted path → the file stem.

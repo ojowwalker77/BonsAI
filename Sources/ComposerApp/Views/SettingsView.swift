@@ -52,7 +52,7 @@ struct SettingsOverlay: View {
 
   private var sidebar: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Text("Settings")
+      Text("Settings".localizedUI)
         .font(.body.weight(.semibold))
         .foregroundStyle(Theme.Palette.body)
         .padding(.horizontal, 18)
@@ -100,7 +100,7 @@ struct SettingsOverlay: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Close Settings  ·  Esc")
+        .help("Close Settings  ·  Esc".localizedUI)
       }
       .padding(.leading, 20).padding(.trailing, 14)
       .frame(height: 52)
@@ -168,11 +168,11 @@ private enum SettingsDestination: String, CaseIterable, Identifiable {
   var id: String { rawValue }
   var title: String {
     switch self {
-    case .runtime: "Runtime"
-    case .appearance: "Appearance"
-    case .connectors: "Connectors"
-    case .shortcuts: "Shortcuts"
-    case .about: "About"
+    case .runtime: "Runtime".localizedUI
+    case .appearance: "Appearance".localizedUI
+    case .connectors: "Connectors".localizedUI
+    case .shortcuts: "Shortcuts".localizedUI
+    case .about: "About".localizedUI
     }
   }
   var symbol: String {
@@ -190,15 +190,15 @@ private struct SettingsContent: View {
   let destination: SettingsDestination
 
   private let shortcuts: [(String, String)] = [
-    ("Compile board", "⌘R"),
-    ("New board", "⌘N"),
-    ("Navigate boards", "⌘[  ⌘]"),
-    ("Select all · duplicate", "⌘A  ⌘D"),
-    ("Group · ungroup", "⌘G  ⇧⌘G"),
-    ("Lock · unlock", "⌘L  ⇧⌘L"),
-    ("App font: San Francisco", "⌃⌘1"),
-    ("App font: Nohemi", "⌃⌘2"),
-    ("App font: Satoshi", "⌃⌘3"),
+    ("Compile board".localizedUI, "⌘R"),
+    ("New board".localizedUI, "⌘N"),
+    ("Navigate boards".localizedUI, "⌘[  ⌘]"),
+    ("Select all / duplicate".localizedUI, "⌘A  ⌘D"),
+    ("Group / ungroup".localizedUI, "⌘G  ⇧⌘G"),
+    ("Lock / unlock".localizedUI, "⌘L  ⇧⌘L"),
+    ("App font: San Francisco".localizedUI, "⌃⌘1"),
+    ("App font: Nohemi".localizedUI, "⌃⌘2"),
+    ("App font: Satoshi".localizedUI, "⌃⌘3"),
   ]
 
   @StateObject private var appIcons = AppIconStore()
@@ -219,6 +219,7 @@ private struct SettingsContent: View {
   @AppStorage(ModelPreferences.chatModelKey) private var chatModel: ClaudeModel = ModelPreferences.defaultChatModel
   @AppStorage(ComposerPreferences.themeKey) private var themeRaw = ComposerTheme.bonsaiDark.rawValue
   @AppStorage(ComposerPreferences.appFontFamilyKey) private var appFontRaw = ComposerFontFamily.system.rawValue
+  @AppStorage(ComposerPreferences.languageKey) private var languageRaw = AppLanguage.system.rawValue
   @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
   /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
   /// visibility. Refreshed in `onAppear`; flipped false the moment the user resets.
@@ -252,8 +253,8 @@ private struct SettingsContent: View {
   /// A quiet sub-section intro inside a page: a plain heading and a single line of guidance.
   private func pageHeader(_ title: String, _ subtitle: String) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(title).font(.headline).foregroundStyle(Theme.Palette.body)
-      Text(subtitle)
+      Text(title.localizedUI).font(.headline).foregroundStyle(Theme.Palette.body)
+      Text(subtitle.localizedUI)
         .font(.caption)
         .foregroundStyle(Theme.Palette.menuDesc)
         .fixedSize(horizontal: false, vertical: true)
@@ -267,7 +268,7 @@ private struct SettingsContent: View {
 
   /// A group's explanatory footer, slightly inset like the System Settings idiom.
   private func groupFooter(_ text: String) -> some View {
-    Text(text)
+    Text(text.localizedUI)
       .font(.caption)
       .foregroundStyle(Theme.Palette.count)
       .fixedSize(horizontal: false, vertical: true)
@@ -284,18 +285,18 @@ private struct SettingsContent: View {
       // Engines — one grouped card, the readout and recheck riding the section label row.
       VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 8) {
-          Text("ENGINES").sectionLabel()
+          Text("ENGINES".localizedUI).sectionLabel()
           Spacer(minLength: 8)
           readout(ready: ready, total: states.count)
           Button(action: capabilities.refresh) {
-            Label("Recheck", systemImage: "arrow.clockwise")
+            Label("Recheck".localizedUI, systemImage: "arrow.clockwise")
               .font(.caption.weight(.semibold))
               .foregroundStyle(Theme.Palette.body)
               .padding(.horizontal, 11)
               .frame(height: 26)
           }
           .buttonStyle(SettingsPillButtonStyle())
-          .help("Re-scan this Mac for installed engines")
+          .help("Re-scan this Mac for installed engines".localizedUI)
         }
 
         VStack(spacing: 0) {
@@ -321,8 +322,8 @@ private struct SettingsContent: View {
           ) { EngineLogo(engine: .opencode).frame(width: 16, height: 16) }
           rowDivider
           engineRow(
-            name: "Apple Intelligence",
-            command: "semantic lint",
+            name: "Apple Intelligence".localizedUI,
+            command: "semantic lint".localizedUI,
             availability: capabilities.appleIntelligence,
             toggle: nil
           ) {
@@ -348,12 +349,12 @@ private struct SettingsContent: View {
       // without editing defaults by hand.
       if agentHasGrants {
         VStack(alignment: .leading, spacing: 8) {
-          Text("PERMISSIONS").sectionLabel()
+          Text("PERMISSIONS".localizedUI).sectionLabel()
           HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-              Text("Agent tool permissions")
+              Text("Agent tool permissions".localizedUI)
                 .font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-              Text("Tools you chose \"Always Allow\" for run without asking again.")
+              Text("Tools you chose \"Always Allow\" for run without asking again.".localizedUI)
                 .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -362,14 +363,14 @@ private struct SettingsContent: View {
               AgentPermissionBroker.resetRememberedGrants()
               agentHasGrants = false
             } label: {
-              Label("Reset", systemImage: "arrow.counterclockwise")
+              Label("Reset".localizedUI, systemImage: "arrow.counterclockwise")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.Palette.body)
                 .padding(.horizontal, 11)
                 .frame(height: 28)
             }
             .buttonStyle(SettingsPillButtonStyle())
-            .help("Ask again next time the agent uses one of these tools")
+            .help("Ask again next time the agent uses one of these tools".localizedUI)
           }
           .padding(.horizontal, 13)
           .padding(.vertical, 12)
@@ -388,18 +389,18 @@ private struct SettingsContent: View {
   /// default deliberately.
   private var modelsCard: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("MODELS").sectionLabel()
+      Text("MODELS".localizedUI).sectionLabel()
       VStack(spacing: 0) {
         surfaceRow(
-          title: "Chat Agent",
-          subtitle: "The agent you talk to in the canvas. Also switchable live in the Agent panel.",
+          title: "Chat Agent".localizedUI,
+          subtitle: "The agent you talk to in the canvas. Also switchable live in the Agent panel.".localizedUI,
           engineRaw: $chatEngineRaw,
           claudeModel: $chatModel, codexModel: $codexChatModel, opencodeModel: $opencodeChatModel)
       }
       .padding(.horizontal, 13)
       .settingsCard()
       if availableEngines.isEmpty {
-        Text("No engine is enabled and installed. Enable one in Engines above.")
+        Text("No engine is enabled and installed. Enable one in Engines above.".localizedUI)
           .font(.caption).foregroundStyle(.orange)
       }
     }
@@ -449,11 +450,11 @@ private struct SettingsContent: View {
 
   private func surfaceCopy(title: String, subtitle: String) -> some View {
     VStack(alignment: .leading, spacing: 3) {
-      Text(title)
+      Text(title.localizedUI)
         .font(.callout.weight(.medium))
         .foregroundStyle(Theme.Palette.body)
         .lineLimit(2)
-      Text(subtitle)
+      Text(subtitle.localizedUI)
         .font(.caption)
         .foregroundStyle(Theme.Palette.menuDesc)
         .fixedSize(horizontal: false, vertical: true)
@@ -503,7 +504,7 @@ private struct SettingsContent: View {
   /// A `provider/model` menu (Codex / OpenCode). "Default" leaves the engine on its own default.
   private func stringModelPicker(_ selection: Binding<String>, models: [String]) -> some View {
     Picker("", selection: selection) {
-      Text("Default").tag("")
+      Text("Default".localizedUI).tag("")
       ForEach(models, id: \.self) { Text(Self.shortModel($0)).tag($0) }
     }
     .labelsHidden().pickerStyle(.menu).fixedSize().tint(Theme.Palette.body)
@@ -520,7 +521,7 @@ private struct SettingsContent: View {
       Circle()
         .fill(ready > 0 ? Color.green.opacity(0.9) : Theme.Palette.count)
         .frame(width: 6, height: 6)
-      Text("\(ready) of \(total) ready")
+      Text("%d of %d ready".localizedUI(ready, total))
         .font(.caption.monospaced().weight(.semibold))
         .foregroundStyle(Theme.Palette.body)
     }
@@ -589,7 +590,7 @@ private struct SettingsContent: View {
       Image(systemName: "lock.fill")
         .font(.callout)
         .foregroundStyle(Theme.Palette.count)
-        .help("On-device — never leaves your Mac")
+        .help("On-device - never leaves your Mac".localizedUI)
     } else {
       Image(systemName: "bolt.slash")
         .font(.callout)
@@ -614,7 +615,7 @@ private struct SettingsContent: View {
         .lineLimit(1)
         .truncationMode(.middle)
     case .checking:
-      Text("Checking this Mac…")
+      Text("Checking this Mac...".localizedUI)
         .font(.caption2)
         .foregroundStyle(Theme.Palette.count)
     case let .unavailable(reason):
@@ -629,9 +630,38 @@ private struct SettingsContent: View {
 
   private var appearancePage: some View {
     VStack(alignment: .leading, spacing: 22) {
+      languageCard
       themeCard
       fontCard
       canvasGlassCard
+    }
+  }
+
+  /// App language override. "System" uses macOS language preferences; explicit picks re-resolve
+  /// BonsAI's bundled localizations immediately.
+  private var languageCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Language", "Choose the language BonsAI uses. System follows macOS Language & Region.")
+      HStack(spacing: 12) {
+        Text("App language".localizedUI)
+          .font(.callout.weight(.semibold))
+          .foregroundStyle(Theme.Palette.body)
+        Spacer(minLength: 12)
+        Picker("", selection: $languageRaw) {
+          ForEach(AppLanguage.allCases) { language in
+            Text(language.title).tag(language.rawValue)
+          }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .fixedSize()
+        .tint(Theme.Palette.body)
+      }
+      .padding(14)
+      .settingsCard()
+    }
+    .onChange(of: languageRaw) { _, _ in
+      NotificationCenter.default.post(name: .composerLanguageChanged, object: nil)
     }
   }
 
@@ -663,7 +693,7 @@ private struct SettingsContent: View {
                  "Let the desktop blur through the board surface. Solid keeps the flat canvas.")
       VStack(spacing: 12) {
         HStack(alignment: .firstTextBaseline) {
-          Text("Background transparency").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
+          Text("Background transparency".localizedUI).font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
           Spacer(minLength: 12)
           Text("\(canvasTransparencyPercent)%")
             .font(.callout.monospacedDigit().weight(.semibold))
@@ -672,9 +702,9 @@ private struct SettingsContent: View {
         Slider(value: $canvasTransparency, in: 0...ComposerPreferences.maxCanvasTransparency)
           .tint(Theme.Palette.accent)
         HStack {
-          Text("Solid")
+          Text("Solid".localizedUI)
           Spacer()
-          Text("Glass")
+          Text("Glass".localizedUI)
         }
         .font(.caption2)
         .foregroundStyle(Theme.Palette.count)
@@ -710,7 +740,7 @@ private struct SettingsContent: View {
 
   private var connectorsPage: some View {
     VStack(alignment: .leading, spacing: 22) {
-      groupFooter("Type @ in a card to attach live context. Copied drafts become self-contained text — the source is resolved at copy time.")
+      groupFooter("Type @ in a card to attach live context. Copied drafts become self-contained text - the source is resolved at copy time.")
 
       agentSkillsCard
 
@@ -735,7 +765,7 @@ private struct SettingsContent: View {
   /// forces a re-read after install since SwiftUI has no other reason to invalidate this view.
   private var agentSkillsCard: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("AGENT SKILLS").sectionLabel()
+      Text("AGENT SKILLS".localizedUI).sectionLabel()
       VStack(spacing: 0) {
         ForEach(Array(AgentSkillTarget.allCases.enumerated()), id: \.element.id) { index, target in
           if index > 0 { rowDivider }
@@ -761,12 +791,12 @@ private struct SettingsContent: View {
         .frame(width: 24, height: 24)
       VStack(alignment: .leading, spacing: 2) {
         Text(target.displayName).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
-        Text(target.isDetected ? (installed ? "Skill installed" : "Detected on this Mac") : "Not detected")
+        Text(target.isDetected ? (installed ? "Skill installed".localizedUI : "Detected on this Mac".localizedUI) : "Not detected".localizedUI)
           .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
       }
       Spacer(minLength: 8)
       Button(action: { installAgentSkill(target) }) {
-        Text(installed ? "Reinstall" : "Install")
+        Text(installed ? "Reinstall".localizedUI : "Install".localizedUI)
           .font(.caption.weight(.semibold))
           .foregroundStyle(Theme.Palette.body)
           .padding(.horizontal, 11)
@@ -782,7 +812,7 @@ private struct SettingsContent: View {
       try AgentSkillsInstaller.install(target)
       agentSkillsError = nil
     } catch {
-      agentSkillsError = "\(target.displayName): \(error.localizedDescription)"
+      agentSkillsError = "%@: %@".localizedUI(target.displayName, error.localizedDescription)
     }
     agentSkillsRevision += 1
   }
@@ -833,12 +863,12 @@ private struct SettingsContent: View {
   private var shortcutsPage: some View {
     VStack(alignment: .leading, spacing: 22) {
       VStack(alignment: .leading, spacing: 8) {
-        Text("SUMMON").sectionLabel()
+        Text("SUMMON".localizedUI).sectionLabel()
         VStack(spacing: 0) {
           // The summon hotkey is user-configurable (records into ShortcutStore, which HotKeyManager
           // re-binds); the rest are fixed in-app commands shown for reference.
           HStack(spacing: 10) {
-            Text("Summon Composer")
+            Text("Summon Composer".localizedUI)
               .font(.callout.weight(.medium))
               .foregroundStyle(Theme.Palette.body)
               .lineLimit(1)
@@ -851,11 +881,11 @@ private struct SettingsContent: View {
 
           HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-              Text("Snap to board")
+              Text("Snap to board".localizedUI)
                 .font(.callout.weight(.medium))
                 .foregroundStyle(Theme.Palette.body)
                 .lineLimit(1)
-              Text("Capture a screen region — read on-device into an agent-ready card.")
+              Text("Capture a screen region - read on-device into an agent-ready card.".localizedUI)
                 .font(.caption)
                 .foregroundStyle(Theme.Palette.menuDesc)
                 .lineLimit(1)
@@ -870,7 +900,7 @@ private struct SettingsContent: View {
       }
 
       VStack(alignment: .leading, spacing: 8) {
-        Text("ON THE BOARD").sectionLabel()
+        Text("ON THE BOARD".localizedUI).sectionLabel()
         VStack(spacing: 0) {
           ForEach(Array(shortcuts.enumerated()), id: \.element.0) { index, pair in
             if index > 0 { rowDivider }
@@ -909,7 +939,7 @@ private struct SettingsContent: View {
     let available = updater.availableUpdateVersion
     return VStack(alignment: .leading, spacing: 22) {
       VStack(alignment: .leading, spacing: 8) {
-        Text("UPDATES").sectionLabel()
+        Text("UPDATES".localizedUI).sectionLabel()
         VStack(spacing: 0) {
           // Identity + manual check — the version readout in the mono "instrument" voice the rails
           // use. When a scheduled check has an update waiting, the row flips to the accent signal
@@ -918,18 +948,18 @@ private struct SettingsContent: View {
             VStack(alignment: .leading, spacing: 4) {
               Text("BonsAI").font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
               if let available {
-                Text("Version \(version)  →  \(available) available")
+                Text("Version %@ -> %@ available".localizedUI(version, available))
                   .font(.system(size: 10.5).monospaced())
                   .foregroundStyle(Theme.Palette.accent)
               } else {
-                Text("Version \(version)")
+                Text("Version %@".localizedUI(version))
                   .font(.system(size: 10.5).monospaced())
                   .foregroundStyle(Theme.Palette.menuDesc)
               }
             }
             Spacer(minLength: 8)
             Button(action: { updater.checkForUpdates() }) {
-              Label(available == nil ? "Check for Updates" : "Install Update",
+              Label(available == nil ? "Check for Updates".localizedUI : "Install Update".localizedUI,
                     systemImage: available == nil ? "arrow.triangle.2.circlepath" : "arrow.down.circle")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(available == nil ? Theme.Palette.body : Theme.Palette.accent)
@@ -938,8 +968,8 @@ private struct SettingsContent: View {
             }
             .buttonStyle(SettingsPillButtonStyle())
             .help(available == nil
-                  ? "Check GitHub for a newer BonsAI now"
-                  : "Install BonsAI \(available ?? "")")
+                  ? "Check GitHub for a newer BonsAI now".localizedUI
+                  : "Install BonsAI %@".localizedUI(available ?? ""))
           }
           .padding(.vertical, 12)
 
@@ -948,8 +978,8 @@ private struct SettingsContent: View {
           // Automatic-check toggle, bound straight to Sparkle's scheduled-update preference.
           HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-              Text("Check automatically").font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
-              Text("Look for updates daily in the background")
+              Text("Check automatically".localizedUI).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
+              Text("Look for updates daily in the background".localizedUI)
                 .font(.caption2).foregroundStyle(Theme.Palette.menuDesc)
             }
             Spacer(minLength: 8)
@@ -968,8 +998,8 @@ private struct SettingsContent: View {
           // install on quit/relaunch. Meaningless without scheduled checks, so it dims with them.
           HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-              Text("Install automatically").font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
-              Text("Download updates in the background and install on relaunch")
+              Text("Install automatically".localizedUI).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
+              Text("Download updates in the background and install on relaunch".localizedUI)
                 .font(.caption2).foregroundStyle(Theme.Palette.menuDesc)
             }
             Spacer(minLength: 8)
@@ -1011,20 +1041,20 @@ private struct ConnectorTokenField: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 7) {
       HStack(spacing: 8) {
-        SecureField(connected ? "Replace token…" : label, text: $draft)
+        SecureField(connected ? "Replace token...".localizedUI : label.localizedUI, text: $draft)
           .textFieldStyle(.plain)
           .font(.caption)
           .foregroundStyle(Theme.Palette.body)
           .padding(.horizontal, 9).padding(.vertical, 6)
           .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.segmentedFill))
           .onSubmit(save)
-        Button("Save", action: save)
+        Button("Save".localizedUI, action: save)
           .buttonStyle(.plain)
           .font(.caption.weight(.semibold))
           .foregroundStyle(draft.trimmed.isEmpty ? Theme.Palette.menuDesc : Theme.Palette.accent)
           .disabled(draft.trimmed.isEmpty)
         if connected {
-          Button("Clear", action: clear)
+          Button("Clear".localizedUI, action: clear)
             .buttonStyle(.plain)
             .font(.caption)
             .foregroundStyle(Theme.Palette.menuDesc)
@@ -1034,12 +1064,12 @@ private struct ConnectorTokenField: View {
         Circle()
           .fill(connected ? Color.green.opacity(0.9) : Theme.Palette.menuDesc.opacity(0.5))
           .frame(width: 6, height: 6)
-        Text(connected ? "Connected" : hint)
+        Text(connected ? "Connected".localizedUI : hint.localizedUI)
           .font(.caption2)
           .foregroundStyle(Theme.Palette.menuDesc)
         if let createURL, let url = URL(string: createURL) {
           Spacer(minLength: 8)
-          Link("Get a token ↗", destination: url)
+          Link("Get a token".localizedUI, destination: url)
             .font(.caption2.weight(.medium))
             .foregroundStyle(Theme.Palette.accent)
         }
@@ -1101,7 +1131,7 @@ private struct ThemePreviewCard: View {
         .frame(height: 82)
 
         HStack(spacing: 6) {
-          Text(theme.title)
+          Text(theme.title.localizedUI)
             .font(.caption.weight(.medium))
             .foregroundStyle(Theme.Palette.body)
             .lineLimit(1)
@@ -1128,7 +1158,7 @@ private struct ThemePreviewCard: View {
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
-    .help(theme.title)
+    .help(theme.title.localizedUI)
     .animation(.easeOut(duration: 0.12), value: hovering)
     .animation(.easeOut(duration: 0.12), value: selected)
   }
@@ -1155,7 +1185,7 @@ private struct FontPreviewCard: View {
         .frame(height: 82)
 
         HStack(spacing: 6) {
-          Text(family.title)
+          Text(family.title.localizedUI)
             .font(WindowChrome.labelFont)
             .foregroundStyle(Theme.Palette.body)
             .lineLimit(1)
@@ -1182,7 +1212,7 @@ private struct FontPreviewCard: View {
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
-    .help(family.title)
+    .help(family.title.localizedUI)
     .animation(.easeOut(duration: 0.12), value: hovering)
     .animation(.easeOut(duration: 0.12), value: selected)
   }

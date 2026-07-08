@@ -15,7 +15,7 @@ struct NotionService {
 
   func search(_ query: String) async throws -> [AppSearchResult] {
     guard let token = ConnectorSecretStore.token(for: "@notion") else {
-      throw AppSearchError.message("Add a Notion integration token in Settings → Connectors → Notion.")
+      throw AppSearchError.message("Add a Notion integration token in Settings > Connectors > Notion.".localizedUI)
     }
     let body: [String: Any] = [
       "query": query.trimmed,
@@ -29,8 +29,8 @@ struct NotionService {
       let title = Self.titleText(from: page)
       return AppSearchResult(
         id: id,
-        title: title.isEmpty ? "Untitled" : title,
-        subtitle: (page["url"] as? String) ?? "Notion page",
+        title: title.isEmpty ? "Untitled".localizedUI : title,
+        subtitle: (page["url"] as? String) ?? "Notion page".localizedUI,
         selection: .notion(NotionReference(id: id, title: title)))
     }
   }
@@ -38,7 +38,7 @@ struct NotionService {
   func render(_ reference: NotionReference) async throws -> String {
     let header = "## Notion — \(reference.title.isEmpty ? "page" : reference.title)"
     guard let token = ConnectorSecretStore.token(for: "@notion") else {
-      throw AppSearchError.message("Add a Notion integration token in Settings → Connectors → Notion.")
+      throw AppSearchError.message("Add a Notion integration token in Settings > Connectors > Notion.".localizedUI)
     }
     let json = try await request("GET", "/blocks/\(reference.id)/children?page_size=100", token: token, body: nil)
     let blocks = json["results"] as? [[String: Any]] ?? []
@@ -101,23 +101,23 @@ struct NotionService {
     if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
 
     let (data, response) = try await URLSession.shared.data(for: request)
-    guard let http = response as? HTTPURLResponse else { throw AppSearchError.message("No response from Notion.") }
+    guard let http = response as? HTTPURLResponse else { throw AppSearchError.message("No response from Notion.".localizedUI) }
     guard (200..<300).contains(http.statusCode) else {
       if http.statusCode == 401 {
-        throw AppSearchError.message("Notion rejected the token (401). Check Settings → Connectors → Notion.")
+        throw AppSearchError.message("Notion rejected the token (401). Check Settings > Connectors > Notion.".localizedUI)
       }
       let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
-      throw AppSearchError.message(message.map { "Notion: \($0)" } ?? "Notion returned HTTP \(http.statusCode) and did not provide an error message.")
+      throw AppSearchError.message(message.map { "Notion: %@".localizedUI($0) } ?? "Notion returned HTTP %d and did not provide an error message.".localizedUI(http.statusCode))
     }
     do {
       guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        throw AppSearchError.message("Notion returned JSON in an unexpected shape.")
+        throw AppSearchError.message("Notion returned JSON in an unexpected shape.".localizedUI)
       }
       return json
     } catch let error as AppSearchError {
       throw error
     } catch {
-      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Notion’s response"))
+      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Notion's response".localizedUI))
     }
   }
 }

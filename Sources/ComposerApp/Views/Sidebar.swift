@@ -49,7 +49,7 @@ struct SidebarAgentButton: View {
 
   var body: some View {
     Button(action: action) {
-      Text("AI Agent")
+      Text("AI Agent".localizedUI)
         .font(WindowChrome.labelFont)
         .foregroundStyle(Theme.Palette.body)
         .lineLimit(1)
@@ -59,6 +59,6 @@ struct SidebarAgentButton: View {
     }
     .buttonStyle(.plain)
     .onHover { if $0 { Haptics.hover() } }
-    .help("Chat with the agent on this board  ⌘J")
+    .help("Chat with the agent on this board  ⌘J".localizedUI)
   }
 }

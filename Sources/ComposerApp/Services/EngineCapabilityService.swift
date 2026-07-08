@@ -17,8 +17,8 @@ enum RuntimeAvailability: Equatable, Sendable, Codable {
 
   var statusLabel: String {
     switch self {
-    case .checking: "Checking…"
-    case let .available(_, version): version ?? "Ready"
+    case .checking: "Checking...".localizedUI
+    case let .available(_, version): version ?? "Ready".localizedUI
     case let .unavailable(reason): reason
     }
   }
@@ -56,13 +56,13 @@ enum CommandLineToolLocator {
 
   static func detect(_ engine: HeadlessEngine) async -> RuntimeAvailability {
     guard let executable = executableURL(for: engine) else {
-      return .unavailable("Not installed")
+      return .unavailable("Not installed".localizedUI)
     }
     let result: Shell.Result
     do {
       result = try await Shell.run([executable.path, "--version"])
     } catch {
-      return .unavailable(UserFacingError.message(for: error, while: "Starting \(engine.title)"))
+      return .unavailable(UserFacingError.message(for: error, while: "Starting %@".localizedUI(engine.title)))
     }
     guard result.status == 0 else {
       return .unavailable(UserFacingError.commandFailure(command: engine.title, result: result))
@@ -161,7 +161,7 @@ final class EngineCapabilityStore: ObservableObject {
     do {
       snapshot = try JSONDecoder().decode(Snapshot.self, from: data)
     } catch {
-      UserFacingError.report(error, while: "Reading Composer’s saved runtime status")
+      UserFacingError.report(error, while: "Reading Composer's saved runtime status".localizedUI)
       return false
     }
     let restored = snapshot.cli.reduce(into: [HeadlessEngine: RuntimeAvailability]()) { result, pair in
@@ -183,29 +183,29 @@ final class EngineCapabilityStore: ObservableObject {
       let data = try JSONEncoder().encode(snapshot)
       UserDefaults.standard.set(data, forKey: Self.snapshotKey)
     } catch {
-      UserFacingError.report(error, while: "Saving Composer’s runtime status")
+      UserFacingError.report(error, while: "Saving Composer's runtime status".localizedUI)
     }
   }
 
   private func appleIntelligenceAvailability() -> RuntimeAvailability {
     guard #available(macOS 26.0, *) else {
-      return .unavailable("Requires macOS 26")
+      return .unavailable("Requires macOS 26".localizedUI)
     }
     #if canImport(FoundationModels)
     switch SystemLanguageModel.default.availability {
     case .available:
-      return .available(path: "On-device", version: nil)
+      return .available(path: "On-device".localizedUI, version: nil)
     case .unavailable(.deviceNotEligible):
-      return .unavailable("This Mac isn’t eligible")
+      return .unavailable("This Mac isn't eligible".localizedUI)
     case .unavailable(.appleIntelligenceNotEnabled):
-      return .unavailable("Turn on Apple Intelligence")
+      return .unavailable("Turn on Apple Intelligence".localizedUI)
     case .unavailable(.modelNotReady):
-      return .unavailable("Model is still preparing")
+      return .unavailable("Model is still preparing".localizedUI)
     @unknown default:
-      return .unavailable("macOS reported an unrecognized Apple Intelligence availability state")
+      return .unavailable("macOS reported an unrecognized Apple Intelligence availability state".localizedUI)
     }
     #else
-    return .unavailable("Not included in this build")
+    return .unavailable("Not included in this build".localizedUI)
     #endif
   }
 }

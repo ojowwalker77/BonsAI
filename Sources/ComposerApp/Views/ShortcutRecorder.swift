@@ -14,7 +14,7 @@ struct ShortcutRecorder: View {
   var body: some View {
     HStack(spacing: 8) {
       Button(action: toggle) {
-        Text(recording ? "Type a shortcut…" : shortcut.displayString)
+        Text(recording ? "Type a shortcut...".localizedUI : shortcut.displayString)
           .font(.system(size: 11, weight: .medium))
           .foregroundStyle(recording ? Theme.Palette.accent : .secondary)
           .padding(.horizontal, 8).padding(.vertical, 3)
@@ -31,7 +31,7 @@ struct ShortcutRecorder: View {
       .buttonStyle(.plain)
 
       if shortcut != defaultValue {
-        Button("Reset") { shortcut = defaultValue }
+        Button("Reset".localizedUI) { shortcut = defaultValue }
           .buttonStyle(.plain)
           .font(.system(size: 11))
           .foregroundStyle(.tertiary)

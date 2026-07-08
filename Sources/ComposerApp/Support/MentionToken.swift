@@ -18,8 +18,8 @@ enum ConnectorCategory: String, CaseIterable {
 
   var title: String {
     switch self {
-    case .local: "On this Mac"
-    case .service: "Services"
+    case .local: "On this Mac".localizedUI
+    case .service: "Services".localizedUI
     }
   }
 }
@@ -38,21 +38,21 @@ struct MentionItem: Identifiable, Hashable {
 enum MentionCatalog {
   static let all: [MentionItem] = [
     // On this Mac — local context, no account
-    .init(id: "@finder", title: "finder", label: "Finder", subtitle: "Local file or folder", symbol: "folder", kind: .app),
-    .init(id: "@browser", title: "browser", label: "Browser", subtitle: "Open Safari or Chromium tab", symbol: "safari", kind: .app),
-    .init(id: "@xcode", title: "xcode", label: "Xcode", subtitle: "Build errors & test failures", symbol: "hammer", kind: .app),
+    .init(id: "@finder", title: "finder", label: "Finder", subtitle: "Local file or folder".localizedUI, symbol: "folder", kind: .app),
+    .init(id: "@browser", title: "browser", label: "Browser".localizedUI, subtitle: "Open Safari or Chromium tab".localizedUI, symbol: "safari", kind: .app),
+    .init(id: "@xcode", title: "xcode", label: "Xcode", subtitle: "Build errors & test failures".localizedUI, symbol: "hammer", kind: .app),
     // Services — external tools and APIs
-    .init(id: "@github", title: "github", label: "GitHub", subtitle: "Issue or PR URL", symbol: "chevron.left.forwardslash.chevron.right", kind: .app),
-    .init(id: "@context7", title: "context7", label: "Context7", subtitle: "Live library docs", symbol: "books.vertical", kind: .app),
-    .init(id: "@linear", title: "linear", label: "Linear", subtitle: "Issue context", symbol: "checklist", kind: .app),
-    .init(id: "@notion", title: "notion", label: "Notion", subtitle: "Pages, specs, docs", symbol: "doc.text", kind: .app),
-    .init(id: "@sentry", title: "sentry", label: "Sentry", subtitle: "Issues & stack traces", symbol: "exclamationmark.triangle", kind: .app),
-    .init(id: "@figma", title: "figma", label: "Figma", subtitle: "Frame from a URL", symbol: "paintpalette", kind: .app),
+    .init(id: "@github", title: "github", label: "GitHub", subtitle: "Issue or PR URL".localizedUI, symbol: "chevron.left.forwardslash.chevron.right", kind: .app),
+    .init(id: "@context7", title: "context7", label: "Context7", subtitle: "Live library docs".localizedUI, symbol: "books.vertical", kind: .app),
+    .init(id: "@linear", title: "linear", label: "Linear", subtitle: "Issue context".localizedUI, symbol: "checklist", kind: .app),
+    .init(id: "@notion", title: "notion", label: "Notion", subtitle: "Pages, specs, docs".localizedUI, symbol: "doc.text", kind: .app),
+    .init(id: "@sentry", title: "sentry", label: "Sentry", subtitle: "Issues & stack traces".localizedUI, symbol: "exclamationmark.triangle", kind: .app),
+    .init(id: "@figma", title: "figma", label: "Figma", subtitle: "Frame from a URL".localizedUI, symbol: "paintpalette", kind: .app),
     // Skills + clipboard
-    .init(id: "@build-macos-apps", title: "build-macos-apps", label: "build-macos-apps", subtitle: "Native macOS skill", symbol: "macwindow", kind: .skill),
-    .init(id: "@build-ios-apps", title: "build-ios-apps", label: "build-ios-apps", subtitle: "SwiftUI iOS skill", symbol: "iphone", kind: .skill),
-    .init(id: "@frontend-design", title: "frontend-design", label: "frontend-design", subtitle: "Polished web UI skill", symbol: "paintbrush", kind: .skill),
-    .init(id: "@clipboard", title: "clipboard", label: "Clipboard", subtitle: "Paste current clipboard", symbol: "doc.on.clipboard", kind: .clipboard),
+    .init(id: "@build-macos-apps", title: "build-macos-apps", label: "build-macos-apps", subtitle: "Native macOS skill".localizedUI, symbol: "macwindow", kind: .skill),
+    .init(id: "@build-ios-apps", title: "build-ios-apps", label: "build-ios-apps", subtitle: "SwiftUI iOS skill".localizedUI, symbol: "iphone", kind: .skill),
+    .init(id: "@frontend-design", title: "frontend-design", label: "frontend-design", subtitle: "Polished web UI skill".localizedUI, symbol: "paintbrush", kind: .skill),
+    .init(id: "@clipboard", title: "clipboard", label: "Clipboard".localizedUI, subtitle: "Paste current clipboard".localizedUI, symbol: "doc.on.clipboard", kind: .clipboard),
   ]
 
   /// External connector apps, in display order.

@@ -176,8 +176,8 @@ final class ScreenCaptureService {
       return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     } catch {
       UserFacingError.report(
-        UserFacingError.message(for: error, while: "Capturing the screen") +
-        " If this keeps failing, grant Screen Recording to BonsAI in System Settings ▸ Privacy & Security.")
+        UserFacingError.message(for: error, while: "Capturing the screen".localizedUI) +
+        " " + "If this keeps failing, grant Screen Recording to BonsAI in System Settings > Privacy & Security.".localizedUI)
       return nil
     }
   }
@@ -516,7 +516,7 @@ private final class CaptureOverlayView: NSView, NSTextFieldDelegate {
     field.textColor = useColor
     field.font = .systemFont(ofSize: 17, weight: .semibold)
     field.focusRingType = .none
-    field.placeholderString = "Type…"
+    field.placeholderString = "Type…".localizedUI
     field.stringValue = initial
     field.delegate = self
     field.cell?.wraps = false
@@ -677,7 +677,7 @@ private final class AnnotationToolbar: NSView {
 
   private func sendButton() -> NSButton {
     let button = NSButton()
-    button.title = "Send ⏎"
+    button.title = "Send ⏎".localizedUI
     button.bezelStyle = .rounded
     button.controlSize = .small
     button.target = self

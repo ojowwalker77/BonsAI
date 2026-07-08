@@ -10,10 +10,10 @@ struct SentryService {
 
   func search(_ query: String) async throws -> [AppSearchResult] {
     guard let token = ConnectorSecretStore.token(for: "@sentry") else {
-      throw AppSearchError.message("Add a Sentry auth token in Settings → Connectors → Sentry.")
+      throw AppSearchError.message("Add a Sentry auth token in Settings > Connectors > Sentry.".localizedUI)
     }
     guard let org = try await firstOrg(token: token) else {
-      throw AppSearchError.message("No Sentry organizations are visible to this token.")
+      throw AppSearchError.message("No Sentry organizations are visible to this token.".localizedUI)
     }
     var components = URLComponents(string: "\(base)/organizations/\(org)/issues/")!
     components.queryItems = [
@@ -35,7 +35,7 @@ struct SentryService {
 
   func render(_ reference: SentryReference) async throws -> String {
     guard let token = ConnectorSecretStore.token(for: "@sentry") else {
-      throw AppSearchError.message("Add a Sentry auth token in Settings → Connectors → Sentry.")
+      throw AppSearchError.message("Add a Sentry auth token in Settings > Connectors > Sentry.".localizedUI)
     }
     let issue: Issue = try await decode(URL(string: "\(base)/organizations/\(reference.org)/issues/\(reference.id)/")!, token: token)
     var lines = ["## Sentry — \(issue.shortId ?? reference.shortID)  \(issue.title)"]
@@ -59,7 +59,7 @@ struct SentryService {
       }
     } catch {
       lines.append("")
-      lines.append("Latest event unavailable: \(UserFacingError.message(for: error, while: "Loading the Sentry event"))")
+      lines.append("Latest event unavailable: %@".localizedUI(UserFacingError.message(for: error, while: "Loading the Sentry event".localizedUI)))
     }
     return lines.joined(separator: "\n")
   }
@@ -79,13 +79,13 @@ struct SentryService {
     let json: [String: Any]
     do {
       guard let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        throw AppSearchError.message("Sentry’s latest-event response was not a JSON object.")
+        throw AppSearchError.message("Sentry's latest-event response was not a JSON object.".localizedUI)
       }
       json = decoded
     } catch let error as AppSearchError {
       throw error
     } catch {
-      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Sentry’s latest event"))
+      throw AppSearchError.message(UserFacingError.message(for: error, while: "Decoding Sentry's latest event".localizedUI))
     }
     guard let entries = json["entries"] as? [[String: Any]],
           let exception = entries.first(where: { ($0["type"] as? String) == "exception" }),
@@ -126,12 +126,12 @@ struct SentryService {
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     request.timeoutInterval = 12
     let (data, response) = try await URLSession.shared.data(for: request)
-    guard let http = response as? HTTPURLResponse else { throw AppSearchError.message("No response from Sentry.") }
+    guard let http = response as? HTTPURLResponse else { throw AppSearchError.message("No response from Sentry.".localizedUI) }
     guard (200..<300).contains(http.statusCode) else {
       if http.statusCode == 401 || http.statusCode == 403 {
-        throw AppSearchError.message("Sentry rejected the token (\(http.statusCode)). Check Settings → Connectors → Sentry.")
+        throw AppSearchError.message("Sentry rejected the token (%d). Check Settings > Connectors > Sentry.".localizedUI(http.statusCode))
       }
-      throw AppSearchError.message("Sentry returned HTTP \(http.statusCode) and did not provide an error message.")
+      throw AppSearchError.message("Sentry returned HTTP %d and did not provide an error message.".localizedUI(http.statusCode))
     }
     return data
   }

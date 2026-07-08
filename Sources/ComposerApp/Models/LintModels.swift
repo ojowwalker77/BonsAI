@@ -20,11 +20,11 @@ enum LintKind: String, Equatable, CaseIterable, Sendable {
 
   var label: String {
     switch self {
-    case .unresolvedReference: "Ambiguous reference"
-    case .unspecifiedDimension: "Unspecified dimension"
-    case .vague: "Vague — no success criterion"
-    case .conflicting: "Possible contradiction"
-    case .missingContext: "Missing context"
+    case .unresolvedReference: "Ambiguous reference".localizedUI
+    case .unspecifiedDimension: "Unspecified dimension".localizedUI
+    case .vague: "Vague — no success criterion".localizedUI
+    case .conflicting: "Possible contradiction".localizedUI
+    case .missingContext: "Missing context".localizedUI
     }
   }
 

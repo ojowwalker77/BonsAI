@@ -77,7 +77,7 @@ struct FinderService {
     }
     let score = baseScore + pathScoreAdjustment(for: path)
 
-    let kind = isDirectory.boolValue ? "Folder" : "File"
+    let kind = isDirectory.boolValue ? "Folder".localizedUI : "File".localizedUI
     let subtitle = [kind, abbreviatedPath(resultPath), lightMetadata(for: url)].filter { !$0.isEmpty }.joined(separator: " · ")
     return SearchHit(
       score: score,
@@ -257,7 +257,7 @@ struct FinderService {
     var bits: [String] = []
     if values.isDirectory != true, let size = values.fileSize { bits.append(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)) }
     if let modified = values.contentModificationDate {
-      bits.append("modified " + DateFormatter.localizedString(from: modified, dateStyle: .medium, timeStyle: .short))
+      bits.append("modified %@".localizedUI(DateFormatter.localizedString(from: modified, dateStyle: .medium, timeStyle: .short)))
     }
     return bits.joined(separator: " · ")
   }
@@ -374,20 +374,20 @@ struct FinderService {
     do {
       handle = try FileHandle(forReadingFrom: url)
     } catch {
-      return .unavailable(UserFacingError.message(for: error, while: "Opening \(url.path)"))
+      return .unavailable(UserFacingError.message(for: error, while: "Opening %@".localizedUI(url.path)))
     }
     defer { try? handle.close() }
     let data: Data
     do {
       data = try handle.read(upToCount: maxFileBytes + 1) ?? Data()
     } catch {
-      return .unavailable(UserFacingError.message(for: error, while: "Reading \(url.path)"))
+      return .unavailable(UserFacingError.message(for: error, while: "Reading %@".localizedUI(url.path)))
     }
     guard !data.isEmpty else { return .text(("", false)) }
     let truncatedByBytes = data.count > maxFileBytes
     let prefix = Data(data.prefix(maxFileBytes))
     if prefix.prefix(4096).contains(0) {
-      return .unavailable("The file contains binary data, which Composer does not copy as text.")
+      return .unavailable("The file contains binary data, which Composer does not copy as text.".localizedUI)
     }
 
     let decoded = String(data: prefix, encoding: .utf8)

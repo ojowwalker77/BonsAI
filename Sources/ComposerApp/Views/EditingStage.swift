@@ -78,7 +78,7 @@ struct EditingStage: View {
         .foregroundStyle(Theme.Palette.menuDesc)
       Spacer(minLength: 8)
       SidebarButton(symbol: "arrow.down.right.and.arrow.up.left",
-                    help: "Back to board  ·  Esc", side: 26) { scrimTap() }
+                    help: "Back to board  ·  Esc".localizedUI, side: 26) { scrimTap() }
     }
     .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 6)
   }
@@ -107,11 +107,11 @@ struct EditingStage: View {
 
   private var textStage: some View {
     VStack(spacing: 0) {
-      header("Write")
+      header("Write".localizedUI)
       FreeWriteEditor(
         text: Binding(get: { interaction.text }, set: { interaction.text = $0 }),
         initialAttributedText: interaction.attributedSnapshot,
-        placeholder: "Brain dump\u{2026}",
+        placeholder: "Brain dump...".localizedUI,
         onCountChange: { interaction.count = $0 },
         onSelectionChange: { interaction.selection = $0 },
         onEscape: { onClose() },
@@ -142,7 +142,7 @@ struct EditingStage: View {
   /// parse). Return / scrim-tap commits; Esc reverts to the committed LaTeX and prunes a blank card.
   private var equationStage: some View {
     VStack(spacing: 0) {
-      header("Equation")
+      header("Equation".localizedUI)
       VStack(spacing: 14) {
         EquationView(latex: equationDraft, tint: tint, zoom: 1)
           .frame(minHeight: 120)
@@ -190,7 +190,7 @@ struct EditingStage: View {
   /// fields. "Apply" commits via `setGraphSpec`; Esc closes without applying.
   private var graphStage: some View {
     VStack(spacing: 0) {
-      header("Graph")
+      header("Graph".localizedUI)
       graphEditorBody(converting: false, onCommit: {
         board.setGraphSpec(card.id, graphDraft.spec())
         board.endEditing(card.id)
@@ -227,7 +227,7 @@ struct EditingStage: View {
     Group {
       if showingGraphConfig {
         VStack(spacing: 0) {
-          header("Graph")
+          header("Graph".localizedUI)
           graphEditorBody(converting: true, onCommit: {
             board.convertElementToGraph(card.id, spec: graphDraft.spec())
             board.endEditing(card.id)
@@ -239,9 +239,9 @@ struct EditingStage: View {
         .frame(width: 560)
       } else {
         VStack(spacing: 0) {
-          header("Label")
+          header("Label".localizedUI)
           HStack(spacing: 8) {
-            TextField("Label", text: $labelDraft)
+            TextField("Label".localizedUI, text: $labelDraft)
               .textFieldStyle(.plain)
               .font(ComposerPreferences.appSwiftUIFont(size: 15, weight: .medium))
               .foregroundStyle(tint ?? Theme.Palette.body)
@@ -264,7 +264,7 @@ struct EditingStage: View {
               .buttonStyle(.plain)
               .background(labelFieldSurface)
               .onHover { if $0 { Haptics.hover() } }
-              .help("Make graph")
+              .help("Make graph".localizedUI)
             }
           }
           .padding(.horizontal, 20)
@@ -493,22 +493,22 @@ struct GraphConfigStrip: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       axisRow(axis: "X",
-              label: $draft.xLabel, labelPlaceholder: "x label",
+              label: $draft.xLabel, labelPlaceholder: "x label".localizedUI,
               unit: $draft.xUnit, minText: $draft.xMinText, maxText: $draft.xMaxText,
               focusFirst: true)
       axisRow(axis: "Y",
-              label: $draft.yLabel, labelPlaceholder: "y label",
+              label: $draft.yLabel, labelPlaceholder: "y label".localizedUI,
               unit: $draft.yUnit, minText: $draft.yMinText, maxText: $draft.yMaxText,
               focusFirst: false)
       pointsSection
       HStack(spacing: 8) {
         Toggle(isOn: $draft.showGrid) {
-          Text("Grid").font(labelFont).foregroundStyle(Theme.Palette.body)
+          Text("Grid".localizedUI).font(labelFont).foregroundStyle(Theme.Palette.body)
         }
         .toggleStyle(.checkbox)
         Spacer()
         Button(action: onCommit) {
-          Text(converting ? "Make Graph" : "Apply")
+          Text(converting ? "Make Graph".localizedUI : "Apply".localizedUI)
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(Theme.Palette.accent)
             .padding(.horizontal, 12)
@@ -540,7 +540,7 @@ struct GraphConfigStrip: View {
         .frame(width: 12, alignment: .leading)
       field(labelPlaceholder, text: label, focusFirst: focusFirst)
         .frame(maxWidth: .infinity)
-      field("unit", text: unit).frame(width: 48)
+      field("unit".localizedUI, text: unit).frame(width: 48)
       field("0", text: minText).frame(width: 52)
       field("10", text: maxText).frame(width: 52)
     }
@@ -556,7 +556,7 @@ struct GraphConfigStrip: View {
   private var pointsSection: some View {
     if !draft.pointRows.isEmpty {
       VStack(alignment: .leading, spacing: 5) {
-        Text("Points")
+        Text("Points".localizedUI)
           .font(.system(size: 11, weight: .semibold))
           .foregroundStyle(Theme.Palette.placeholder)
         let rows = VStack(spacing: Self.pointRowSpacing) {
@@ -586,8 +586,8 @@ struct GraphConfigStrip: View {
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .help(row.wrappedValue.tint == nil ? "Series default" : "Theme color \((row.wrappedValue.tint ?? 0) + 1)")
-      field("label", text: row.label).frame(width: 60)
+      .help(row.wrappedValue.tint == nil ? "Series default".localizedUI : "Theme color %d".localizedUI((row.wrappedValue.tint ?? 0) + 1))
+      field("label".localizedUI, text: row.label).frame(width: 60)
       field("0", text: row.xText).frame(width: 52)
       field("0", text: row.yText).frame(width: 52)
       Spacer(minLength: 0)
@@ -599,7 +599,7 @@ struct GraphConfigStrip: View {
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .help("Delete point")
+      .help("Delete point".localizedUI)
     }
     .frame(height: Self.pointRowHeight)
   }

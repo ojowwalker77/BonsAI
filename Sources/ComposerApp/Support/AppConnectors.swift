@@ -36,9 +36,9 @@ extension ComposerAppConnector {
   var supportsGitHubKindToggle: Bool { false }
   var auth: ConnectorAuth { .none }
 
-  func placeholder(context: AppSearchContext) -> String { "Search…" }
-  func idleMessage(context: AppSearchContext) -> String { "Type to search." }
-  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No results." }
+  func placeholder(context: AppSearchContext) -> String { "Search…".localizedUI }
+  func idleMessage(context: AppSearchContext) -> String { "Type to search.".localizedUI }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No results.".localizedUI }
 }
 
 enum AppConnectorRegistry {
@@ -66,9 +66,9 @@ private struct Context7AppConnector: ComposerAppConnector {
   let minimumQueryLength = 2
   private let service = Context7Service()
 
-  func placeholder(context: AppSearchContext) -> String { "Search libraries…" }
-  func idleMessage(context: AppSearchContext) -> String { "Type to search libraries." }
-  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No libraries found." }
+  func placeholder(context: AppSearchContext) -> String { "Search libraries…".localizedUI }
+  func idleMessage(context: AppSearchContext) -> String { "Type to search libraries.".localizedUI }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No libraries found.".localizedUI }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
     try await service.search(query)
@@ -100,15 +100,15 @@ private struct GitHubAppConnector: ComposerAppConnector {
   private let service = GitHubService()
 
   func placeholder(context: AppSearchContext) -> String {
-    "Search \(context.githubKind.shortLabel.lowercased())…"
+    "Search %@…".localizedUI(context.githubKind.shortLabel.lowercased())
   }
 
   func idleMessage(context: AppSearchContext) -> String {
-    "Type to search your \(context.githubKind.shortLabel.lowercased())."
+    "Type to search your %@.".localizedUI(context.githubKind.shortLabel.lowercased())
   }
 
   func noResultsMessage(query: String, context: AppSearchContext) -> String {
-    "No \(context.githubKind.shortLabel.lowercased()) found."
+    "No %@ found.".localizedUI(context.githubKind.shortLabel.lowercased())
   }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
@@ -139,9 +139,9 @@ private struct FinderAppConnector: ComposerAppConnector {
   let minimumQueryLength = 2
   private let service = FinderService()
 
-  func placeholder(context: AppSearchContext) -> String { "Search files & folders…" }
-  func idleMessage(context: AppSearchContext) -> String { "Type to find files and folders." }
-  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No matching files or folders." }
+  func placeholder(context: AppSearchContext) -> String { "Search files & folders…".localizedUI }
+  func idleMessage(context: AppSearchContext) -> String { "Type to find files and folders.".localizedUI }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No matching files or folders.".localizedUI }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
     try await service.search(query)
@@ -166,10 +166,10 @@ private struct BrowserAppConnector: ComposerAppConnector {
   let minimumQueryLength = 0
   private let service = BrowserService()
 
-  func placeholder(context: AppSearchContext) -> String { "Filter open tabs…" }
-  func idleMessage(context: AppSearchContext) -> String { "Pick an open browser tab, or type to filter." }
+  func placeholder(context: AppSearchContext) -> String { "Filter open tabs…".localizedUI }
+  func idleMessage(context: AppSearchContext) -> String { "Pick an open browser tab, or type to filter.".localizedUI }
   func noResultsMessage(query: String, context: AppSearchContext) -> String {
-    query.trimmed.isEmpty ? "No open browser tabs found." : "No matching tabs."
+    query.trimmed.isEmpty ? "No open browser tabs found.".localizedUI : "No matching tabs.".localizedUI
   }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
@@ -194,15 +194,15 @@ private struct LinearAppConnector: ComposerAppConnector {
   let id = "@linear"
   let minimumQueryLength = 2
   var auth: ConnectorAuth {
-    .apiToken(label: "API Key",
-              hint: "Personal API key from Linear → Settings → API",
+    .apiToken(label: "API Key".localizedUI,
+              hint: "Personal API key from Linear → Settings → API".localizedUI,
               createURL: "https://linear.app/settings/api")
   }
   private let service = LinearService()
 
-  func placeholder(context: AppSearchContext) -> String { "Search issues, or paste an ID like ENG-123…" }
-  func idleMessage(context: AppSearchContext) -> String { "Type to search your issues." }
-  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No matching issues." }
+  func placeholder(context: AppSearchContext) -> String { "Search issues, or paste an ID like ENG-123…".localizedUI }
+  func idleMessage(context: AppSearchContext) -> String { "Type to search your issues.".localizedUI }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No matching issues.".localizedUI }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
     try await service.search(query)
@@ -226,16 +226,16 @@ private struct NotionAppConnector: ComposerAppConnector {
   let id = "@notion"
   let minimumQueryLength = 2
   var auth: ConnectorAuth {
-    .apiToken(label: "Integration Token",
-              hint: "Internal integration token from notion.so/my-integrations (share pages with it)",
+    .apiToken(label: "Integration Token".localizedUI,
+              hint: "Internal integration token from notion.so/my-integrations (share pages with it)".localizedUI,
               createURL: "https://www.notion.so/my-integrations")
   }
   private let service = NotionService()
 
-  func placeholder(context: AppSearchContext) -> String { "Search pages…" }
-  func idleMessage(context: AppSearchContext) -> String { "Type to search your pages." }
+  func placeholder(context: AppSearchContext) -> String { "Search pages…".localizedUI }
+  func idleMessage(context: AppSearchContext) -> String { "Type to search your pages.".localizedUI }
   func noResultsMessage(query: String, context: AppSearchContext) -> String {
-    "No matching pages — is it shared with your integration?"
+    "No matching pages — is it shared with your integration?".localizedUI
   }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
@@ -260,15 +260,15 @@ private struct SentryAppConnector: ComposerAppConnector {
   let id = "@sentry"
   let minimumQueryLength = 2
   var auth: ConnectorAuth {
-    .apiToken(label: "Auth Token",
-              hint: "Token from sentry.io/settings/account/api/auth-tokens (needs event:read)",
+    .apiToken(label: "Auth Token".localizedUI,
+              hint: "Token from sentry.io/settings/account/api/auth-tokens (needs event:read)".localizedUI,
               createURL: "https://sentry.io/settings/account/api/auth-tokens/")
   }
   private let service = SentryService()
 
-  func placeholder(context: AppSearchContext) -> String { "Search issues…" }
-  func idleMessage(context: AppSearchContext) -> String { "Type to search your issues." }
-  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No matching issues." }
+  func placeholder(context: AppSearchContext) -> String { "Search issues…".localizedUI }
+  func idleMessage(context: AppSearchContext) -> String { "Type to search your issues.".localizedUI }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String { "No matching issues.".localizedUI }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
     try await service.search(query)
@@ -292,15 +292,15 @@ private struct FigmaAppConnector: ComposerAppConnector {
   let id = "@figma"
   let minimumQueryLength = 8
   var auth: ConnectorAuth {
-    .apiToken(label: "Access Token",
-              hint: "Personal access token from figma.com → Settings → Security",
+    .apiToken(label: "Access Token".localizedUI,
+              hint: "Personal access token from figma.com → Settings → Security".localizedUI,
               createURL: "https://www.figma.com/settings")
   }
   private let service = FigmaService()
 
-  func placeholder(context: AppSearchContext) -> String { "Paste a Figma frame URL…" }
-  func idleMessage(context: AppSearchContext) -> String { "Paste a Figma file or frame URL to attach it." }
-  func noResultsMessage(query: String, context: AppSearchContext) -> String { "Not a Figma URL — copy a frame link from Figma." }
+  func placeholder(context: AppSearchContext) -> String { "Paste a Figma frame URL…".localizedUI }
+  func idleMessage(context: AppSearchContext) -> String { "Paste a Figma file or frame URL to attach it.".localizedUI }
+  func noResultsMessage(query: String, context: AppSearchContext) -> String { "Not a Figma URL — copy a frame link from Figma.".localizedUI }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {
     try await service.search(query)
@@ -325,10 +325,10 @@ private struct XcodeAppConnector: ComposerAppConnector {
   let minimumQueryLength = 0
   private let service = XcodeService()
 
-  func placeholder(context: AppSearchContext) -> String { "Filter results, or paste a .xcresult path…" }
-  func idleMessage(context: AppSearchContext) -> String { "Pick a recent build or test result." }
+  func placeholder(context: AppSearchContext) -> String { "Filter results, or paste a .xcresult path…".localizedUI }
+  func idleMessage(context: AppSearchContext) -> String { "Pick a recent build or test result.".localizedUI }
   func noResultsMessage(query: String, context: AppSearchContext) -> String {
-    "No .xcresult bundles found."
+    "No .xcresult bundles found.".localizedUI
   }
 
   func search(_ query: String, context: AppSearchContext) async throws -> [AppSearchResult] {

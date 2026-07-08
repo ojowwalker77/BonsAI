@@ -15,10 +15,10 @@ struct ComposerApp: App {
     .commands {
       // Sits directly under "About BonsAI" in the app menu — the standard home for this command.
       CommandGroup(after: .appInfo) {
-        Button("Check for Updates\u{2026}") { UpdaterController.shared.checkForUpdates() }
+        Button("Check for Updates...".localizedUI) { UpdaterController.shared.checkForUpdates() }
       }
       CommandGroup(replacing: .appSettings) {
-        Button("Settings\u{2026}") { appDelegate.showSettings() }
+        Button("Settings...".localizedUI) { appDelegate.showSettings() }
           .keyboardShortcut(",", modifiers: .command)
       }
     }

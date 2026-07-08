@@ -36,14 +36,14 @@ struct CompiledDraftOverlay: View {
   private var header: some View {
     HStack(spacing: 10) {
       Image(systemName: "wand.and.rays").foregroundStyle(Theme.Palette.accent)
-      Text("Compiled draft")
+      Text("Compiled draft".localizedUI)
         .font(.title2.weight(.semibold))
         .foregroundStyle(Theme.Palette.body)
       Spacer()
       Button(action: onCopy) {
         HStack(spacing: 6) {
           Image(systemName: "doc.on.doc")
-          Text("Copy")
+          Text("Copy".localizedUI)
         }
         .font(.body.weight(.medium))
         .foregroundStyle(Theme.Palette.accent)
@@ -53,7 +53,7 @@ struct CompiledDraftOverlay: View {
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .help("Copy to clipboard")
+      .help("Copy to clipboard".localizedUI)
       Button(action: onClose) {
         Image(systemName: "xmark")
           .font(.body.weight(.semibold))
@@ -63,7 +63,7 @@ struct CompiledDraftOverlay: View {
           .contentShape(Circle())
       }
       .buttonStyle(.plain)
-      .help("Close  Esc")
+      .help("Close  Esc".localizedUI)
     }
     .padding(.horizontal, 28)
     .padding(.top, 24)
