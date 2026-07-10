@@ -126,7 +126,9 @@ enum ComposerPreferences {
   static let maxEditorFontSize: CGFloat = 28
   static let fontSizeStep: CGFloat = 1
 
-  private static var defaultEditorFontSize: CGFloat {
+  /// Internal so the Settings stepper can seed its @AppStorage default with the same value the
+  /// clamped `editorFontSize` getter falls back to.
+  static var defaultEditorFontSize: CGFloat {
     NSFont.preferredFont(forTextStyle: .body).pointSize + 2
   }
 
@@ -223,22 +225,6 @@ enum ComposerPreferences {
     case .black: return .black
     default: return .regular
     }
-  }
-
-  @discardableResult
-  static func adjustEditorFontSize(by delta: CGFloat) -> CGFloat {
-    let next = clamp(editorFontSize + delta, minEditorFontSize, maxEditorFontSize)
-    UserDefaults.standard.set(Double(next), forKey: editorFontSizeKey)
-    NotificationCenter.default.post(name: .composerFontSizeChanged, object: nil, userInfo: ["size": next])
-    return next
-  }
-
-  @discardableResult
-  static func resetEditorFontSize() -> CGFloat {
-    UserDefaults.standard.removeObject(forKey: editorFontSizeKey)
-    let size = editorFontSize
-    NotificationCenter.default.post(name: .composerFontSizeChanged, object: nil, userInfo: ["size": size])
-    return size
   }
 
   static func clampedCanvasTransparency(_ value: Double) -> Double {

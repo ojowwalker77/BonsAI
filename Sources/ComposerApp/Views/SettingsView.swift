@@ -222,10 +222,12 @@ private struct SettingsContent: View {
   @AppStorage(ComposerPreferences.languageKey) private var languageRaw = AppLanguage.system.rawValue
   @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
   @AppStorage(ComposerPreferences.followSystemAppearanceKey) private var followSystemAppearance = false
-  /// Mirrors `ComposerPreferences.editorFontSize` for the text-size stepper — kept in @State (the
-  /// preference is a clamped computed value, not a raw default) and refreshed from the setter's
-  /// return so the readout always shows the clamped result.
-  @State private var editorFontSize = ComposerPreferences.editorFontSize
+  /// The raw text-size preference. Written directly by the stepper; the change notification is
+  /// posted from `.onChange` — AFTER the SwiftUI update transaction — because the observer
+  /// rebuilds the whole canvas, and doing that synchronously from inside a binding setter tears
+  /// down the very view committing the value (the stepper ate its own click).
+  @AppStorage(ComposerPreferences.editorFontSizeKey) private var editorFontSize
+    = Double(ComposerPreferences.defaultEditorFontSize)
   /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
   /// visibility. Refreshed in `onAppear`; flipped false the moment the user resets.
   @State private var agentHasGrants = false
@@ -694,11 +696,9 @@ private struct SettingsContent: View {
         Text("\(Int(editorFontSize)) pt")
           .font(.callout.monospacedDigit().weight(.semibold))
           .foregroundStyle(Theme.Palette.body)
-        Stepper("", value: Binding(
-          get: { editorFontSize },
-          set: { editorFontSize = ComposerPreferences.adjustEditorFontSize(by: $0 - editorFontSize) }
-        ), in: ComposerPreferences.minEditorFontSize...ComposerPreferences.maxEditorFontSize,
-          step: ComposerPreferences.fontSizeStep)
+        Stepper("", value: $editorFontSize,
+                in: Double(ComposerPreferences.minEditorFontSize)...Double(ComposerPreferences.maxEditorFontSize),
+                step: Double(ComposerPreferences.fontSizeStep))
           .labelsHidden()
       }
       .padding(14)
@@ -706,6 +706,9 @@ private struct SettingsContent: View {
     }
     .onChange(of: appFontRaw) { _, _ in
       NotificationCenter.default.post(name: .composerFontFamilyChanged, object: nil)
+    }
+    .onChange(of: editorFontSize) { _, _ in
+      NotificationCenter.default.post(name: .composerFontSizeChanged, object: nil)
     }
   }
 
