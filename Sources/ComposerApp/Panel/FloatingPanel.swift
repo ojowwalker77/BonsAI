@@ -3,8 +3,13 @@ import AppKit
 /// BonsAI's board window: a standard titled, resizable macOS window with a full-size content
 /// view. Every control floats over the solid canvas inside; the title bar is transparent and the
 /// traffic lights are re-laid onto the control row's centerline.
-final class FloatingPanel: NSPanel {
-  /// MANDATORY: panels return false by default in some configurations,
+///
+/// A real `NSWindow`, NOT an `NSPanel`: the panel superclass was a leftover from the deleted
+/// floating-panel mode, and panels get second-class full-screen treatment (transition delegate
+/// callbacks and the menu-bar traffic-light reveal misbehave). Everything panel-specific was
+/// already being switched off.
+final class FloatingPanel: NSWindow {
+  /// MANDATORY: full-size-content windows can decline key status in some configurations,
   /// so without this the text canvas never gets an insertion point.
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { true }
@@ -16,15 +21,12 @@ final class FloatingPanel: NSPanel {
       backing: .buffered,
       defer: false
     )
-    isFloatingPanel = false
-    becomesKeyOnlyIfNeeded = false
-    hidesOnDeactivate = false
     isReleasedWhenClosed = false
     level = .normal   // a normal Dock-app window, not always-on-top
     animationBehavior = .none
     // Themed at the window level so the adaptive palette resolves app-wide. The default theme is
     // dark — BonsAI's signature look — with System/Light as the user's opt-in (⚙︎ Appearance).
-    appearance = ComposerPreferences.theme.nsAppearance
+    appearance = ComposerPreferences.effectiveTheme.nsAppearance
 
     // A real window: the title-bar strip drags it, but the canvas (content view) must not —
     // it owns background drag for panning. Traffic lights float over a full-size content view.
@@ -33,6 +35,16 @@ final class FloatingPanel: NSPanel {
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
     title = "BonsAI"
+    // MANDATORY for the re-centered traffic lights: AppKit hit-tests and hover-tracks the
+    // buttons only INSIDE the titlebar container's bounds. The default container (32pt) ends
+    // above the control row's centerline — the moved lights rendered at y −13…+1 in container
+    // coords, so hover lit on a 1px sliver and clicks fell through to the board. An empty
+    // unified toolbar is the one PUBLIC lever that grows the container (to ~52pt) with AppKit
+    // doing the layout natively: no accessory wrapper to swallow clicks (a `.top` accessory's
+    // host blocks the buttons; `.left` accessories don't stretch the container at all). The
+    // transparent titlebar keeps it invisible.
+    toolbar = NSToolbar()
+    toolbarStyle = .unified
     collectionBehavior = [.fullScreenPrimary]
     // Non-opaque with a clear backing: the canvas paints its own surface — solid at the default
     // 0 transparency, receding over a behind-window blur as the Settings slider comes up.
@@ -60,6 +72,15 @@ final class FloatingPanel: NSPanel {
         : container.frame.height - rowCenterY - button.frame.height / 2
       button.setFrameOrigin(NSPoint(x: x, y: y))
       x += button.frame.width + 6
+    }
+    // The rollover highlight is driven by tracking areas the theme frame computed for the
+    // DEFAULT button positions — moving the buttons alone leaves the hover region at the old
+    // corner (hover lights up above the lights, clicks land on them). Ask every ancestor to
+    // rebuild its tracking areas from the frames we just set so hover and hit area coincide.
+    var ancestor: NSView? = container
+    while let view = ancestor {
+      view.updateTrackingAreas()
+      ancestor = view.superview
     }
   }
 
@@ -178,15 +199,20 @@ final class FloatingPanel: NSPanel {
       return true
     }
 
-    if ComposerPreferences.handleEditorFontKeyEquivalent(event) { return true }
-
-    if flags == [.command], raw == "-" {
-      NotificationCenter.default.post(name: .composerZoomOut, object: nil)
-      return true
-    }
-    if flags == [.command], raw == "=" || raw == "+" {
-      NotificationCenter.default.post(name: .composerZoomIn, object: nil)
-      return true
+    // ⌘+/⌘−/⌘0 zoom the canvas — the documented behavior. Shift is accepted because "+" IS ⇧= on
+    // most layouts, so "⌘+" arrives as [.command, .shift] + "=". (These keys used to fall through
+    // to the app-wide editor font size first, which read as "resizing one text box resizes all" —
+    // the global text size now lives in Settings ▸ Appearance, and per-box sizing is tracked
+    // separately.)
+    if flags == [.command] || flags == [.command, .shift] {
+      if raw == "-" || modifiedCharacters(event) == "_" {
+        NotificationCenter.default.post(name: .composerZoomOut, object: nil)
+        return true
+      }
+      if raw == "=" || raw == "+" || modifiedCharacters(event) == "+" {
+        NotificationCenter.default.post(name: .composerZoomIn, object: nil)
+        return true
+      }
     }
     if flags == [.command], raw == "0" {
       NotificationCenter.default.post(name: .composerZoomReset, object: nil)
@@ -199,6 +225,12 @@ final class FloatingPanel: NSPanel {
     }
 
     return super.performKeyEquivalent(with: event)
+  }
+
+  /// The event's characters WITH modifiers applied — how "⌘⇧=" reads as "⌘+" on layouts where
+  /// "+" lives on shifted "=".
+  private func modifiedCharacters(_ event: NSEvent) -> String? {
+    event.characters?.lowercased()
   }
 
   override func keyDown(with event: NSEvent) {

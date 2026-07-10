@@ -19,6 +19,11 @@ final class PanelController: NSObject, NSWindowDelegate {
     NotificationCenter.default.addObserver(
       forName: .composerFontFamilyChanged, object: nil, queue: .main
     ) { [weak self] _ in MainActor.assumeIsolated { self?.rebuildCanvas() } }
+    // The editor text size (Settings ▸ Appearance) feeds every static card's layout, so a change
+    // rebuilds the canvas the same way a font-family switch does. The live editor updates itself.
+    NotificationCenter.default.addObserver(
+      forName: .composerFontSizeChanged, object: nil, queue: .main
+    ) { [weak self] _ in MainActor.assumeIsolated { self?.rebuildCanvas() } }
     NotificationCenter.default.addObserver(
       forName: .composerLanguageChanged, object: nil, queue: .main
     ) { [weak self] _ in MainActor.assumeIsolated { self?.rebuildCanvas() } }
@@ -55,7 +60,12 @@ final class PanelController: NSObject, NSWindowDelegate {
   /// scratch. Board content is store-backed and the agent is a singleton, so nothing is lost.
   private func applyTheme() {
     guard let panel else { return }
-    panel.appearance = ComposerPreferences.theme.nsAppearance
+    panel.appearance = ComposerPreferences.effectiveTheme.nsAppearance
+    // Full screen runs on an opaque solid backing (see windowWillEnterFullScreen) — keep it on
+    // the new flavor's canvas if the switch happens while full screen.
+    if panel.styleMask.contains(.fullScreen) {
+      panel.backgroundColor = Theme.nsWindowCanvas
+    }
     rebuildCanvas()
   }
 
@@ -124,6 +134,32 @@ final class PanelController: NSObject, NSWindowDelegate {
   func windowDidBecomeKey(_ notification: Notification) { relayoutChromeButtons(notification) }
   func windowDidResignKey(_ notification: Notification) { relayoutChromeButtons(notification) }
 
+  /// Full screen goes FULLY NATIVE and FULLY SOLID — no window-mode cleverness survives the
+  /// transition:
+  /// • The empty unified toolbar (it only exists to stretch the titlebar over the control row,
+  ///   see FloatingPanel.init) would render as a real opaque bar, so it hides for the duration.
+  ///   It comes back only AFTER the exit transition — flipping it mid-animation relaid the theme
+  ///   frame while AppKit was interpolating it.
+  /// • The non-opaque/clear backing (it feeds the behind-window desktop blur, which doesn't
+  ///   exist in full screen) composites to black during the transitions — the "whole screen goes
+  ///   black" exit. Full screen runs opaque on the solid canvas color; the glass slider resumes
+  ///   on exit.
+  /// The traffic lights are AppKit's own in full screen (the layout guard skips them).
+  func windowWillEnterFullScreen(_ notification: Notification) {
+    guard let panel, (notification.object as? NSWindow) === panel else { return }
+    panel.toolbar?.isVisible = false
+    panel.isOpaque = true
+    panel.backgroundColor = Theme.nsWindowCanvas
+  }
+
+  func windowDidExitFullScreen(_ notification: Notification) {
+    guard let panel, (notification.object as? NSWindow) === panel else { return }
+    panel.isOpaque = false
+    panel.backgroundColor = .clear
+    panel.toolbar?.isVisible = true
+    panel.layoutWindowChromeButtons()
+  }
+
   private func relayoutChromeButtons(_ notification: Notification) {
     guard let panel, (notification.object as? NSWindow) === panel else { return }
     panel.layoutWindowChromeButtons()
@@ -131,7 +167,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 
   // MARK: Focus the text view so typing works the instant the window appears.
 
-  private func focusEditor(in panel: NSPanel) {
+  private func focusEditor(in panel: NSWindow) {
     guard let content = panel.contentView, let textView = firstTextView(in: content) else { return }
     panel.makeFirstResponder(textView)
   }

@@ -11,6 +11,35 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Added
+- **Match macOS appearance.** Settings ▸ Appearance grew a toggle that swaps your theme for its
+  light/dark sibling as the system switches — Bonsai Dark ↔ Bonsai Light, Catppuccin Mocha ↔
+  Latte. Off by default; your pick stays literal. (#74)
+- **Text size lives in Settings.** The app-wide editor text size is now a stepper in Settings ▸
+  Appearance ▸ Font, instead of hiding behind a keyboard shortcut. (#72)
+
+### Changed
+- **The AI Agent button reads as the agent.** A sparkle glyph and accent ink set it apart from
+  the neutral chrome; while the agent dock is open the pill carries a quiet accent fill. (#75)
+
+### Fixed
+- **Traffic lights: hover and click agree.** The repositioned window buttons hung below the
+  titlebar's hit-test region — hover lit up above them and clicks fell through to the board. The
+  titlebar now stretches over the control row (via an empty unified toolbar), so hover and click
+  land exactly on the lights. (#70)
+- **Full screen behaves.** The board window is a real `NSWindow` now (the `NSPanel` superclass
+  was a floating-panel leftover with second-class full-screen support): transitions no longer
+  flash black, the menu-bar reveal shows the native traffic lights, and the canvas pins itself
+  to the solid flavor color while full screen (the glass slider resumes on exit).
+- **⌘+/⌘− zoom the canvas again** — as documented. They were being swallowed by the app-wide
+  text-size shortcut, which read as "resizing one text box resizes all of them"; per-box text
+  sizing is coming separately. (#72)
+- **List markers are legible in dark themes.** Bullets, numbers, and empty checkboxes moved from
+  dim overlay ink to subtext ink — they're content, not syntax chrome. (#71)
+- **Menu-bar quick capture follows the theme.** The capture field used AppKit defaults —
+  near-black placeholder and hint text on the dark themes; it now paints from the active flavor's
+  tokens like every other surface. (#73)
+
 ## [1.4.3] - 2026-07-08
 
 ### Changed

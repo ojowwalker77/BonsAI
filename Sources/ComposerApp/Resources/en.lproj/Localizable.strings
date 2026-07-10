@@ -507,3 +507,6 @@
 "Pick the palette for the whole app." = "Pick the palette for the whole app.";
 "Type @ in a card to attach live context. Copied drafts become self-contained text - the source is resolved at copy time." = "Type @ in a card to attach live context. Copied drafts become self-contained text - the source is resolved at copy time.";
 "The essentials for writing, arranging, and exporting without breaking flow." = "The essentials for writing, arranging, and exporting without breaking flow.";
+"Match macOS appearance" = "Match macOS appearance";
+"Swap to your theme's light or dark sibling when the system switches." = "Swap to your theme's light or dark sibling when the system switches.";
+"Text size" = "Text size";
