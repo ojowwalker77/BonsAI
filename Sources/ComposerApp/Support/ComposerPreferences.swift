@@ -121,9 +121,6 @@ enum ComposerPreferences {
   /// through the board surface.
   static let canvasTransparencyKey = "composer.canvas.backgroundTransparency"
   static let maxCanvasTransparency = 0.72
-  /// When on, drawing tools stay active after each placement/stroke instead of snapping back to
-  /// the pointer (standard drawing-tool behavior). Esc always returns to the pointer.
-  static let persistentToolSelectionKey = "composer.canvas.persistentToolSelection"
   /// When on, a confidently recognized freehand stroke snaps straight into the clean shape on
   /// pen-up (OneNote "Ink to Shape"). Off keeps recognition as the opt-in promotion chip.
   static let autoSnapFreehandKey = "composer.canvas.autoSnapFreehand"
@@ -151,12 +148,6 @@ enum ComposerPreferences {
   /// rendering reads `effectiveTheme`, which applies the follow-system swap on top.
   static var theme: ComposerTheme {
     ComposerTheme(rawValue: UserDefaults.standard.string(forKey: themeKey) ?? "") ?? .bonsaiDark
-  }
-
-  /// Whether drawing tools persist after use (Settings ▸ Appearance ▸ Drawing). Read at each
-  /// commit site — no live canvas rebuild needed when it flips.
-  static var persistentToolSelection: Bool {
-    UserDefaults.standard.bool(forKey: persistentToolSelectionKey)
   }
 
   /// Whether recognized freehand strokes auto-convert on pen-up (Settings ▸ Appearance ▸ Drawing).

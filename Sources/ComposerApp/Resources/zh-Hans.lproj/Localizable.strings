@@ -152,6 +152,7 @@
 "Stop" = "停止";
 "SUMMON" = "唤起";
 "Switch board" = "切换画板";
+"Switch tools" = "切换工具";
 "Teach your coding agent the BonsAI board?" = "要让你的编码代理学习 BonsAI 画板吗？";
 "The agent reads your board and edits it as you talk - adding, sharpening, and connecting cards." = "代理会一边与你对话一边读取并编辑画板：添加、改进并连接卡片。";
 "The agent you talk to in the canvas. Also switchable live in the Agent panel." = "你在画布中对话的代理。也可在代理面板中实时切换。";
@@ -370,15 +371,15 @@
 "unknown tool: %@" = "未知工具：%@";
 
 /* Localization coverage pass */
-"Select  ·  move & edit cards  ⌘1" = "选择  ·  移动和编辑卡片  ⌘1";
-"Text  ·  click the board, then type  ⌘2" = "文本  ·  点击画板后输入  ⌘2";
-"Rectangle  ·  drag to draw  ⌘3" = "矩形  ·  拖动绘制  ⌘3";
-"Ellipse  ·  drag to draw  ⌘4" = "椭圆  ·  拖动绘制  ⌘4";
-"Diamond  ·  drag to draw  ⌘5" = "菱形  ·  拖动绘制  ⌘5";
-"Line  ·  drag to draw  ⌘6" = "线条  ·  拖动绘制  ⌘6";
-"Arrow  ·  drag to draw  ⌘7" = "箭头  ·  拖动绘制  ⌘7";
-"Freehand stroke  ·  drag to draw  ⌘8" = "手绘笔画  ·  拖动绘制  ⌘8";
-"Equation  ·  click the board, then type LaTeX  ⌘9" = "方程  ·  点击画板后输入 LaTeX  ⌘9";
+"Select  ·  move & edit cards  1" = "选择  ·  移动和编辑卡片  1";
+"Text  ·  click the board, then type  2" = "文本  ·  点击画板后输入  2";
+"Rectangle  ·  drag to draw  3" = "矩形  ·  拖动绘制  3";
+"Ellipse  ·  drag to draw  4" = "椭圆  ·  拖动绘制  4";
+"Diamond  ·  drag to draw  5" = "菱形  ·  拖动绘制  5";
+"Line  ·  drag to draw  6" = "线条  ·  拖动绘制  6";
+"Arrow  ·  drag to draw  7" = "箭头  ·  拖动绘制  7";
+"Freehand stroke  ·  drag to draw  8" = "手绘笔画  ·  拖动绘制  8";
+"Equation  ·  click the board, then type LaTeX  9" = "方程  ·  点击画板后输入 LaTeX  9";
 "Heading  ·  cycles # / ## / ###" = "标题  ·  循环切换 # / ## / ###";
 "Bold  ·  **text**" = "粗体  ·  **text**";
 "Italic  ·  *text*" = "斜体  ·  *text*";
@@ -514,7 +515,5 @@
 "Text size" = "文字大小";
 "Drawing" = "绘图";
 "How the board behaves while you draw." = "绘制时画板的行为方式。";
-"Keep tool selected" = "保持工具选中";
-"Stay on the active tool after each shape or stroke. Esc returns to the pointer." = "每次绘制图形或笔画后保持当前工具。按 Esc 返回指针。";
 "Snap sketches into shapes" = "草图自动转为图形";
 "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "识别出的笔画在抬笔时变为规整图形。关闭时保留建议提示。";

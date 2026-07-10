@@ -20,9 +20,11 @@ under the new version heading.
 - **Corner handles scale the font.** Dragging a text card's corner handles scales its font
   proportionally (Apple Freeform behavior) — aspect-locked, anchored at the opposite corner,
   live during the drag, one undo step. Composes with the app-wide text-size slider. (#77)
-- **Keep tool selected.** Settings ▸ Appearance ▸ Drawing grew a toggle that keeps the active
-  tool armed after each shape or stroke instead of snapping back to the pointer — standard
-  drawing-tool behavior. Esc always returns to the pointer. Off by default. (#78)
+- **One-key tool switching.** Bare `1`–`9` now picks a tool whenever you're not typing in a card
+  (⌘1–⌘9 still work) — select, text, rectangle, ellipse, diamond, line, arrow, freehand,
+  equation. Tools stay one-shot; the next one is a single keypress away, which is what makes
+  that livable. (A "keep tool selected" mode was tried on this branch and pulled — a hidden
+  global mode felt terrible.) (#78)
 - **Snap sketches into shapes.** A second Drawing toggle converts a confidently recognized
   freehand stroke into the clean shape on pen-up (OneNote "Ink to Shape"), no chip interaction
   needed. One undo restores the original ink. Off by default — recognition stays an opt-in
