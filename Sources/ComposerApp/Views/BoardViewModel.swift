@@ -249,6 +249,7 @@ final class BoardViewModel: ObservableObject {
   /// delete path so bound arrows refresh) instead of leaving a stray writing spot on the board.
   func endEditing(_ id: UUID) {
     interactions[id]?.captureEditorState()
+    fitTextSize(id)   // final hug on the settled text (the cache was just refreshed)
     textEditBaselines[id] = nil
     if editingCardID == id { editingCardID = nil }
     // `captureEditorState()` above refreshed the plain-text cache, so this reads what the user
@@ -270,6 +271,7 @@ final class BoardViewModel: ObservableObject {
   private func stopEditing() {
     guard let id = editingCardID else { return }
     interactions[id]?.captureEditorState()
+    fitTextSize(id)   // final hug on the settled text (the cache was just refreshed)
     textEditBaselines[id] = nil
     interactions[id]?.controller.resignFocus()
     editingCardID = nil
@@ -284,9 +286,11 @@ final class BoardViewModel: ObservableObject {
     currentBoardID = store.currentID
     let loaded = store.currentCards
     cards = loaded
-    // Fit every text card to its content — no live editor is mounted to report heights yet.
+    // Fit every text card's HEIGHT to its content at its stored width and font scale — no live
+    // editor is mounted to report heights yet. Width is left as saved (a scaled card persists its
+    // hugged width), so this never reflows the board's horizontal layout on load.
     for i in cards.indices where cards[i].elementKind == .text {
-      cards[i].h = Double(Self.fittedTextHeight(cards[i].text, width: cards[i].w))
+      cards[i].h = Double(Self.fittedTextHeight(cards[i].text, width: cards[i].w, fontScale: cards[i].textScale))
     }
     // Runtime bundles are created lazily as cards become visible or enter edit mode. A board can
     // contain hundreds of cards, but only a small cullable subset should carry editor state.
@@ -657,7 +661,7 @@ final class BoardViewModel: ObservableObject {
     let bundle = interaction(for: id)
     bundle.text = text
     bundle.cachePlainText(text)
-    if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w)) }
+    if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w, fontScale: cards[i].textScale)) }
     scheduleSave()
   }
 
@@ -1006,16 +1010,42 @@ final class BoardViewModel: ObservableObject {
 
   /// Height a text card needs to show `text` at `width`, measured the way the non-editing card
   /// renders it. Used for agent/programmatic edits and on load, where no live editor reports it.
-  static func fittedTextHeight(_ text: String, width: CGFloat) -> CGFloat {
+  /// `fontScale` scales the measuring font (and line spacing) so a corner-scaled card (issue #77)
+  /// measures at its own size; the default 1 keeps every legacy caller pixel-identical.
+  static func fittedTextHeight(_ text: String, width: CGFloat, fontScale: CGFloat = 1) -> CGFloat {
+    let scale = max(fontScale, 0.01)
     let paragraph = NSMutableParagraphStyle()
-    paragraph.lineSpacing = Theme.Typography.bodyLineSpacing
-    let attributes: [NSAttributedString.Key: Any] = [.font: Theme.Typography.body, .paragraphStyle: paragraph]
+    paragraph.lineSpacing = Theme.Typography.bodyLineSpacing * scale
+    let font = ComposerPreferences.appFont(ofSize: Theme.Typography.body.pointSize * scale)
+    let attributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph]
     let contentWidth = max(width - 32, 40)   // CanvasElementContent uses 16pt horizontal padding
     let measured = ((text.isEmpty ? " " : text) as NSString).boundingRect(
       with: NSSize(width: contentWidth, height: .greatestFiniteMagnitude),
       options: [.usesLineFragmentOrigin, .usesFontLeading],
       attributes: attributes).height
     return max(ceil(measured) + 36, CardState.textMinSize.height)   // 18pt vertical padding each side
+  }
+
+  /// The frame a text card needs to HUG `text` (issue #76): width follows the longest line up to a
+  /// wrap cap (`textDefaultSize.width × fontScale` of content), then text wraps and height grows.
+  /// Measured with the same font/paragraph attributes as the non-editing render, scaled by
+  /// `fontScale`, using the same 16pt horizontal / 18pt vertical content padding as `fittedTextHeight`.
+  /// Floors to `textMinSize` (120×40).
+  static func fittedTextSize(_ text: String, fontScale: CGFloat) -> CGSize {
+    let scale = max(fontScale, 0.01)
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.lineSpacing = Theme.Typography.bodyLineSpacing * scale
+    let font = ComposerPreferences.appFont(ofSize: Theme.Typography.body.pointSize * scale)
+    let attributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph]
+    let string = (text.isEmpty ? " " : text) as NSString
+    // Widest (unwrapped) line first — the card hugs it until it reaches the cap, then wraps.
+    let natural = ceil(string.boundingRect(
+      with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+      options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).width)
+    let cap = CardState.textDefaultSize.width * scale   // 360 × scale of CONTENT width
+    let width = min(natural, cap) + 32
+    let height = fittedTextHeight(text, width: width, fontScale: scale)
+    return CGSize(width: max(width, CardState.textMinSize.width), height: height)
   }
 
   /// Draw an arrow bound between two existing cards (its geometry tracks their centers). An
@@ -1332,14 +1362,35 @@ final class BoardViewModel: ObservableObject {
     scheduleSave()
   }
 
-  /// Grow/shrink a text card's height to fit what's typed. This is a layout consequence of
-  /// editing (the keystroke already registered undo), so it never pushes its own undo step and
-  /// only touches height — width stays where the user left it.
-  func fitTextHeight(_ id: UUID, to height: CGFloat) {
+  /// Grow/shrink a text card to HUG what's typed (issue #76): recompute both width and height from
+  /// its current text and font scale, top-left anchored (x,y unchanged — the card grows right and
+  /// down). This is a layout consequence of editing (the keystroke already registered undo), so it
+  /// never pushes its own undo step. Empty text keeps its current/seed frame (the placeholder needs
+  /// room) rather than collapsing to the minimum.
+  func fitTextSize(_ id: UUID) {
     guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text else { return }
-    let target = max(height, CardState.textMinSize.height)
-    guard abs(cards[i].h - Double(target)) > 0.5 else { return }
-    cards[i].h = Double(target)
+    let text = plainText(for: cards[i])
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    let fitted = Self.fittedTextSize(text, fontScale: cards[i].textScale)
+    guard abs(cards[i].w - Double(fitted.width)) > 0.5 || abs(cards[i].h - Double(fitted.height)) > 0.5 else { return }
+    cards[i].w = Double(fitted.width)
+    cards[i].h = Double(fitted.height)
+    scheduleSave()
+  }
+
+  /// Commit a corner-drag font scale on a text card (issue #77). One undo step restores BOTH the
+  /// previous `fontScale` and frame, because aspect-locked scaling is the whole gesture's single
+  /// intent — unlike the undo-free live typing fits above. `fontScale == 1` is stored as nil so a
+  /// scaled-then-reset card round-trips as a legacy card.
+  func scaleTextCard(_ id: UUID, fontScale: Double, frame: CGRect) {
+    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text, !cards[i].locked else { return }
+    registerUndo()
+    cards[i].fontScale = abs(fontScale - 1) < 0.0001 ? nil : fontScale
+    let minSize = cards[i].minimumSize
+    cards[i].frame = CGRect(x: frame.minX, y: frame.minY,
+                            width: max(frame.width, minSize.width),
+                            height: max(frame.height, minSize.height))
+    refreshBoundArrows()
     scheduleSave()
   }
 

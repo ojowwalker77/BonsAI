@@ -92,6 +92,10 @@ struct BoardCardView: View {
         // static cards and persistence read it without materializing an NSTextView controller.
         interaction.cachePlainText(newValue)
         board.noteEdited(cardID: card.id, previousText: oldValue)
+        // Hug the frame to the freshly-typed text (width + height) while this card is being edited.
+        // The cache is updated just above, so `fitTextSize` measures exactly what's on screen. Gated
+        // to the editing card so programmatic/agent text writes keep their own sizing.
+        if isEditing { board.fitTextSize(card.id) }
       }
       .onChange(of: isSelected) { _, selected in
         // The Point Composer belongs to a selected graph; drop it if the card loses selection.
@@ -144,10 +148,13 @@ struct BoardCardView: View {
               board.endEditing(card.id)
             }
           },
-          onHeightChange: { contentHeight in
-            // + the editor's vertical padding below, so the card frame fits the text exactly.
-            board.fitTextHeight(card.id, to: contentHeight + 20)
+          onHeightChange: { _ in
+            // A reflow (the card width changed under the editor) re-hugs the frame. Live width+height
+            // hugging is driven per-keystroke from `.onChange(of: interaction.text)`; this is the
+            // backstop for the width-driven reflow that a pure height report used to serve.
+            board.fitTextSize(card.id)
           },
+          fontScale: card.textScale,
           boardContext: { board.lintContext(excluding: card.id) },
           definedVariables: { board.definedVariableNames },
           cardTint: { card.tint },
@@ -170,7 +177,7 @@ struct BoardCardView: View {
         // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
         // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
         // zoom so the text is laid out at screen size (crisp), not stretched.
-        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: board.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: board.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale * resizeScaleFactor, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
           .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)
@@ -530,11 +537,65 @@ struct BoardCardView: View {
   private func resizeGesture(_ corner: Corner) -> some Gesture {
     DragGesture(minimumDistance: 4, coordinateSpace: .local)
       .updating($resize) { value, state, _ in state = ResizeSession(corner: corner, translation: value.translation) }
-      .onEnded { value in board.setFrame(card.id, applyResize(corner, translation: value.translation, to: card.frame)) }
+      .onEnded { value in
+        if isTextElement {
+          // Text cards SCALE their font (Apple Freeform), not reflow a box (issue #77): commit the
+          // new absolute scale, then correct the frame to hug the text at that scale with the drag's
+          // anchor corner (opposite the handle) kept fixed. One undo restores scale + frame.
+          let factor = textResizeFactor(corner, translation: value.translation, base: card.frame)
+          let newScale = Double(card.textScale * factor)
+          let fitted = BoardViewModel.fittedTextSize(board.plainText(for: card), fontScale: CGFloat(newScale))
+          board.scaleTextCard(card.id, fontScale: newScale,
+                              frame: anchoredFrame(handle: corner, size: fitted, in: card.frame))
+        } else {
+          board.setFrame(card.id, applyResize(corner, translation: value.translation, to: card.frame))
+        }
+      }
   }
 
-  /// New frame for a corner drag, clamped to the minimum size by pushing the moving edge back.
+  /// The live font-scale factor from an in-flight corner drag on THIS text card (issue #77) — 1
+  /// unless a resize is scaling it. Feeds both the preview frame (`applyResize`) and the rendered
+  /// text's effective zoom, so the font visibly scales during the drag.
+  private var resizeScaleFactor: CGFloat {
+    guard isTextElement, let resize else { return 1 }
+    return textResizeFactor(resize.corner, translation: resize.translation, base: card.frame)
+  }
+
+  /// Proportional font-scale factor from a corner drag on a text card: aspect-locked to the drag's
+  /// dominant axis, then clamped so the RESULTING `fontScale` stays in 0.4…6.0. All math in board
+  /// space (translations divided by `zoom`).
+  private func textResizeFactor(_ corner: Corner, translation t: CGSize, base: CGRect) -> CGFloat {
+    guard base.width > 0, base.height > 0 else { return 1 }
+    let dx = t.width / zoom, dy = t.height / zoom
+    let widthSign: CGFloat = (corner == .topTrailing || corner == .bottomTrailing) ? 1 : -1
+    let heightSign: CGFloat = (corner == .bottomLeading || corner == .bottomTrailing) ? 1 : -1
+    let ratio = abs(dx) >= abs(dy)
+      ? (base.width + widthSign * dx) / base.width
+      : (base.height + heightSign * dy) / base.height
+    let current = card.textScale
+    let clamped = min(max(current * ratio, 0.4), 6.0)
+    return clamped / current
+  }
+
+  /// A frame of `size` that keeps the corner OPPOSITE `handle` (the drag anchor) pinned where it sits
+  /// in `base`, so scaling grows/shrinks toward the handle the way Freeform does.
+  private func anchoredFrame(handle: Corner, size: CGSize, in base: CGRect) -> CGRect {
+    switch handle {
+    case .bottomTrailing: return CGRect(x: base.minX, y: base.minY, width: size.width, height: size.height)
+    case .topLeading:     return CGRect(x: base.maxX - size.width, y: base.maxY - size.height, width: size.width, height: size.height)
+    case .topTrailing:    return CGRect(x: base.minX, y: base.maxY - size.height, width: size.width, height: size.height)
+    case .bottomLeading:  return CGRect(x: base.maxX - size.width, y: base.minY, width: size.width, height: size.height)
+    }
+  }
+
+  /// New frame for a corner drag, clamped to the minimum size by pushing the moving edge back. Text
+  /// cards instead scale their font (issue #77): the live preview frame is `base` scaled about the
+  /// anchor corner by `textResizeFactor`, so the box tracks the font growing under the handle.
   private func applyResize(_ corner: Corner, translation t: CGSize, to base: CGRect) -> CGRect {
+    if isTextElement {
+      let factor = textResizeFactor(corner, translation: t, base: base)
+      return anchoredFrame(handle: corner, size: CGSize(width: base.width * factor, height: base.height * factor), in: base)
+    }
     let dx = t.width / zoom, dy = t.height / zoom
     var minX = base.minX, minY = base.minY, maxX = base.maxX, maxY = base.maxY
     switch corner {

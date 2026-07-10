@@ -113,6 +113,10 @@ struct FreeWriteEditor: NSViewRepresentable {
   /// Reports the editor's intrinsic content height (laid-out text + container inset) so a text
   /// card can auto-grow to fit what's typed — Excalidraw point text, not a fixed box.
   var onHeightChange: (CGFloat) -> Void = { _ in }
+  /// The editing card's per-card font multiplier (issue #77 corner-drag scaling). The editor font
+  /// (and line spacing) scale by it so a live edit matches the static render's `fontSize × textScale`.
+  /// 1 for a never-scaled card, so the common path is byte-for-byte unchanged.
+  var fontScale: CGFloat = 1
   /// Supplies the rest of the board's text as read-only context for the linter. `nil` ⇒
   /// behaves exactly as the single-editor era.
   var boardContext: () -> String? = { nil }
@@ -172,7 +176,7 @@ struct FreeWriteEditor: NSViewRepresentable {
     tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
     tv.minSize = NSSize(width: 0, height: contentSize.height)
     tv.textContainerInset = Theme.Inset.textContainer
-    tv.font = Theme.Typography.body
+    tv.font = context.coordinator.baseFont
     tv.defaultParagraphStyle = context.coordinator.paragraphStyle()
     tv.typingAttributes = context.coordinator.bodyAttributes()
     tv.textColor = Theme.nsBodyText
@@ -198,7 +202,7 @@ struct FreeWriteEditor: NSViewRepresentable {
       // `text` is the serialized form (e.g. "@github") — rebuild it into styled chips so a
       // reloaded card edits with real chips, not raw tokens.
       tv.textStorage?.setAttributedString(
-        ChipFactory.attributedDocument(fromPlainText: text, font: Theme.Typography.body,
+        ChipFactory.attributedDocument(fromPlainText: text, font: context.coordinator.baseFont,
                                        paragraph: context.coordinator.paragraphStyle(),
                                        ink: initialInk))
     }
@@ -222,7 +226,7 @@ struct FreeWriteEditor: NSViewRepresentable {
     if tv.attributedString().composerPlainText != text {
       let sel = tv.selectedRange()
       tv.textStorage?.setAttributedString(
-        ChipFactory.attributedDocument(fromPlainText: text, font: Theme.Typography.body,
+        ChipFactory.attributedDocument(fromPlainText: text, font: context.coordinator.baseFont,
                                        paragraph: context.coordinator.paragraphStyle(),
                                        ink: initialInk))
       let length = (tv.string as NSString).length
@@ -284,13 +288,25 @@ extension FreeWriteEditor {
     }
 
     // MARK: Typography
+
+    /// The editor's body font with the card's per-card scale (issue #77) folded in. `Theme.Typography
+    /// .body` is the global-slider editor font; scaling its point size here keeps a scaled card's live
+    /// edit matched to its static render, and composes multiplicatively with the slider.
+    var baseFont: NSFont {
+      let scale = max(parent.fontScale, 0.01)
+      guard abs(scale - 1) > 0.0001 else { return Theme.Typography.body }
+      return ComposerPreferences.appFont(ofSize: Theme.Typography.body.pointSize * scale)
+    }
+    /// Line spacing scaled the same way, so wrapped lines sit apart proportionally to the font.
+    var baseLineSpacing: CGFloat { Theme.Typography.bodyLineSpacing * max(parent.fontScale, 0.01) }
+
     func paragraphStyle() -> NSMutableParagraphStyle {
       let style = NSMutableParagraphStyle()
-      style.lineSpacing = Theme.Typography.bodyLineSpacing
+      style.lineSpacing = baseLineSpacing
       return style
     }
     func bodyAttributes() -> [NSAttributedString.Key: Any] {
-      [.font: Theme.Typography.body,
+      [.font: baseFont,
        .foregroundColor: Theme.nsBodyText,
        .paragraphStyle: paragraphStyle()]
     }
@@ -305,11 +321,11 @@ extension FreeWriteEditor {
     /// This strips pasted rich-text colors (the black-on-dark bug) and handles ⌘+/⌘− live.
     func applyCurrentFormatting() {
       guard let tv = textView else { return }
-      tv.font = Theme.Typography.body
+      tv.font = baseFont
       tv.textColor = Theme.nsBodyText
       tv.defaultParagraphStyle = paragraphStyle()
       tv.typingAttributes = bodyAttributes()
-      placeholderView.font = Theme.Typography.body
+      placeholderView.font = baseFont
       placeholderView.textColor = Theme.nsPlaceholderText
       normalizeBodyRuns(in: tv)
       restyleExistingChips(notifyTextView: false)
@@ -341,7 +357,7 @@ extension FreeWriteEditor {
       isNormalizingFormatting = true
       storage.beginEditing()
       for range in bodyRanges { storage.setAttributes(attrs, range: range) }
-      MarkdownStyle.apply(to: storage, baseFont: Theme.Typography.body)
+      MarkdownStyle.apply(to: storage, baseFont: baseFont)
       highlightShellTokens(in: storage)
       for (range, slot) in inkedSpans {
         storage.addAttribute(.inkSlot, value: slot, range: range)
@@ -358,7 +374,7 @@ extension FreeWriteEditor {
     /// round-trips the literal source. Runs after the body reset (so it wins) and inside the
     /// caller's begin/endEditing batch.
     private func highlightShellTokens(in storage: NSTextStorage) {
-      let size = Theme.Typography.body.pointSize
+      let size = baseFont.pointSize
       // Board-scoped names ∪ this card's own definitions (so a just-typed `name =` references live).
       let names = parent.definedVariables().union(ShellTemplate.definedNames(in: storage.string))
       for expression in ShellTemplate.expressions(in: storage.string, definedNames: names) {
@@ -940,7 +956,7 @@ extension FreeWriteEditor {
         return
       }
       guard let query = activeMentionQuery(in: tv) else { return }
-      let chip = ChipFactory.make(token: item.id, font: Theme.Typography.body)
+      let chip = ChipFactory.make(token: item.id, font: baseFont)
       let token = NSMutableAttributedString(attributedString: chip)
       token.append(NSAttributedString(string: " ", attributes: bodyAttributes()))
       guard tv.shouldChangeText(in: query.range, replacementString: token.string) else { return }
@@ -975,7 +991,7 @@ extension FreeWriteEditor {
                                  in: NSRange(location: 0, length: storage.length),
                                  options: []) { value, range, _ in
         guard let token = value as? String else { return }
-        edits.append((range, ChipFactory.make(token: token, font: Theme.Typography.body)))
+        edits.append((range, ChipFactory.make(token: token, font: baseFont)))
       }
       guard !edits.isEmpty else { return }
 
@@ -1046,7 +1062,7 @@ extension FreeWriteEditor {
             range.location + range.length <= storage.length else { closeAppSearch(); return }
 
       let token = AppToken.string(appID: parent.appSearch.appID, selection: result.selection)
-      let chip = NSMutableAttributedString(attributedString: ChipFactory.make(token: token, font: Theme.Typography.body))
+      let chip = NSMutableAttributedString(attributedString: ChipFactory.make(token: token, font: baseFont))
 
       let after = range.location + range.length
       let hasSpace = after < storage.length &&
@@ -1092,7 +1108,7 @@ extension FreeWriteEditor {
     // MARK: Placeholder (NSTextView has none of its own)
     func installPlaceholder(in tv: NSTextView, text: String) {
       placeholderView.stringValue = text
-      placeholderView.font = Theme.Typography.body
+      placeholderView.font = baseFont
       placeholderView.textColor = Theme.nsPlaceholderText
       placeholderView.backgroundColor = .clear
       placeholderView.isBezeled = false

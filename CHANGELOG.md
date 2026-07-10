@@ -11,6 +11,23 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-07-10
+
+### Added
+- **Text boxes hug their text.** A text card's width now follows the longest line up to a wrap
+  cap, then wraps and grows down — Figma/Freeform point text, live while you type, instead of a
+  fixed-width box. Existing boards keep their layout until you edit a card. (#76)
+- **Corner handles scale the font.** Dragging a text card's corner handles scales its font
+  proportionally (Apple Freeform behavior) — aspect-locked, anchored at the opposite corner,
+  live during the drag, one undo step. Composes with the app-wide text-size slider. (#77)
+- **Keep tool selected.** Settings ▸ Appearance ▸ Drawing grew a toggle that keeps the active
+  tool armed after each shape or stroke instead of snapping back to the pointer — standard
+  drawing-tool behavior. Esc always returns to the pointer. Off by default. (#78)
+- **Snap sketches into shapes.** A second Drawing toggle converts a confidently recognized
+  freehand stroke into the clean shape on pen-up (OneNote "Ink to Shape"), no chip interaction
+  needed. One undo restores the original ink. Off by default — recognition stays an opt-in
+  suggestion chip. (#79)
+
 ## [1.4.4] - 2026-07-10
 
 ### Added
