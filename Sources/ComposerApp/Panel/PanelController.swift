@@ -136,18 +136,16 @@ final class PanelController: NSObject, NSWindowDelegate {
 
   /// Full screen goes FULLY NATIVE and FULLY SOLID — no window-mode cleverness survives the
   /// transition:
-  /// • The empty unified toolbar (it only exists to stretch the titlebar over the control row,
-  ///   see FloatingPanel.init) would render as a real opaque bar, so it hides for the duration.
-  ///   It comes back only AFTER the exit transition — flipping it mid-animation relaid the theme
-  ///   frame while AppKit was interpolating it.
+  /// • The traffic lights return to their native titlebar parent so AppKit's menu-bar reveal
+  ///   can lay them out; the custom host re-steals them only AFTER the exit transition —
+  ///   mutating the chrome mid-animation relaid the theme frame while AppKit was interpolating.
   /// • The non-opaque/clear backing (it feeds the behind-window desktop blur, which doesn't
   ///   exist in full screen) composites to black during the transitions — the "whole screen goes
   ///   black" exit. Full screen runs opaque on the solid canvas color; the glass slider resumes
   ///   on exit.
-  /// The traffic lights are AppKit's own in full screen (the layout guard skips them).
   func windowWillEnterFullScreen(_ notification: Notification) {
     guard let panel, (notification.object as? NSWindow) === panel else { return }
-    panel.toolbar?.isVisible = false
+    panel.returnChromeButtonsToTitlebar()
     panel.isOpaque = true
     panel.backgroundColor = Theme.nsWindowCanvas
   }
@@ -156,7 +154,6 @@ final class PanelController: NSObject, NSWindowDelegate {
     guard let panel, (notification.object as? NSWindow) === panel else { return }
     panel.isOpaque = false
     panel.backgroundColor = .clear
-    panel.toolbar?.isVisible = true
     panel.layoutWindowChromeButtons()
   }
 

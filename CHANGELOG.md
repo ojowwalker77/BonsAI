@@ -18,15 +18,11 @@ under the new version heading.
 - **Text size lives in Settings.** The app-wide editor text size is now a stepper in Settings ▸
   Appearance ▸ Font, instead of hiding behind a keyboard shortcut. (#72)
 
-### Changed
-- **The AI Agent button reads as the agent.** A sparkle glyph and accent ink set it apart from
-  the neutral chrome; while the agent dock is open the pill carries a quiet accent fill. (#75)
-
 ### Fixed
 - **Traffic lights: hover and click agree.** The repositioned window buttons hung below the
   titlebar's hit-test region — hover lit up above them and clicks fell through to the board. The
-  titlebar now stretches over the control row (via an empty unified toolbar), so hover and click
-  land exactly on the lights. (#70)
+  lights now live in a dedicated host view on the control row, which owns their hover and
+  hit-testing, so both land exactly on them. (#70)
 - **Full screen behaves.** The board window is a real `NSWindow` now (the `NSPanel` superclass
   was a floating-panel leftover with second-class full-screen support): transitions no longer
   flash black, the menu-bar reveal shows the native traffic lights, and the canvas pins itself

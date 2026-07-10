@@ -39,9 +39,10 @@ struct SidebarButton: View {
   }
 }
 
-/// The agent toggle — the one standing accent in the chrome (issue #75: it used to blend into
-/// its neighbors in flat `body` ink). Same pill grammar as the Update pill: glyph + word mark in
-/// accent ink; the open dock adds a quiet `accentFill` capsule so state reads at rest too.
+/// The agent toggle — a word-mark pill matching the Export pill's rest label: flat `body` ink,
+/// hover feedback is the trackpad tick. There's no active ring or fill; open/closed reads
+/// from the dock itself. Lives in the top-right actions pill. (Issue #75 proposed an accent
+/// treatment; tried July 2026 and REVERTED — it cost too much aesthetically. Don't redo.)
 struct SidebarAgentButton: View {
   var active: Bool
   var side: CGFloat = WindowChrome.controlHeight
@@ -49,22 +50,16 @@ struct SidebarAgentButton: View {
 
   var body: some View {
     Button(action: action) {
-      HStack(spacing: 5) {
-        Image(systemName: "sparkle")
-          .font(WindowChrome.labelFont)
-        Text("AI Agent".localizedUI)
-          .font(WindowChrome.labelFont)
-          .lineLimit(1)
-      }
-      .foregroundStyle(Theme.Palette.accent)
-      .padding(.horizontal, WindowChrome.labelPadH)
-      .frame(height: side)
-      .background(Capsule().fill(active ? Theme.Palette.accentFill : Color.clear))
-      .contentShape(Capsule())
+      Text("AI Agent".localizedUI)
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .lineLimit(1)
+        .padding(.horizontal, WindowChrome.labelPadH)
+        .frame(height: side)
+        .contentShape(Capsule())
     }
     .buttonStyle(.plain)
     .onHover { if $0 { Haptics.hover() } }
     .help("Chat with the agent on this board  ⌘J".localizedUI)
-    .animation(.easeOut(duration: 0.12), value: active)
   }
 }

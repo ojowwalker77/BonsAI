@@ -1,5 +1,43 @@
 import AppKit
 
+/// Owns the reparented traffic lights: a plain host on the control row's centerline, OUTSIDE the
+/// titlebar (whose 32pt hit-test bounds the buttons overflowed — hover lit on a sliver, clicks
+/// fell through; every titlebar-stretching lever failed: an empty toolbar paints Tahoe hover
+/// glass behind the floating pills, `.top` accessories swallow clicks, `.left` ones don't
+/// stretch). Reparented theme widgets draw their ×−+ glyphs only while their superview answers
+/// the private `_mouseInGroup:` query — this host answers it from its own tracking area (the
+/// standard recipe for custom traffic-light placement; direct-distribution app, no App Store
+/// review concern).
+private final class TrafficLightHostView: NSView {
+  private var tracking: NSTrackingArea?
+  private var mouseInside = false
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let tracking { removeTrackingArea(tracking) }
+    let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
+                              owner: self, userInfo: nil)
+    addTrackingArea(area)
+    tracking = area
+  }
+
+  override func mouseEntered(with event: NSEvent) { setGroupHover(true) }
+  override func mouseExited(with event: NSEvent) { setGroupHover(false) }
+
+  private func setGroupHover(_ inside: Bool) {
+    mouseInside = inside
+    for case let button as NSButton in subviews { button.needsDisplay = true }
+  }
+
+  @objc(_mouseInGroup:) func mouseInGroup(_ button: NSButton) -> Bool { mouseInside }
+
+  /// Only the buttons take events — the padding/gaps pass through to the canvas.
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    let hit = super.hitTest(point)
+    return hit === self ? nil : hit
+  }
+}
+
 /// BonsAI's board window: a standard titled, resizable macOS window with a full-size content
 /// view. Every control floats over the solid canvas inside; the title bar is transparent and the
 /// traffic lights are re-laid onto the control row's centerline.
@@ -13,6 +51,12 @@ final class FloatingPanel: NSWindow {
   /// so without this the text canvas never gets an insertion point.
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { true }
+
+  /// Hosts the reparented traffic lights on the control row (see TrafficLightHostView).
+  private let trafficLightHost = TrafficLightHostView(frame: .zero)
+  /// The buttons' native titlebar parent — they return there for full screen, where AppKit
+  /// owns their layout (the menu-bar reveal).
+  private weak var nativeButtonParent: NSView?
 
   init(contentRect: NSRect) {
     super.init(
@@ -35,16 +79,6 @@ final class FloatingPanel: NSWindow {
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
     title = "BonsAI"
-    // MANDATORY for the re-centered traffic lights: AppKit hit-tests and hover-tracks the
-    // buttons only INSIDE the titlebar container's bounds. The default container (32pt) ends
-    // above the control row's centerline — the moved lights rendered at y −13…+1 in container
-    // coords, so hover lit on a 1px sliver and clicks fell through to the board. An empty
-    // unified toolbar is the one PUBLIC lever that grows the container (to ~52pt) with AppKit
-    // doing the layout natively: no accessory wrapper to swallow clicks (a `.top` accessory's
-    // host blocks the buttons; `.left` accessories don't stretch the container at all). The
-    // transparent titlebar keeps it invisible.
-    toolbar = NSToolbar()
-    toolbarStyle = .unified
     collectionBehavior = [.fullScreenPrimary]
     // Non-opaque with a clear backing: the canvas paints its own surface — solid at the default
     // 0 transparency, receding over a behind-window blur as the Settings slider comes up.
@@ -55,33 +89,55 @@ final class FloatingPanel: NSWindow {
 
   /// Put the traffic lights on the SAME centerline as the floating control row (the Books-style
   /// strip), instead of AppKit's default top-left corner — that mismatch is what made the top-left
-  /// read as two unrelated rows. Lights start at the shared edge inset, so lights and pills all
-  /// sit on one spacing grid. AppKit resets these frames on resize and key-state changes, so the
+  /// read as two unrelated rows. The buttons are REPARENTED into `trafficLightHost` on the theme
+  /// frame (see TrafficLightHostView for why the titlebar can't host them down here), which owns
+  /// their hover and hit-testing. Lights start at the shared edge inset, so lights and pills all
+  /// sit on one spacing grid. AppKit re-asserts titlebar ownership on some window events, so the
   /// controller re-calls this after each.
   func layoutWindowChromeButtons() {
     guard !styleMask.contains(.fullScreen) else { return }
-    let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
-    guard let container = standardWindowButton(.closeButton)?.superview else { return }
+    let types: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+    let buttons = types.compactMap { standardWindowButton($0) }
+    guard buttons.count == types.count, let frameView = contentView?.superview else { return }
+    if nativeButtonParent == nil {
+      nativeButtonParent = buttons[0].superview
+    }
+
+    let spacing: CGFloat = 6
+    let pad: CGFloat = 4   // hover grace around the group, passes clicks through
+    let buttonSize = buttons[0].frame.size
+    let groupWidth = buttons.reduce(0) { $0 + $1.frame.width } + spacing * CGFloat(buttons.count - 1)
+    let hostSize = NSSize(width: groupWidth + pad * 2, height: buttonSize.height + pad * 2)
     // Center of the floating control row: edge inset + half the pill height.
     let rowCenterY = WindowChrome.edgeInset + (WindowChrome.controlHeight + WindowChrome.padV * 2) / 2
-    var x = WindowChrome.edgeInset
-    for type in buttons {
-      guard let button = standardWindowButton(type) else { continue }
-      let y = container.isFlipped
-        ? rowCenterY - button.frame.height / 2
-        : container.frame.height - rowCenterY - button.frame.height / 2
-      button.setFrameOrigin(NSPoint(x: x, y: y))
-      x += button.frame.width + 6
+    let hostY = frameView.isFlipped
+      ? rowCenterY - hostSize.height / 2
+      : frameView.frame.height - rowCenterY - hostSize.height / 2
+    // (Re)attach topmost every pass: a canvas rebuild swaps the content view in above it.
+    frameView.addSubview(trafficLightHost)
+    trafficLightHost.isHidden = false
+    trafficLightHost.frame = NSRect(x: WindowChrome.edgeInset - pad, y: hostY,
+                                    width: hostSize.width, height: hostSize.height)
+
+    var x = pad
+    for button in buttons {
+      if button.superview !== trafficLightHost { trafficLightHost.addSubview(button) }
+      button.setFrameOrigin(NSPoint(x: x, y: (hostSize.height - button.frame.height) / 2))
+      x += button.frame.width + spacing
     }
-    // The rollover highlight is driven by tracking areas the theme frame computed for the
-    // DEFAULT button positions — moving the buttons alone leaves the hover region at the old
-    // corner (hover lights up above the lights, clicks land on them). Ask every ancestor to
-    // rebuild its tracking areas from the frames we just set so hover and hit area coincide.
-    var ancestor: NSView? = container
-    while let view = ancestor {
-      view.updateTrackingAreas()
-      ancestor = view.superview
+    trafficLightHost.updateTrackingAreas()
+  }
+
+  /// Hand the lights back to AppKit for full screen: they return to their native titlebar
+  /// parent so the menu-bar reveal can lay them out, and the host stands down.
+  func returnChromeButtonsToTitlebar() {
+    guard let parent = nativeButtonParent else { return }
+    for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+      if let button = standardWindowButton(type), button.superview !== parent {
+        parent.addSubview(button)
+      }
     }
+    trafficLightHost.isHidden = true
   }
 
   /// Escape hides the window when it is itself first responder.
