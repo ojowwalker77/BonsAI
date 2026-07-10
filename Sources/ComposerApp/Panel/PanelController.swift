@@ -152,6 +152,24 @@ final class PanelController: NSObject, NSWindowDelegate {
 
   func windowDidExitFullScreen(_ notification: Notification) {
     guard let panel, (notification.object as? NSWindow) === panel else { return }
+    restoreWindowMode()
+  }
+
+  /// AppKit is allowed to abort a full-screen entry (mid-animation, competing gesture) — it
+  /// fires this instead of `didExit`, so the `willEnter` preparation must be undone here too.
+  func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+    guard let panel, window === panel else { return }
+    restoreWindowMode()
+    // There is no public notification for a failed entry, so ComposerPanelBackground can't
+    // hear it — remount the canvas; the backdrop re-reads the window's real full-screen state
+    // on appear and drops its pinned-solid mode.
+    rebuildCanvas()
+  }
+
+  /// Undo `windowWillEnterFullScreen`'s preparation: transparent glass-capable backing and the
+  /// custom-hosted traffic lights.
+  private func restoreWindowMode() {
+    guard let panel else { return }
     panel.isOpaque = false
     panel.backgroundColor = .clear
     panel.layoutWindowChromeButtons()

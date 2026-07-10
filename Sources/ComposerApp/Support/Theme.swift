@@ -328,7 +328,10 @@ struct ComposerPanelBackground: View {
     .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { note in
       if note.object is FloatingPanel { isFullScreen = true }
     }
-    .onReceive(NotificationCenter.default.publisher(for: NSWindow.willExitFullScreenNotification)) { note in
+    // `didExit`, not `willExit`: the surface must stay solid until the exit animation has
+    // actually finished — flipping on `willExit` reinstated the gray HUD wash mid-transition,
+    // while the window itself is still deliberately opaque (PanelController restores on did).
+    .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
       if note.object is FloatingPanel { isFullScreen = false }
     }
   }
