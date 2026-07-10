@@ -26,7 +26,9 @@ under the new version heading.
 - **Snap sketches into shapes.** A second Drawing toggle converts a confidently recognized
   freehand stroke into the clean shape on pen-up (OneNote "Ink to Shape"), no chip interaction
   needed. One undo restores the original ink. Off by default — recognition stays an opt-in
-  suggestion chip. (#79)
+  suggestion chip. Recognition itself was retuned recall-first: the stroke is smoothed before
+  classification and every gate loosened, so wobbly sides, rounded corners, and loops that don't
+  quite close now snap — letters, zigzags, and scribbles still don't. (#79)
 
 ## [1.4.4] - 2026-07-10
 

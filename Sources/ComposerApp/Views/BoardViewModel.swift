@@ -1378,6 +1378,26 @@ final class BoardViewModel: ObservableObject {
     scheduleSave()
   }
 
+  /// Live-edit hug driven by the EDITOR's own layout (issue #76). While a card is being typed
+  /// into, the mounted NSTextView is the only sizing authority: `fittedTextSize`'s NSString twin
+  /// wraps ~10pt later than the view (different insets/fragment padding), and sizing from it left
+  /// the frame a line short — the editor then scrolled to the caret and clipped the top line.
+  /// Width follows the editor's unwrapped text (+ the card's 12pt mount padding each side, +2pt
+  /// wrap slack) up to the same total cap the static hug uses; height is the editor's laid-out
+  /// height + the mount's vertical padding. No undo step (a layout consequence of typing),
+  /// top-left anchored, empty text keeps its seed frame.
+  func fitTextEditing(_ id: UUID, naturalEditorWidth: CGFloat, editorContentHeight: CGFloat) {
+    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text else { return }
+    guard !plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    let cap = CardState.textDefaultSize.width * cards[i].textScale + 32
+    let width = min(max(naturalEditorWidth + 24 + 2, CardState.textMinSize.width), cap)
+    let height = max(editorContentHeight + 20, CardState.textMinSize.height)
+    guard abs(cards[i].w - Double(width)) > 0.5 || abs(cards[i].h - Double(height)) > 0.5 else { return }
+    cards[i].w = Double(width)
+    cards[i].h = Double(height)
+    scheduleSave()
+  }
+
   /// Commit a corner-drag font scale on a text card (issue #77). One undo step restores BOTH the
   /// previous `fontScale` and frame, because aspect-locked scaling is the whole gesture's single
   /// intent — unlike the undo-free live typing fits above. `fontScale == 1` is stored as nil so a

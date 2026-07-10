@@ -92,10 +92,6 @@ struct BoardCardView: View {
         // static cards and persistence read it without materializing an NSTextView controller.
         interaction.cachePlainText(newValue)
         board.noteEdited(cardID: card.id, previousText: oldValue)
-        // Hug the frame to the freshly-typed text (width + height) while this card is being edited.
-        // The cache is updated just above, so `fitTextSize` measures exactly what's on screen. Gated
-        // to the editing card so programmatic/agent text writes keep their own sizing.
-        if isEditing { board.fitTextSize(card.id) }
       }
       .onChange(of: isSelected) { _, selected in
         // The Point Composer belongs to a selected graph; drop it if the card loses selection.
@@ -148,11 +144,12 @@ struct BoardCardView: View {
               board.endEditing(card.id)
             }
           },
-          onHeightChange: { _ in
-            // A reflow (the card width changed under the editor) re-hugs the frame. Live width+height
-            // hugging is driven per-keystroke from `.onChange(of: interaction.text)`; this is the
-            // backstop for the width-driven reflow that a pure height report used to serve.
-            board.fitTextSize(card.id)
+          onLayoutChange: { naturalWidth, contentHeight in
+            // The editor's own layout drives the live hug — width from its unwrapped text, height
+            // from its laid-out text, both in board units (the editor lays out at board size and
+            // is scaled by zoom). Sizing from a parallel NSString measurement clipped the top line
+            // (the twin wraps ~10pt before the view); see `fitTextEditing`.
+            board.fitTextEditing(card.id, naturalEditorWidth: naturalWidth, editorContentHeight: contentHeight)
           },
           fontScale: card.textScale,
           boardContext: { board.lintContext(excluding: card.id) },
@@ -177,10 +174,17 @@ struct BoardCardView: View {
         // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
         // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
         // zoom so the text is laid out at screen size (crisp), not stretched.
-        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: board.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale * resizeScaleFactor, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: board.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
           .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)
+          // An in-flight corner drag on a text card previews as a GEOMETRIC transform: the text
+          // keeps its base layout and scales as a whole. Re-laying it out at a new font size every
+          // gesture frame flickered and shed glyph fragments (1.4.5 feedback). Both the layout
+          // frame and the scale pin top-leading — the preview frame already moved its origin for
+          // the drag's anchor corner, so its top-left IS the scaled content's top-left.
+          .frame(width: staticLayoutSize.width * zoom, height: staticLayoutSize.height * zoom, alignment: .topLeading)
+          .scaleEffect(resizeScaleFactor, anchor: .topLeading)
       }
 
       // Select on mouse-down so handles appear immediately. SwiftUI's separate
@@ -554,11 +558,18 @@ struct BoardCardView: View {
   }
 
   /// The live font-scale factor from an in-flight corner drag on THIS text card (issue #77) — 1
-  /// unless a resize is scaling it. Feeds both the preview frame (`applyResize`) and the rendered
-  /// text's effective zoom, so the font visibly scales during the drag.
+  /// unless a resize is scaling it. Feeds both the preview frame (`applyResize`) and the content's
+  /// `scaleEffect`, so the text visibly scales during the drag without relayout.
   private var resizeScaleFactor: CGFloat {
     guard isTextElement, let resize else { return 1 }
     return textResizeFactor(resize.corner, translation: resize.translation, base: card.frame)
+  }
+
+  /// The size the static content LAYS OUT at: the live frame — except during a text-card resize
+  /// preview, where content keeps the base frame's layout and `scaleEffect` stretches it into the
+  /// preview box (see cardBody).
+  private var staticLayoutSize: CGSize {
+    (isTextElement && resize != nil) ? card.frame.size : liveFrame.size
   }
 
   /// Proportional font-scale factor from a corner drag on a text card: aspect-locked to the drag's

@@ -113,6 +113,67 @@ final class ShapeRecognizerTests: XCTestCase {
     assertPoint(end, near: CGPoint(x: 90, y: 35), tolerance: 6)
   }
 
+  // MARK: Sloppy strokes (1.4.5 recall retune — these are the "don't make me draw perfect" bar)
+
+  func testRecognizesSloppyUnclosedRectangle() {
+    // Heavy wobble AND a 12pt gap on the closing edge — the pre-1.4.5 gates rejected both.
+    var jitter = SeededJitter(seed: 11, amplitude: 4.0)
+    let points = jitteredPolyline([
+      CGPoint(x: 40, y: 50),
+      CGPoint(x: 180, y: 50),
+      CGPoint(x: 180, y: 140),
+      CGPoint(x: 40, y: 140),
+      CGPoint(x: 40, y: 62)
+    ], jitter: &jitter)
+
+    let recognition = requireRecognition(points)
+    guard case .rectangle = recognition.kind else {
+      return XCTFail("Expected rectangle, got \(recognition.kind)")
+    }
+  }
+
+  func testRecognizesRoundedCornerRectangle() {
+    // Chamfered corners melt the 4-corner detection — the frame-fit fallback must still snap it.
+    var jitter = SeededJitter(seed: 12, amplitude: 1.5)
+    let c: Double = 10
+    let points = jitteredPolyline([
+      CGPoint(x: 40 + c, y: 50),
+      CGPoint(x: 180 - c, y: 50),
+      CGPoint(x: 180, y: 50 + c),
+      CGPoint(x: 180, y: 140 - c),
+      CGPoint(x: 180 - c, y: 140),
+      CGPoint(x: 40 + c, y: 140),
+      CGPoint(x: 40, y: 140 - c),
+      CGPoint(x: 40, y: 50 + c),
+      CGPoint(x: 40 + c, y: 50)
+    ], jitter: &jitter)
+
+    let recognition = requireRecognition(points)
+    guard case .rectangle = recognition.kind else {
+      return XCTFail("Expected rectangle, got \(recognition.kind)")
+    }
+  }
+
+  func testRecognizesSloppyEllipse() {
+    var jitter = SeededJitter(seed: 13, amplitude: 5.0)
+    let points = ellipsePoints(in: CGRect(x: 60, y: 40, width: 150, height: 90), jitter: &jitter)
+
+    let recognition = requireRecognition(points)
+    guard case .ellipse = recognition.kind else {
+      return XCTFail("Expected ellipse, got \(recognition.kind)")
+    }
+  }
+
+  func testRecognizesWobblyLine() {
+    var jitter = SeededJitter(seed: 14, amplitude: 3.5)
+    let points = jitteredLine(from: CGPoint(x: 20, y: 30), to: CGPoint(x: 180, y: 125), jitter: &jitter)
+
+    let recognition = requireRecognition(points)
+    guard case .line = recognition.kind else {
+      return XCTFail("Expected line, got \(recognition.kind)")
+    }
+  }
+
   func testRejectsSpiral() {
     var jitter = SeededJitter(seed: 8, amplitude: 1.5)
     XCTAssertNil(ShapeRecognizer.recognize(spiralPoints(jitter: &jitter)))

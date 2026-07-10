@@ -110,9 +110,12 @@ struct FreeWriteEditor: NSViewRepresentable {
   var onEscape: () -> Void = {}
   /// Fired when this editor gains/loses first responder (canvas active-card tracking).
   var onFocusChange: (Bool) -> Void = { _ in }
-  /// Reports the editor's intrinsic content height (laid-out text + container inset) so a text
-  /// card can auto-grow to fit what's typed — Excalidraw point text, not a fixed box.
-  var onHeightChange: (CGFloat) -> Void = { _ in }
+  /// Reports the editor's OWN layout — natural (unwrapped) content width and laid-out content
+  /// height — so a text card can hug what's typed (issue #76). The live NSTextView is the only
+  /// sizing authority while editing: a parallel NSString measurement wraps ~10pt later than the
+  /// view (different insets/fragment padding), and sizing the card from it left the frame a line
+  /// short — the editor then scrolled to the caret and clipped the top line.
+  var onLayoutChange: (_ naturalWidth: CGFloat, _ contentHeight: CGFloat) -> Void = { _, _ in }
   /// The editing card's per-card font multiplier (issue #77 corner-drag scaling). The editor font
   /// (and line spacing) scale by it so a live edit matches the static render's `fontSize × textScale`.
   /// 1 for a never-scaled card, so the common path is byte-for-byte unchanged.
@@ -256,6 +259,7 @@ extension FreeWriteEditor {
     private var lintVersion = 0
     /// Last height pushed up to the card, so repeated layout passes don't thrash the binding.
     private var lastReportedHeight: CGFloat = -1
+    private var lastReportedNaturalWidth: CGFloat = -1
     /// Width the last height was measured at — lets `updateNSView` skip the (non-trivial) text
     /// layout pass on renders that only moved the card (pan/drag), measuring only on a reflow.
     private var lastLayoutWidth: CGFloat = -1
@@ -431,10 +435,27 @@ extension FreeWriteEditor {
       if !force, abs(width - lastLayoutWidth) < 0.5 { return }
       lastLayoutWidth = width
       let height = contentHeight(of: tv)
-      guard height > 0, abs(height - lastReportedHeight) > 0.5 else { return }
+      let natural = naturalContentWidth(of: tv)
+      guard height > 0,
+            abs(height - lastReportedHeight) > 0.5 || abs(natural - lastReportedNaturalWidth) > 0.5
+      else { return }
       lastReportedHeight = height
-      let callback = parent.onHeightChange
-      DispatchQueue.main.async { callback(height) }
+      lastReportedNaturalWidth = natural
+      let callback = parent.onLayoutChange
+      DispatchQueue.main.async { callback(natural, height) }
+    }
+
+    /// The width this editor would take with NO wrapping (its widest hard line), plus its own
+    /// horizontal chrome (container inset + fragment padding). Measured on the live storage so
+    /// chips and per-card font scale count exactly as rendered — this is what makes the card's
+    /// hugged width agree with where the view actually wraps.
+    private func naturalContentWidth(of tv: NSTextView) -> CGFloat {
+      guard let storage = tv.textStorage, storage.length > 0 else { return 0 }
+      let unwrapped = storage.boundingRect(
+        with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+        options: [.usesLineFragmentOrigin, .usesFontLeading]).width
+      let fragmentPadding = tv.textContainer?.lineFragmentPadding ?? 5
+      return ceil(unwrapped) + tv.textContainerInset.width * 2 + fragmentPadding * 2
     }
 
     private func contentHeight(of tv: NSTextView) -> CGFloat {

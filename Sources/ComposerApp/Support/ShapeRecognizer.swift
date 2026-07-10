@@ -1,10 +1,12 @@
 import Foundation
 import CoreGraphics
 
-/// Conservative freehand shape recognition for board-space pointer trails.
+/// Freehand shape recognition for board-space pointer trails.
 ///
-/// The recognizer is intentionally precision-biased: short strokes, ambiguous closed figures,
-/// letters, zigzags, spirals, and noisy sketches return `nil` instead of guessing.
+/// Tuned recall-first for real hand sketches (1.4.5 feedback: the original gates demanded
+/// near-perfect strokes): wobbly sides, rounded corners, and loops that don't quite close all
+/// snap. Letters, zigzags, spirals, stars, and scribbles must still return `nil` — the negative
+/// fixtures in ShapeRecognizerTests are the contract.
 enum ShapeRecognizer {
   enum Kind: Equatable {
     case rectangle(CGRect)
@@ -34,7 +36,7 @@ enum ShapeRecognizer {
     guard rawLength > 0 else { return nil }
 
     let sampleCount = max(32, min(180, Int(rawLength / 4.0)))
-    let points = resample(cleaned, count: sampleCount)
+    let points = smooth(resample(cleaned, count: sampleCount))
     guard points.count >= 8,
           let bounds = bounds(of: points),
           max(bounds.width, bounds.height) >= 24 else { return nil }
@@ -44,7 +46,7 @@ enum ShapeRecognizer {
 
     let length = pathLength(points)
     let endpointGap = distance(points[0], points[points.count - 1])
-    let closed = endpointGap <= diagonal * 0.18 && length >= diagonal * 1.75
+    let closed = endpointGap <= diagonal * 0.26 && length >= diagonal * 1.6
 
     if closed {
       return recognizeClosed(points, bounds: bounds, diagonal: diagonal)
@@ -72,11 +74,29 @@ enum ShapeRecognizer {
       }
     }
 
-    if corners.count <= 2 {
-      return recognizeEllipse(loop, bounds: bounds)
+    // Sloppy circles often sprout a phantom corner or two — let the ellipse's own deviation
+    // gates decide instead of the corner count alone.
+    if corners.count <= 3, let ellipse = recognizeEllipse(loop, bounds: bounds) {
+      return ellipse
+    }
+
+    // A boxy stroke whose corner detection missed (rounded corners read as 3 or 5 candidates)
+    // can still snap when the path hugs its bounding box tightly — the fit gate alone rejects
+    // round figures (a circle scores ~0.5 against its bounding square).
+    if corners.count != 4, let rectangle = recognizeRectangleByFit(loop, frame: bounds) {
+      return rectangle
     }
 
     return nil
+  }
+
+  /// Corner-free rectangle fallback: accept on edge-fit alone, with a stricter bar than the
+  /// cornered path since there's no corner-geometry cross-check backing it up.
+  private static func recognizeRectangleByFit(_ points: [CGPoint], frame: CGRect) -> Recognition? {
+    guard frame.width >= 16, frame.height >= 16 else { return nil }
+    let fit = rectangleFitScore(points, frame: frame)
+    guard fit >= 0.72 else { return nil }
+    return Recognition(kind: .rectangle(frame), confidence: clamp(fit * 0.9))
   }
 
   private static func recognizeRectangle(_ corners: [CGPoint], points: [CGPoint], diagonal: Double) -> Recognition? {
@@ -90,11 +110,11 @@ enum ShapeRecognizer {
       CGPoint(x: frame.maxX, y: frame.maxY),
       CGPoint(x: frame.minX, y: frame.maxY)
     ]
-    guard bestCornerMatchDistance(corners, expected: expected) <= diagonal * 0.18 else { return nil }
+    guard bestCornerMatchDistance(corners, expected: expected) <= diagonal * 0.24 else { return nil }
 
     let axisScore = axisAlignedSegmentScore(corners)
     let fitScore = rectangleFitScore(points, frame: frame)
-    guard axisScore >= 0.78, fitScore >= 0.78 else { return nil }
+    guard axisScore >= 0.66, fitScore >= 0.6 else { return nil }
 
     return Recognition(kind: .rectangle(frame), confidence: clamp(0.45 * axisScore + 0.55 * fitScore))
   }
@@ -110,11 +130,11 @@ enum ShapeRecognizer {
       CGPoint(x: frame.midX, y: frame.maxY),
       CGPoint(x: frame.minX, y: frame.midY)
     ]
-    guard bestCornerMatchDistance(corners, expected: expected) <= diagonal * 0.18 else { return nil }
+    guard bestCornerMatchDistance(corners, expected: expected) <= diagonal * 0.24 else { return nil }
 
     let diagonalScore = diagonalSegmentScore(corners)
     let fitScore = diamondFitScore(points, frame: frame)
-    guard diagonalScore >= 0.76, fitScore >= 0.76 else { return nil }
+    guard diagonalScore >= 0.64, fitScore >= 0.6 else { return nil }
 
     return Recognition(kind: .diamond(frame), confidence: clamp(0.45 * diagonalScore + 0.55 * fitScore))
   }
@@ -140,10 +160,10 @@ enum ShapeRecognizer {
     let mean = deviations.reduce(0, +) / Double(deviations.count)
     let maxDeviation = deviations.max() ?? 1
     guard quadrants.count == 4,
-          mean <= 0.105,
-          maxDeviation <= 0.27 else { return nil }
+          mean <= 0.16,
+          maxDeviation <= 0.42 else { return nil }
 
-    let score = 1 - max(mean / 0.105, maxDeviation / 0.27) * 0.35
+    let score = 1 - max(mean / 0.16, maxDeviation / 0.42) * 0.35
     return Recognition(kind: .ellipse(bounds), confidence: clamp(score))
   }
 
@@ -151,13 +171,13 @@ enum ShapeRecognizer {
     let start = points[0]
     let end = points[points.count - 1]
     let chord = distance(start, end)
-    guard chord >= 24 else { return nil }
+    guard chord >= 20 else { return nil }
 
     let length = pathLength(points)
     let errors = chordErrors(points, start: start, end: end)
-    let maxTolerance = max(4, chord * 0.055)
-    let rmsTolerance = max(2.5, chord * 0.025)
-    guard length / chord <= 1.08,
+    let maxTolerance = max(5, chord * 0.085)
+    let rmsTolerance = max(3, chord * 0.045)
+    guard length / chord <= 1.16,
           errors.max <= maxTolerance,
           errors.rms <= rmsTolerance else { return nil }
 
@@ -174,19 +194,19 @@ enum ShapeRecognizer {
 
     let tip = points[tipIndex]
     let shaftLength = distance(start, tip)
-    guard shaftLength >= 28 else { return nil }
+    guard shaftLength >= 24 else { return nil }
 
     let shaft = Array(points[0...tipIndex])
     let shaftPathLength = pathLength(shaft)
     let shaftErrors = chordErrors(shaft, start: start, end: tip)
-    guard shaftPathLength / shaftLength <= 1.09,
-          shaftErrors.max <= max(4, shaftLength * 0.06),
-          shaftErrors.rms <= max(2.5, shaftLength * 0.03) else { return nil }
+    guard shaftPathLength / shaftLength <= 1.16,
+          shaftErrors.max <= max(5, shaftLength * 0.09),
+          shaftErrors.rms <= max(3, shaftLength * 0.05) else { return nil }
 
     let afterTip = Array(points[(tipIndex + 1)...])
     let headLength = pathLength([tip] + afterTip)
-    guard headLength >= max(12, shaftLength * 0.12),
-          headLength <= shaftLength * 0.76 else { return nil }
+    guard headLength >= max(10, shaftLength * 0.1),
+          headLength <= shaftLength * 0.9 else { return nil }
 
     let direction = normalized(CGVector(dx: tip.x - start.x, dy: tip.y - start.y))
     var leftArm: Double = 0
@@ -201,7 +221,7 @@ enum ShapeRecognizer {
       let armLength = hypot(vector.dx, vector.dy)
       forwardOvershoot = max(forwardOvershoot, along)
 
-      guard armLength <= shaftLength * 0.35 + 2 else { return nil }
+      guard armLength <= shaftLength * 0.48 + 2 else { return nil }
       if along < -max(4, armLength * 0.25), armLength >= max(7, shaftLength * 0.07) {
         longestArm = max(longestArm, armLength)
         if side < 0 {
@@ -212,13 +232,13 @@ enum ShapeRecognizer {
       }
     }
 
-    guard forwardOvershoot <= max(3, shaftLength * 0.025),
-          leftArm >= max(7, shaftLength * 0.07),
-          rightArm >= max(7, shaftLength * 0.07),
-          longestArm <= shaftLength * 0.35 + 2 else { return nil }
+    guard forwardOvershoot <= max(4, shaftLength * 0.06),
+          leftArm >= max(6, shaftLength * 0.06),
+          rightArm >= max(6, shaftLength * 0.06),
+          longestArm <= shaftLength * 0.48 + 2 else { return nil }
 
     let balance = min(leftArm, rightArm) / max(leftArm, rightArm)
-    guard balance >= 0.45 else { return nil }
+    guard balance >= 0.32 else { return nil }
 
     let straightness = 1 - min(0.35, shaftErrors.rms / max(2.5, shaftLength * 0.03) * 0.35)
     return Recognition(kind: .arrow(start: start, end: tip), confidence: clamp(0.62 + 0.23 * balance + 0.15 * straightness))
@@ -239,7 +259,9 @@ enum ShapeRecognizer {
       let b = CGVector(dx: next.x - current.x, dy: next.y - current.y)
       let angle = angleBetween(a, b)
       let score = Double.pi - angle
-      guard score > 0.88 else { continue }
+      // ~40° of turn reads as a corner — hand-drawn corners round off well below the ~50° the
+      // original gate demanded. Smooth curves stay far under this (a circle turns ~12°/window).
+      guard score > 0.7 else { continue }
 
       let before = cornerScore(points: points, index: (index - 1 + count) % count, window: window)
       let after = cornerScore(points: points, index: (index + 1) % count, window: window)
@@ -300,7 +322,7 @@ enum ShapeRecognizer {
   }
 
   private static func rectangleFitScore(_ points: [CGPoint], frame: CGRect) -> Double {
-    let tolerance = max(5, min(frame.width, frame.height) * 0.12)
+    let tolerance = max(5, min(frame.width, frame.height) * 0.16)
     let errors = points.map { point -> Double in
       min(abs(point.x - frame.minX), abs(point.x - frame.maxX), abs(point.y - frame.minY), abs(point.y - frame.maxY))
     }
@@ -308,7 +330,7 @@ enum ShapeRecognizer {
   }
 
   private static func diamondFitScore(_ points: [CGPoint], frame: CGRect) -> Double {
-    let tolerance = max(5, min(frame.width, frame.height) * 0.12)
+    let tolerance = max(5, min(frame.width, frame.height) * 0.16)
     let vertices = [
       CGPoint(x: frame.midX, y: frame.minY),
       CGPoint(x: frame.maxX, y: frame.midY),
@@ -389,6 +411,26 @@ enum ShapeRecognizer {
     }
 
     result.append(points[points.count - 1])
+    return result
+  }
+
+  /// Light moving-average over the resampled trail (endpoints pinned). Hand tremor inflates path
+  /// length (which broke the line's length/chord gate) and sprays phantom corners around closed
+  /// loops (which broke the ellipse's corner-count gate); two 1-2-1 passes tame both, while a real
+  /// 90° corner keeps its full turn across the multi-sample corner window.
+  private static func smooth(_ points: [CGPoint], passes: Int = 2) -> [CGPoint] {
+    guard points.count >= 5 else { return points }
+    var result = points
+    for _ in 0..<passes {
+      var next = result
+      for index in 1..<(result.count - 1) {
+        next[index] = CGPoint(
+          x: (result[index - 1].x + result[index].x * 2 + result[index + 1].x) / 4,
+          y: (result[index - 1].y + result[index].y * 2 + result[index + 1].y) / 4
+        )
+      }
+      result = next
+    }
     return result
   }
 

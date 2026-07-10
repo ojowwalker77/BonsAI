@@ -116,7 +116,7 @@ struct EditingStage: View {
         onSelectionChange: { interaction.selection = $0 },
         onEscape: { onClose() },
         onFocusChange: { _ in },
-        onHeightChange: { _ in },
+        onLayoutChange: { _, _ in },
         boardContext: { board.lintContext(excluding: card.id) },
         definedVariables: { board.definedVariableNames },
         mentions: interaction.mentions,
