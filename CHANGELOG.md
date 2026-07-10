@@ -11,6 +11,8 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-07-10
+
 ### Added
 - **Match macOS appearance.** Settings ▸ Appearance grew a toggle that swaps your theme for its
   light/dark sibling as the system switches — Bonsai Dark ↔ Bonsai Light, Catppuccin Mocha ↔
