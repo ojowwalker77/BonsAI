@@ -13,11 +13,6 @@ final class ComposerTextView: NSTextView {
   /// When set, pasted plain text may be turned into connector chips before insertion.
   weak var smartPasteHandler: ComposerSmartPasteHandling?
 
-  override func performKeyEquivalent(with event: NSEvent) -> Bool {
-    if ComposerPreferences.handleEditorFontKeyEquivalent(event) { return true }
-    return super.performKeyEquivalent(with: event)
-  }
-
   override func becomeFirstResponder() -> Bool {
     let became = super.becomeFirstResponder()
     if became { onFocusChange?(true) }

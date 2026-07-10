@@ -94,7 +94,7 @@ enum BoardExporter {
     // ARC that double-frees the window on teardown (an over-release crash in `objc_release`). Own
     // the lifetime explicitly and just order it out instead of `close()`.
     window.isReleasedWhenClosed = false
-    window.appearance = ComposerPreferences.theme.nsAppearance
+    window.appearance = ComposerPreferences.effectiveTheme.nsAppearance
     // Belt-and-braces: paint the window/host background with the canvas color so translucent or
     // unpainted regions never composite down to black.
     window.isOpaque = true

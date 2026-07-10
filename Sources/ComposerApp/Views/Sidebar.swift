@@ -41,7 +41,8 @@ struct SidebarButton: View {
 
 /// The agent toggle — a word-mark pill matching the Export pill's rest label: flat `body` ink,
 /// hover feedback is the trackpad tick. There's no active ring or fill; open/closed reads
-/// from the dock itself. Lives in the top-right actions pill.
+/// from the dock itself. Lives in the top-right actions pill. (Issue #75 proposed an accent
+/// treatment; tried July 2026 and REVERTED — it cost too much aesthetically. Don't redo.)
 struct SidebarAgentButton: View {
   var active: Bool
   var side: CGFloat = WindowChrome.controlHeight

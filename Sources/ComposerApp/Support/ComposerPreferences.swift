@@ -33,6 +33,25 @@ enum ComposerTheme: String, CaseIterable, Identifiable {
   var nsAppearance: NSAppearance? {
     NSAppearance(named: flavor.isDark ? .darkAqua : .aqua)
   }
+
+  /// This theme's dark sibling — itself if already dark. Pairs the two Bonsai looks and the two
+  /// Catppuccin flavors, so "match macOS appearance" swaps within the family the user picked.
+  var darkCounterpart: ComposerTheme {
+    switch self {
+    case .bonsaiLight: .bonsaiDark
+    case .catppuccinLatte: .catppuccinMocha
+    default: self
+    }
+  }
+
+  /// This theme's light sibling — itself if already light.
+  var lightCounterpart: ComposerTheme {
+    switch self {
+    case .bonsaiDark: .bonsaiLight
+    case .catppuccinMocha: .catppuccinLatte
+    default: self
+    }
+  }
 }
 
 /// The app-wide body font family. `.system` is San Francisco — pixel-identical to today's
@@ -91,6 +110,9 @@ enum ComposerPreferences {
   static let editorFontSizeKey = "composer.editor.fontPointSize"
   /// App-wide theme. Defaults to Bonsai Dark — the signature look.
   static let themeKey = "composer.appearance.theme"
+  /// When on, the rendered theme swaps to the picked theme's light/dark counterpart as macOS
+  /// switches appearance (see `effectiveTheme`). Off by default — the pick is literal.
+  static let followSystemAppearanceKey = "composer.appearance.followSystem"
   /// App-wide body font family. Defaults to `.system` (San Francisco) — zero visual change.
   static let appFontFamilyKey = "composer.appearance.fontFamily"
   /// App language override. `.system` follows macOS language preferences.
@@ -104,7 +126,9 @@ enum ComposerPreferences {
   static let maxEditorFontSize: CGFloat = 28
   static let fontSizeStep: CGFloat = 1
 
-  private static var defaultEditorFontSize: CGFloat {
+  /// Internal so the Settings stepper can seed its @AppStorage default with the same value the
+  /// clamped `editorFontSize` getter falls back to.
+  static var defaultEditorFontSize: CGFloat {
     NSFont.preferredFont(forTextStyle: .body).pointSize + 2
   }
 
@@ -117,9 +141,27 @@ enum ComposerPreferences {
     appFont(ofSize: editorFontSize)
   }
 
-  /// The app-wide theme (see `ComposerTheme`). Defaults to Bonsai Dark.
+  /// The app-wide theme (see `ComposerTheme`). Defaults to Bonsai Dark. This is the STORED pick —
+  /// rendering reads `effectiveTheme`, which applies the follow-system swap on top.
   static var theme: ComposerTheme {
     ComposerTheme(rawValue: UserDefaults.standard.string(forKey: themeKey) ?? "") ?? .bonsaiDark
+  }
+
+  /// Whether the rendered theme tracks macOS Light/Dark (Settings ▸ Appearance).
+  static var followsSystemAppearance: Bool {
+    get { UserDefaults.standard.bool(forKey: followSystemAppearanceKey) }
+    set { UserDefaults.standard.set(newValue, forKey: followSystemAppearanceKey) }
+  }
+
+  /// The theme to RENDER right now: the stored pick, swapped to its light/dark counterpart when
+  /// "match macOS appearance" is on. Every appearance consumer (window appearance, `Theme.flavor`,
+  /// export) reads this; only Settings' theme gallery shows the stored pick.
+  static var effectiveTheme: ComposerTheme {
+    let picked = theme
+    guard followsSystemAppearance else { return picked }
+    let appearance = NSApplication.shared.effectiveAppearance
+    let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    return isDark ? picked.darkCounterpart : picked.lightCounterpart
   }
 
   /// The app-wide body font family (see `ComposerFontFamily`). Defaults to `.system`.
@@ -183,39 +225,6 @@ enum ComposerPreferences {
     case .black: return .black
     default: return .regular
     }
-  }
-
-  @discardableResult
-  static func adjustEditorFontSize(by delta: CGFloat) -> CGFloat {
-    let next = clamp(editorFontSize + delta, minEditorFontSize, maxEditorFontSize)
-    UserDefaults.standard.set(Double(next), forKey: editorFontSizeKey)
-    NotificationCenter.default.post(name: .composerFontSizeChanged, object: nil, userInfo: ["size": next])
-    return next
-  }
-
-  @discardableResult
-  static func resetEditorFontSize() -> CGFloat {
-    UserDefaults.standard.removeObject(forKey: editorFontSizeKey)
-    let size = editorFontSize
-    NotificationCenter.default.post(name: .composerFontSizeChanged, object: nil, userInfo: ["size": size])
-    return size
-  }
-
-  static func handleEditorFontKeyEquivalent(_ event: NSEvent) -> Bool {
-    let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
-    guard flags == [.command] || flags == [.command, .shift] else { return false }
-
-    let raw = event.charactersIgnoringModifiers?.lowercased()
-    let modified = event.characters?.lowercased()
-    if raw == "=" || modified == "+" {
-      adjustEditorFontSize(by: fontSizeStep)
-      return true
-    }
-    if raw == "-" || modified == "_" {
-      adjustEditorFontSize(by: -fontSizeStep)
-      return true
-    }
-    return false
   }
 
   static func clampedCanvasTransparency(_ value: Double) -> Double {

@@ -8,8 +8,8 @@ import AppKit
 /// semantic roles onto flavor slots. A theme switch rebuilds the canvas (PanelController), so
 /// plain colors are safe here.
 enum Theme {
-  /// The active flavor (Settings ▸ Appearance ▸ Theme).
-  static var flavor: ThemeFlavor { ComposerPreferences.theme.flavor }
+  /// The active flavor (Settings ▸ Appearance ▸ Theme, after the follow-system swap).
+  static var flavor: ThemeFlavor { ComposerPreferences.effectiveTheme.flavor }
 
   /// Resolve an element tint slot against the active flavor (nil slot or out of range = nil).
   static func tintColor(_ slot: Int?) -> NSColor? {
@@ -300,16 +300,39 @@ extension View {
 /// The canvas backdrop: the solid board surface (black in dark, paper white in light) over a
 /// behind-window desktop blur. At the default 0 transparency the surface is fully opaque —
 /// indistinguishable from solid; sliding up recedes it so the frosted desktop shows through.
+///
+/// Full screen pins the surface SOLID regardless of the slider: there is no desktop behind a
+/// full-screen window to sample, so the "glass" renders as a flat gray HUD wash there instead
+/// of the flavor's canvas. The slider resumes on exit.
 struct ComposerPanelBackground: View {
   @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
+  @State private var isFullScreen = false
 
   var body: some View {
-    let glass = ComposerPreferences.clampedCanvasTransparency(canvasTransparency)
-      / ComposerPreferences.maxCanvasTransparency
+    let glass = isFullScreen
+      ? 0.0
+      : ComposerPreferences.clampedCanvasTransparency(canvasTransparency)
+        / ComposerPreferences.maxCanvasTransparency
     ZStack {
-      VisualEffectBackground(material: .hudWindow, blending: .behindWindow, state: .active)
+      if glass > 0 {
+        VisualEffectBackground(material: .hudWindow, blending: .behindWindow, state: .active)
+      }
       Theme.Palette.windowCanvas.opacity(1.0 - 0.65 * glass)
     }
     .ignoresSafeArea()
+    // The canvas can (re)mount while already full screen — a theme switch rebuilds it — so the
+    // initial state is read from the board window, not assumed false.
+    .onAppear {
+      isFullScreen = NSApp.windows.contains { $0 is FloatingPanel && $0.styleMask.contains(.fullScreen) }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { note in
+      if note.object is FloatingPanel { isFullScreen = true }
+    }
+    // `didExit`, not `willExit`: the surface must stay solid until the exit animation has
+    // actually finished — flipping on `willExit` reinstated the gray HUD wash mid-transition,
+    // while the window itself is still deliberately opaque (PanelController restores on did).
+    .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
+      if note.object is FloatingPanel { isFullScreen = false }
+    }
   }
 }
