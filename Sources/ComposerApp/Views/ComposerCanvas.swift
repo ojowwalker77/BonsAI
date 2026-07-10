@@ -610,9 +610,13 @@ struct ComposerCanvas: View {
     if let id = board.addFreehandStroke(frame: frame, points: normalized) {
       tool = .select
       // Auto-snap (Settings ▸ Drawing): a confident read converts on pen-up, no chip — the rough
-      // stroke stays its own undo step, so ⌘Z restores the original ink like OneNote.
+      // stroke stays its own undo step, so ⌘Z restores the original ink like OneNote. Arrows are
+      // EXCLUDED from auto conversion: too many ordinary strokes read as arrow-with-a-hook and
+      // kept snapping under the pen (1.4.5 feedback) — an arrow read falls back to the chip, so
+      // it's one click when it's actually wanted.
       if ComposerPreferences.autoSnapFreehand,
-         let recognition = ShapeRecognizer.recognize(boardPoints) {
+         let recognition = ShapeRecognizer.recognize(boardPoints),
+         !recognition.kind.isArrow {
         board.convertFreehand(id, to: recognition.kind)
       } else {
         // The flagship promotion: a confidently recognized stroke offers to become that clean shape.
