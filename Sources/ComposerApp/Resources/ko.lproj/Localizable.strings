@@ -512,3 +512,9 @@
 "Match macOS appearance" = "macOS 화면 모드 따르기";
 "Swap to your theme's light or dark sibling when the system switches." = "시스템 전환 시 테마의 라이트/다크 버전으로 바뀝니다.";
 "Text size" = "텍스트 크기";
+"Drawing" = "그리기";
+"How the board behaves while you draw." = "그리는 동안 보드의 동작 방식을 설정합니다.";
+"Keep tool selected" = "도구 선택 유지";
+"Stay on the active tool after each shape or stroke. Esc returns to the pointer." = "도형이나 스트로크 후에도 현재 도구를 유지합니다. Esc 키로 포인터로 돌아갑니다.";
+"Snap sketches into shapes" = "스케치를 도형으로 스냅";
+"Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "인식된 스트로크는 펜을 떼면 깔끔한 도형이 됩니다. 끄면 제안 칩이 유지됩니다.";

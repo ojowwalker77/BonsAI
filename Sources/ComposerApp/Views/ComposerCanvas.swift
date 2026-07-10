@@ -529,7 +529,7 @@ struct ComposerCanvas: View {
     let boardPoint = CGPoint(x: (point.x - pan.width) / effectiveScale,
                              y: (point.y - pan.height) / effectiveScale)
     let id = board.addElement(kind, at: boardPoint)
-    tool = .select
+    resetToolAfterCommit()
     // Text and equation both drop straight into edit mode — an empty card is useless until you
     // type. The editor now lives in the centered `EditingStage` (keyed off `editingCardID`), which
     // owns its own focus delay, so both kinds just arm edit mode after the card mounts.
@@ -544,7 +544,7 @@ struct ComposerCanvas: View {
   /// "just start writing" gesture, regardless of the active tool.
   private func handleDoubleTap(at point: CGPoint) {
     let id = board.addCard(at: boardPoint(forViewport: point))
-    tool = .select
+    resetToolAfterCommit()
     // Text edits inline: begin editing, then hand the caret to the in-card editor once it mounts.
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
       board.beginEditing(id)
@@ -572,7 +572,7 @@ struct ComposerCanvas: View {
     guard elementDraft != nil else { return }
     guard let kind = tool.elementKind else { return }
     if let id = board.addDrawnElement(kind, from: boardPoint(forViewport: start), to: boardPoint(forViewport: end)) {
-      tool = .select
+      resetToolAfterCommit()
       // A perpendicular partner means this pair of lines/arrows reads as axes — offer a graph.
       if kind == .line || kind == .arrow { offerGraphPromotion(id) }
     }
@@ -608,9 +608,25 @@ struct ComposerCanvas: View {
       )
     }
     if let id = board.addFreehandStroke(frame: frame, points: normalized) {
+      resetToolAfterCommit()
+      // Auto-snap (Settings ▸ Drawing): a confident read converts on pen-up, no chip — the rough
+      // stroke stays its own undo step, so ⌘Z restores the original ink like OneNote.
+      if ComposerPreferences.autoSnapFreehand,
+         let recognition = ShapeRecognizer.recognize(boardPoints) {
+        board.convertFreehand(id, to: recognition.kind)
+      } else {
+        // The flagship promotion: a confidently recognized stroke offers to become that clean shape.
+        offerFreehandPromotion(id, boardPoints: boardPoints)
+      }
+    }
+  }
+
+  /// After a placement/stroke commits, snap back to the pointer — unless the user opted into
+  /// persistent tools (Settings ▸ Appearance ▸ Drawing), where the active tool stays armed until
+  /// switched manually. Esc always resets (see `handleEscapeBoard`).
+  private func resetToolAfterCommit() {
+    if !ComposerPreferences.persistentToolSelection {
       tool = .select
-      // The flagship promotion: a confidently recognized stroke offers to become that clean shape.
-      offerFreehandPromotion(id, boardPoints: boardPoints)
     }
   }
 

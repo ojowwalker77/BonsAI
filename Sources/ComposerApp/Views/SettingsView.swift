@@ -222,6 +222,8 @@ private struct SettingsContent: View {
   @AppStorage(ComposerPreferences.languageKey) private var languageRaw = AppLanguage.system.rawValue
   @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
   @AppStorage(ComposerPreferences.followSystemAppearanceKey) private var followSystemAppearance = false
+  @AppStorage(ComposerPreferences.persistentToolSelectionKey) private var persistentToolSelection = false
+  @AppStorage(ComposerPreferences.autoSnapFreehandKey) private var autoSnapFreehand = false
   /// The raw text-size preference. Written directly by the stepper; the change notification is
   /// posted from `.onChange` — AFTER the SwiftUI update transaction — because the observer
   /// rebuilds the whole canvas, and doing that synchronously from inside a binding setter tears
@@ -641,6 +643,54 @@ private struct SettingsContent: View {
       themeCard
       fontCard
       canvasGlassCard
+      drawingCard
+    }
+  }
+
+  /// Canvas drawing behavior — both read at commit time on the canvas, so flipping them needs no
+  /// rebuild notification.
+  private var drawingCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Drawing", "How the board behaves while you draw.")
+      VStack(spacing: 0) {
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Keep tool selected".localizedUI)
+              .font(.callout.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+            Text("Stay on the active tool after each shape or stroke. Esc returns to the pointer.".localizedUI)
+              .font(.caption)
+              .foregroundStyle(Theme.Palette.menuDesc)
+          }
+          Spacer(minLength: 12)
+          Toggle("", isOn: $persistentToolSelection)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(Theme.Palette.accent)
+        }
+        .padding(.vertical, 11)
+
+        rowDivider
+
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Snap sketches into shapes".localizedUI)
+              .font(.callout.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+            Text("Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip.".localizedUI)
+              .font(.caption)
+              .foregroundStyle(Theme.Palette.menuDesc)
+          }
+          Spacer(minLength: 12)
+          Toggle("", isOn: $autoSnapFreehand)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(Theme.Palette.accent)
+        }
+        .padding(.vertical, 11)
+      }
+      .padding(.horizontal, 14)
+      .settingsCard()
     }
   }
 

@@ -512,3 +512,9 @@
 "Match macOS appearance" = "macOSの外観に合わせる";
 "Swap to your theme's light or dark sibling when the system switches." = "システムの切り替えに合わせて、テーマのライト/ダーク版に切り替わります。";
 "Text size" = "テキストサイズ";
+"Drawing" = "描画";
+"How the board behaves while you draw." = "描画中のボードの動作を設定します。";
+"Keep tool selected" = "ツールの選択を保持";
+"Stay on the active tool after each shape or stroke. Esc returns to the pointer." = "図形やストロークを描いた後もツールを維持します。Escでポインタに戻ります。";
+"Snap sketches into shapes" = "スケッチを図形にスナップ";
+"Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "認識されたストロークはペンを離すと整った図形になります。オフの場合は提案チップを表示します。";

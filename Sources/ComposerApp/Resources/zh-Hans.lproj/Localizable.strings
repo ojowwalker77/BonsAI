@@ -512,3 +512,9 @@
 "Match macOS appearance" = "跟随 macOS 外观";
 "Swap to your theme's light or dark sibling when the system switches." = "系统切换时，自动换用主题的浅色或深色版本。";
 "Text size" = "文字大小";
+"Drawing" = "绘图";
+"How the board behaves while you draw." = "绘制时画板的行为方式。";
+"Keep tool selected" = "保持工具选中";
+"Stay on the active tool after each shape or stroke. Esc returns to the pointer." = "每次绘制图形或笔画后保持当前工具。按 Esc 返回指针。";
+"Snap sketches into shapes" = "草图自动转为图形";
+"Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "识别出的笔画在抬笔时变为规整图形。关闭时保留建议提示。";

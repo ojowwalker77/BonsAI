@@ -510,3 +510,9 @@
 "Match macOS appearance" = "Match macOS appearance";
 "Swap to your theme's light or dark sibling when the system switches." = "Swap to your theme's light or dark sibling when the system switches.";
 "Text size" = "Text size";
+"Drawing" = "Drawing";
+"How the board behaves while you draw." = "How the board behaves while you draw.";
+"Keep tool selected" = "Keep tool selected";
+"Stay on the active tool after each shape or stroke. Esc returns to the pointer." = "Stay on the active tool after each shape or stroke. Esc returns to the pointer.";
+"Snap sketches into shapes" = "Snap sketches into shapes";
+"Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip.";
