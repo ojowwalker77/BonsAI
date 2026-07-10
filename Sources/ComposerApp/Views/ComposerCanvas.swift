@@ -17,6 +17,10 @@ struct ComposerCanvas: View {
   @State private var isWorking = false
   @State private var toast: Toast?
   @State private var lastViewportSize: CGSize = .zero
+  /// Bumped on text-size/font-family changes: `.id()` on the board subtree remounts it (fonts and
+  /// measurement caches re-resolve) WITHOUT tearing down the whole canvas the way a theme rebuild
+  /// does — the Settings overlay (where these controls live) keeps its identity and scroll.
+  @State private var typographyRevision = 0
   @State private var selectionRect: CGRect?
   /// True while an EXTERNAL image drag (Finder etc.) is hovering the canvas — drives the
   /// drop-target treatment. In-canvas card drags never set this (onDrop's isTargeted only
@@ -103,6 +107,12 @@ struct ComposerCanvas: View {
     .onChange(of: isWorking) { _, working in
       NotificationCenter.default.post(name: .composerBusyChanged, object: nil, userInfo: ["busy": working])
     }
+    .onReceive(NotificationCenter.default.publisher(for: .composerFontSizeChanged)) { _ in
+      typographyRevision += 1
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .composerFontFamilyChanged)) { _ in
+      typographyRevision += 1
+    }
   }
 
   @ViewBuilder
@@ -116,6 +126,7 @@ struct ComposerCanvas: View {
         toastView
       }
       .frame(width: inner.width, height: inner.height, alignment: .topLeading)
+      .id(typographyRevision)
 
       // Active-card overlays resolve through screen → window space, so they live in
       // full-window coordinates and keep working while the board itself is transformed.

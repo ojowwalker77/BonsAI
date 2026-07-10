@@ -221,6 +221,13 @@ private struct SettingsContent: View {
   @AppStorage(ComposerPreferences.appFontFamilyKey) private var appFontRaw = ComposerFontFamily.system.rawValue
   @AppStorage(ComposerPreferences.languageKey) private var languageRaw = AppLanguage.system.rawValue
   @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
+  @AppStorage(ComposerPreferences.followSystemAppearanceKey) private var followSystemAppearance = false
+  /// The raw text-size preference. Written directly by the stepper; the change notification is
+  /// posted from `.onChange` — AFTER the SwiftUI update transaction — because the observer
+  /// rebuilds the whole canvas, and doing that synchronously from inside a binding setter tears
+  /// down the very view committing the value (the stepper ate its own click).
+  @AppStorage(ComposerPreferences.editorFontSizeKey) private var editorFontSize
+    = Double(ComposerPreferences.defaultEditorFontSize)
   /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
   /// visibility. Refreshed in `onAppear`; flipped false the moment the user resets.
   @State private var agentHasGrants = false
@@ -679,9 +686,32 @@ private struct SettingsContent: View {
           }
         }
       }
+      // The app-wide text size. This moved here from the ⌘+/⌘− shortcut, which now zooms the
+      // canvas (as documented) instead of silently resizing every text card at once (#72).
+      // Same slider grammar as the Canvas transparency card.
+      VStack(spacing: 12) {
+        HStack(alignment: .firstTextBaseline) {
+          Text("Text size".localizedUI)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(Theme.Palette.body)
+          Spacer(minLength: 12)
+          Text("\(Int(editorFontSize)) pt")
+            .font(.callout.monospacedDigit().weight(.semibold))
+            .foregroundStyle(Theme.Palette.body)
+        }
+        Slider(value: $editorFontSize,
+               in: Double(ComposerPreferences.minEditorFontSize)...Double(ComposerPreferences.maxEditorFontSize),
+               step: Double(ComposerPreferences.fontSizeStep))
+          .tint(Theme.Palette.accent)
+      }
+      .padding(14)
+      .settingsCard()
     }
     .onChange(of: appFontRaw) { _, _ in
       NotificationCenter.default.post(name: .composerFontFamilyChanged, object: nil)
+    }
+    .onChange(of: editorFontSize) { _, _ in
+      NotificationCenter.default.post(name: .composerFontSizeChanged, object: nil)
     }
   }
 
@@ -720,6 +750,8 @@ private struct SettingsContent: View {
 
   /// The theme gallery: one live-preview card per flavor, painted from that flavor's own palette
   /// (not the current one), so every option shows exactly what it looks like before you commit.
+  /// Below it, "Match macOS appearance" swaps the pick for its light/dark sibling as the system
+  /// switches — the gallery keeps showing the stored pick (the family), not the swap result.
   private var themeCard: some View {
     VStack(alignment: .leading, spacing: 8) {
       pageHeader("Theme", "Pick the palette for the whole app.")
@@ -730,8 +762,28 @@ private struct SettingsContent: View {
           }
         }
       }
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Match macOS appearance".localizedUI)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(Theme.Palette.body)
+          Text("Swap to your theme's light or dark sibling when the system switches.".localizedUI)
+            .font(.caption)
+            .foregroundStyle(Theme.Palette.menuDesc)
+        }
+        Spacer(minLength: 12)
+        Toggle("", isOn: $followSystemAppearance)
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .tint(Theme.Palette.accent)
+      }
+      .padding(14)
+      .settingsCard()
     }
     .onChange(of: themeRaw) { _, _ in
+      NotificationCenter.default.post(name: .composerThemeChanged, object: nil)
+    }
+    .onChange(of: followSystemAppearance) { _, _ in
       NotificationCenter.default.post(name: .composerThemeChanged, object: nil)
     }
   }

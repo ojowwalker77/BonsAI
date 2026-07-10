@@ -7,6 +7,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let menuBarController = MenuBarController()
   /// Held strongly so it keeps firing — a `DispatchSourceSignal` is cancelled on dealloc.
   private var sigtermSource: DispatchSourceSignal?
+  /// Watches macOS Light/Dark for the "match macOS appearance" setting. NSApp's own appearance is
+  /// never pinned, so `effectiveAppearance` tracks the system even while our windows are themed.
+  private var appearanceObservation: NSKeyValueObservation?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
@@ -32,6 +35,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NotificationCenter.default.addObserver(
       self, selector: #selector(captureToBoard),
       name: .composerCaptureToBoard, object: nil)
+
+    // A system Light/Dark switch re-resolves the effective theme when "match macOS appearance"
+    // is on — routed through the same notification a manual theme pick posts, so the window
+    // appearance and canvas rebuild in one place (PanelController.applyTheme).
+    appearanceObservation = NSApp.observe(\.effectiveAppearance) { _, _ in
+      DispatchQueue.main.async {
+        guard ComposerPreferences.followsSystemAppearance else { return }
+        NotificationCenter.default.post(name: .composerThemeChanged, object: nil)
+      }
+    }
 
     panelController.show()
   }

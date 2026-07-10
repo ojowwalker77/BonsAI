@@ -509,3 +509,6 @@
 "Pick the palette for the whole app." = "アプリ全体のパレットを選びます。";
 "Type @ in a card to attach live context. Copied drafts become self-contained text - the source is resolved at copy time." = "カードに @ を入力するとライブコンテキストを添付できます。コピーしたドラフトは自己完結したテキストになります - ソースはコピー時に解決されます。";
 "The essentials for writing, arranging, and exporting without breaking flow." = "流れを止めずに、書く・並べる・書き出すための要点。";
+"Match macOS appearance" = "macOSの外観に合わせる";
+"Swap to your theme's light or dark sibling when the system switches." = "システムの切り替えに合わせて、テーマのライト/ダーク版に切り替わります。";
+"Text size" = "テキストサイズ";

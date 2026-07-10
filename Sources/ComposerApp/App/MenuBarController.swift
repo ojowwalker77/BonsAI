@@ -44,11 +44,29 @@ final class MenuBarController: NSObject {
   private func showCapturePanel() {
     let panel = capturePanel ?? makeCapturePanel()
     capturePanel = panel
+    // Re-themed on every show (not just on make): the panel is cached, so this is where a theme
+    // switched since the last capture catches up.
+    applyTheme(to: panel)
     positionCapturePanel(panel)
     panel.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
     captureField?.becomeFirstResponder()
     captureField?.selectText(nil)
+  }
+
+  /// Paint the capture panel from the active flavor — the same tokens as the board, so the quick
+  /// entry reads as a shard of the app, not a system dialog. Without this the field kept AppKit's
+  /// defaults, which rendered near-black placeholder/hint text on the dark themes.
+  private func applyTheme(to panel: NSPanel) {
+    panel.appearance = ComposerPreferences.effectiveTheme.nsAppearance
+    panel.backgroundColor = Theme.nsWindowCanvas.withAlphaComponent(0.94)
+    guard let field = captureField else { return }
+    let font = ComposerPreferences.appFont(ofSize: 14)
+    field.font = font
+    field.textColor = Theme.nsBodyText
+    field.placeholderAttributedString = NSAttributedString(
+      string: "Capture a thought...  Return to send".localizedUI,
+      attributes: [.foregroundColor: Theme.nsPlaceholderText, .font: font])
   }
 
   private func makeCapturePanel() -> NSPanel {
@@ -63,12 +81,9 @@ final class MenuBarController: NSObject {
     panel.level = .floating
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     panel.isMovableByWindowBackground = true
-    panel.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.92)
     panel.hasShadow = true
 
     let field = NSTextField(string: "")
-    field.placeholderString = "Capture a thought...  Return to send".localizedUI
-    field.font = .systemFont(ofSize: 14)
     field.isBordered = false
     field.backgroundColor = .clear
     field.focusRingType = .none

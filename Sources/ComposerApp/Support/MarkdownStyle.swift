@@ -141,10 +141,12 @@ enum MarkdownStyle {
     case .quote:
       return [.foregroundColor: Theme.flavor.subtext0,
               .font: NSFontManager.shared.convert(ComposerPreferences.appFont(ofSize: size), toHaveTrait: .italicFontMask)]
+    // Bullets, numbers, and empty boxes are CONTENT, not syntax chrome — they carry the list's
+    // structure, so they read from the subtext ramp (overlay1 was near-invisible on dark bases).
     case .listMarker:
-      return [.foregroundColor: Theme.flavor.overlay1]
+      return [.foregroundColor: Theme.flavor.subtext0]
     case .checkboxTodo:
-      return [.foregroundColor: Theme.flavor.overlay1]
+      return [.foregroundColor: Theme.flavor.subtext0]
     case .checkboxDone:
       return [.foregroundColor: Theme.flavor.accent]
     case .doneText:
@@ -251,7 +253,8 @@ enum MarkdownStyle {
         attributed[range].foregroundColor = Color(nsColor: Theme.flavor.subtext0)
         attributed[range].font = ComposerPreferences.appSwiftUIFont(size: size).italic()
       case .listMarker, .checkboxTodo:
-        attributed[range].foregroundColor = Color(nsColor: Theme.flavor.overlay1)
+        // Content, not syntax — same subtext ramp as the editor path above.
+        attributed[range].foregroundColor = Color(nsColor: Theme.flavor.subtext0)
       case .checkboxDone:
         attributed[range].foregroundColor = Color(nsColor: Theme.flavor.accent)
       case .doneText:

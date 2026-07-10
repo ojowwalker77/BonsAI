@@ -509,3 +509,6 @@
 "Pick the palette for the whole app." = "为整个应用选择配色。";
 "Type @ in a card to attach live context. Copied drafts become self-contained text - the source is resolved at copy time." = "在卡片中输入 @ 以附加实时上下文。复制的草稿会成为自包含文本 - 来源会在复制时解析。";
 "The essentials for writing, arranging, and exporting without breaking flow." = "用于书写、排列和导出的核心功能，不打断心流。";
+"Match macOS appearance" = "跟随 macOS 外观";
+"Swap to your theme's light or dark sibling when the system switches." = "系统切换时，自动换用主题的浅色或深色版本。";
+"Text size" = "文字大小";
