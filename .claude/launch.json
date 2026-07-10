@@ -1,0 +1,16 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "open-knowledge-ui",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": [
+        "-l",
+        "-c",
+        "# ok-ui-v1\nUIPORT=\"${PORT:-39848}\"\nunset PORT\nUSER_BUNDLE=\"$HOME/Applications/OpenKnowledge.app/Contents/Resources/cli/bin/ok.sh\"\n[ -f \"$USER_BUNDLE\" ] && [ -x \"$USER_BUNDLE\" ] && exec \"$USER_BUNDLE\" start --ui-port \"$UIPORT\"\nBUNDLE=\"/Applications/OpenKnowledge.app/Contents/Resources/cli/bin/ok.sh\"\n[ -f \"$BUNDLE\" ] && [ -x \"$BUNDLE\" ] && exec \"$BUNDLE\" start --ui-port \"$UIPORT\"\ncommand -v npx >/dev/null 2>&1 && exec npx -y @inkeep/open-knowledge@latest start --ui-port \"$UIPORT\"\nfor d in \"$HOME/.nvm/versions/node\"/*/bin \"$HOME/.fnm/node-versions\"/*/installation/bin \"$HOME/.asdf/installs/nodejs\"/*/bin /opt/homebrew/bin /usr/local/bin \"$HOME/.local/bin\" \"$HOME/.volta/bin\"; do\n  [ -f \"$d/npx\" ] && [ -x \"$d/npx\" ] && exec \"$d/npx\" -y @inkeep/open-knowledge@latest start --ui-port \"$UIPORT\"\ndone\necho \"OpenKnowledge: install OK Desktop or Node.js 24+, then restart your editor\" >&2\nexit 127"
+      ],
+      "port": 39848,
+      "autoPort": true
+    }
+  ]
+}
