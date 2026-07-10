@@ -688,18 +688,21 @@ private struct SettingsContent: View {
       }
       // The app-wide text size. This moved here from the ⌘+/⌘− shortcut, which now zooms the
       // canvas (as documented) instead of silently resizing every text card at once (#72).
-      HStack(spacing: 12) {
-        Text("Text size".localizedUI)
-          .font(.callout.weight(.semibold))
-          .foregroundStyle(Theme.Palette.body)
-        Spacer(minLength: 12)
-        Text("\(Int(editorFontSize)) pt")
-          .font(.callout.monospacedDigit().weight(.semibold))
-          .foregroundStyle(Theme.Palette.body)
-        Stepper("", value: $editorFontSize,
-                in: Double(ComposerPreferences.minEditorFontSize)...Double(ComposerPreferences.maxEditorFontSize),
-                step: Double(ComposerPreferences.fontSizeStep))
-          .labelsHidden()
+      // Same slider grammar as the Canvas transparency card.
+      VStack(spacing: 12) {
+        HStack(alignment: .firstTextBaseline) {
+          Text("Text size".localizedUI)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(Theme.Palette.body)
+          Spacer(minLength: 12)
+          Text("\(Int(editorFontSize)) pt")
+            .font(.callout.monospacedDigit().weight(.semibold))
+            .foregroundStyle(Theme.Palette.body)
+        }
+        Slider(value: $editorFontSize,
+               in: Double(ComposerPreferences.minEditorFontSize)...Double(ComposerPreferences.maxEditorFontSize),
+               step: Double(ComposerPreferences.fontSizeStep))
+          .tint(Theme.Palette.accent)
       }
       .padding(14)
       .settingsCard()

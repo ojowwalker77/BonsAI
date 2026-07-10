@@ -16,14 +16,9 @@ final class PanelController: NSObject, NSWindowDelegate {
     NotificationCenter.default.addObserver(
       forName: .composerThemeChanged, object: nil, queue: .main
     ) { [weak self] _ in MainActor.assumeIsolated { self?.applyTheme() } }
-    NotificationCenter.default.addObserver(
-      forName: .composerFontFamilyChanged, object: nil, queue: .main
-    ) { [weak self] _ in MainActor.assumeIsolated { self?.rebuildCanvas() } }
-    // The editor text size (Settings ▸ Appearance) feeds every static card's layout, so a change
-    // rebuilds the canvas the same way a font-family switch does. The live editor updates itself.
-    NotificationCenter.default.addObserver(
-      forName: .composerFontSizeChanged, object: nil, queue: .main
-    ) { [weak self] _ in MainActor.assumeIsolated { self?.rebuildCanvas() } }
+    // Font size/family changes deliberately DON'T rebuild here: the canvas remounts just its
+    // board subtree (ComposerCanvas.typographyRevision), so the Settings overlay hosting those
+    // controls keeps its identity — a full rebuild reset its scroll position on every click.
     NotificationCenter.default.addObserver(
       forName: .composerLanguageChanged, object: nil, queue: .main
     ) { [weak self] _ in MainActor.assumeIsolated { self?.rebuildCanvas() } }
