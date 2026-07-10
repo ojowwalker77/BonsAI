@@ -13,6 +13,13 @@ under the new version heading.
 
 ## [1.4.5] - 2026-07-10
 
+### Fixed
+- **Arrows land where you draw them.** A bound arrow used to re-route through the card's center
+  on release — "aim-assist" that visibly moved the arrow away from where the preview showed it.
+  Bindings now remember the exact spot you attached (normalized to the card's frame): the arrow
+  commits where aimed and keeps that attachment as the card moves. Agent-drawn connections and
+  legacy boards keep the center routing.
+
 ### Added
 - **Text boxes hug their text.** A text card's width now follows the longest line up to a wrap
   cap, then wraps and grows down — Figma/Freeform point text, live while you type, instead of a

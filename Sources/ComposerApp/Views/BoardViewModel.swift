@@ -833,6 +833,8 @@ final class BoardViewModel: ObservableObject {
     cards[targetIndex].points = nil
     cards[targetIndex].startBindingID = nil
     cards[targetIndex].endBindingID = nil
+    cards[targetIndex].startBindingAnchor = nil
+    cards[targetIndex].endBindingAnchor = nil
     cards[targetIndex].frame = targetFrame
     if editingCardID == id { editingCardID = nil }
     refreshBoundArrows()
@@ -1356,6 +1358,8 @@ final class BoardViewModel: ObservableObject {
     if cards[i].elementKind == .arrow {
       cards[i].startBindingID = nil
       cards[i].endBindingID = nil
+      cards[i].startBindingAnchor = nil
+      cards[i].endBindingAnchor = nil
     }
     cards[i].frame = next
     refreshBoundArrows()
@@ -1517,6 +1521,8 @@ final class BoardViewModel: ObservableObject {
       copy.whoWrote = nextAuthor
       copy.startBindingID = nil
       copy.endBindingID = nil
+      copy.startBindingAnchor = nil
+      copy.endBindingAnchor = nil
       if copy.elementKind == .image, let path = copy.imagePath {
         copy.imagePath = Self.storedImagePath(for: path)
       }
@@ -1765,6 +1771,8 @@ final class BoardViewModel: ObservableObject {
     for i in cards.indices where ids.contains(cards[i].id) && cards[i].elementKind == .arrow {
       cards[i].startBindingID = nil
       cards[i].endBindingID = nil
+      cards[i].startBindingAnchor = nil
+      cards[i].endBindingAnchor = nil
     }
   }
 
@@ -1774,14 +1782,59 @@ final class BoardViewModel: ObservableObject {
     var excluded: Set<UUID> = [id]
     if let start = nearestConnectable(to: endpoints.start, excluding: excluded) {
       cards[i].startBindingID = start.id
+      cards[i].startBindingAnchor = Self.bindingAnchor(on: start.frame, drawn: endpoints.start, otherEnd: endpoints.end)
       excluded.insert(start.id)
     }
     if let end = nearestConnectable(to: endpoints.end, excluding: excluded) {
       cards[i].endBindingID = end.id
+      cards[i].endBindingAnchor = Self.bindingAnchor(on: end.frame, drawn: endpoints.end, otherEnd: endpoints.start)
     }
     if cards[i].startBindingID != nil || cards[i].endBindingID != nil {
       updateBoundArrowGeometry(at: i)
     }
+  }
+
+  /// The normalized point on `frame` where a drawn endpoint attaches — the spot the user actually
+  /// aimed at. Inside the frame: where the drawn segment enters the box (so a preview line piercing
+  /// the box clips to its edge, direction intact). Outside (the 16pt edge slop): the nearest
+  /// boundary point. The bound endpoint then LANDS there, and stays there as the card moves — the
+  /// old center-ray re-route ("aim-assist") never touches a hand-drawn arrow again.
+  static func bindingAnchor(on frame: CGRect, drawn: CGPoint, otherEnd: CGPoint) -> CanvasPoint {
+    let point: CGPoint
+    if frame.contains(drawn) {
+      point = segmentEntry(into: frame, from: otherEnd, to: drawn) ?? drawn
+    } else {
+      point = CGPoint(x: min(max(drawn.x, frame.minX), frame.maxX),
+                      y: min(max(drawn.y, frame.minY), frame.maxY))
+    }
+    return CanvasPoint(
+      x: Double((point.x - frame.minX) / max(frame.width, 1)),
+      y: Double((point.y - frame.minY) / max(frame.height, 1)))
+  }
+
+  /// First intersection of the segment `from → to` with `rect` (Liang–Barsky entry point). nil when
+  /// `from` is already inside or the segment misses the rect entirely.
+  private static func segmentEntry(into rect: CGRect, from: CGPoint, to: CGPoint) -> CGPoint? {
+    guard !rect.contains(from) else { return nil }
+    let dx = to.x - from.x, dy = to.y - from.y
+    var tMin: CGFloat = 0, tMax: CGFloat = 1
+    for (p, q) in [(-dx, from.x - rect.minX), (dx, rect.maxX - from.x),
+                   (-dy, from.y - rect.minY), (dy, rect.maxY - from.y)] {
+      if p == 0 {
+        if q < 0 { return nil }
+        continue
+      }
+      let t = q / p
+      if p < 0 { tMin = max(tMin, t) } else { tMax = min(tMax, t) }
+      if tMin > tMax { return nil }
+    }
+    return CGPoint(x: from.x + dx * tMin, y: from.y + dy * tMin)
+  }
+
+  /// A stored binding anchor resolved against the bound card's CURRENT frame.
+  private static func anchoredPoint(_ anchor: CanvasPoint, in frame: CGRect) -> CGPoint {
+    CGPoint(x: frame.minX + CGFloat(anchor.x) * frame.width,
+            y: frame.minY + CGFloat(anchor.y) * frame.height)
   }
 
   private func refreshBoundArrows() {
@@ -1789,9 +1842,11 @@ final class BoardViewModel: ObservableObject {
     for i in cards.indices where cards[i].elementKind == .arrow {
       if let start = cards[i].startBindingID, !existing.contains(start) {
         cards[i].startBindingID = nil
+        cards[i].startBindingAnchor = nil
       }
       if let end = cards[i].endBindingID, !existing.contains(end) {
         cards[i].endBindingID = nil
+        cards[i].endBindingAnchor = nil
       }
       if cards[i].startBindingID != nil || cards[i].endBindingID != nil {
         updateBoundArrowGeometry(at: i)
@@ -1847,10 +1902,17 @@ final class BoardViewModel: ObservableObject {
     let endCard = cards[index].endBindingID.flatMap { card(id: $0) }
     let rawStart = startCard.map(center(of:)) ?? current.start
     let rawEnd = endCard.map(center(of:)) ?? current.end
-    // Land each bound endpoint on its node's boundary (aiming at the other end), with a small gap
-    // at the arrowhead — so the arrow touches the box edge instead of piercing the label.
-    let start = startCard.map { Self.boundaryPoint(of: $0.frame, toward: rawEnd, margin: 1) } ?? rawStart
-    let end = endCard.map { Self.boundaryPoint(of: $0.frame, toward: rawStart, margin: 7) } ?? rawEnd
+    // An anchored binding lands exactly where the user attached (tracking the card's current
+    // frame); only anchor-less bindings (legacy boards, agent connects) take the center-ray
+    // boundary route with the small arrowhead gap.
+    let start = startCard.map { card in
+      cards[index].startBindingAnchor.map { Self.anchoredPoint($0, in: card.frame) }
+        ?? Self.boundaryPoint(of: card.frame, toward: rawEnd, margin: 1)
+    } ?? rawStart
+    let end = endCard.map { card in
+      cards[index].endBindingAnchor.map { Self.anchoredPoint($0, in: card.frame) }
+        ?? Self.boundaryPoint(of: card.frame, toward: rawStart, margin: 7)
+    } ?? rawEnd
     applyLineGeometry(to: index, start: start, end: end)
   }
 
