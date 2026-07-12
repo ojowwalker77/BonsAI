@@ -69,6 +69,12 @@ struct CardState: Codable, Identifiable, Equatable {
   /// backward-compatible while the model can already persist bindings.
   var startBindingID: UUID?
   var endBindingID: UUID?
+  /// WHERE on the bound card this arrow attaches, normalized into that card's frame (0…1 per
+  /// axis). Captured from the drawn stroke, so the arrow lands where it was aimed and keeps that
+  /// attachment as the card moves — instead of re-routing through the card's center ("aim-assist",
+  /// pulled after 1.4.5 feedback). nil (legacy boards, agent connects) = center-ray routing.
+  var startBindingAnchor: CanvasPoint?
+  var endBindingAnchor: CanvasPoint?
   var groupID: UUID?
   var isLocked: Bool?
   var imagePath: String?
@@ -89,6 +95,10 @@ struct CardState: Codable, Identifiable, Equatable {
   var tint: Int?
   /// Per-range text ink (text cards): colored spans over the serialized plain text.
   var ink: [InkRun]?
+  /// Per-card font multiplier for `.text` cards — dragging a text card's corner handles scales its
+  /// font (Apple Freeform behavior) instead of reflowing a fixed box (issue #77). nil means 1.0, so
+  /// legacy boards decode unchanged; meaningful only for text cards.
+  var fontScale: Double?
 
   struct GraphPoint: Codable, Equatable, Hashable {
     var x: Double
@@ -241,7 +251,8 @@ struct CardState: Codable, Identifiable, Equatable {
        archived: Bool = false,
        whoWrote: Int? = nil,
        tint: Int? = nil,
-       ink: [InkRun]? = nil) {
+       ink: [InkRun]? = nil,
+       fontScale: Double? = nil) {
     self.id = id
     self.kind = kind == .text ? nil : kind
     self.text = text
@@ -263,9 +274,13 @@ struct CardState: Codable, Identifiable, Equatable {
     self.whoWrote = whoWrote
     self.tint = tint
     self.ink = ink
+    self.fontScale = fontScale
   }
 
   var elementKind: CanvasElementKind { kind ?? .text }
+  /// The card's font multiplier as a `CGFloat` — 1.0 when unset. Composes with the global text-size
+  /// slider and the board zoom.
+  var textScale: CGFloat { CGFloat(fontScale ?? 1) }
   var locked: Bool { isLocked ?? false }
   var isArchived: Bool { archived ?? false }
   var resolvedImageURL: URL? { imagePath.flatMap(AssetStore.resolve) }

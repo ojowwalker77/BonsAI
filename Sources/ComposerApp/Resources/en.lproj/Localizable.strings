@@ -153,6 +153,7 @@
 "Stop" = "Stop";
 "SUMMON" = "SUMMON";
 "Switch board" = "Switch board";
+"Switch tools" = "Switch tools";
 "Teach your coding agent the BonsAI board?" = "Teach your coding agent the BonsAI board?";
 "The agent reads your board and edits it as you talk - adding, sharpening, and connecting cards." = "The agent reads your board and edits it as you talk - adding, sharpening, and connecting cards.";
 "The agent you talk to in the canvas. Also switchable live in the Agent panel." = "The agent you talk to in the canvas. Also switchable live in the Agent panel.";
@@ -371,15 +372,15 @@
 "unknown tool: %@" = "unknown tool: %@";
 
 /* Localization coverage pass */
-"Select  ·  move & edit cards  ⌘1" = "Select  ·  move & edit cards  ⌘1";
-"Text  ·  click the board, then type  ⌘2" = "Text  ·  click the board, then type  ⌘2";
-"Rectangle  ·  drag to draw  ⌘3" = "Rectangle  ·  drag to draw  ⌘3";
-"Ellipse  ·  drag to draw  ⌘4" = "Ellipse  ·  drag to draw  ⌘4";
-"Diamond  ·  drag to draw  ⌘5" = "Diamond  ·  drag to draw  ⌘5";
-"Line  ·  drag to draw  ⌘6" = "Line  ·  drag to draw  ⌘6";
-"Arrow  ·  drag to draw  ⌘7" = "Arrow  ·  drag to draw  ⌘7";
-"Freehand stroke  ·  drag to draw  ⌘8" = "Freehand stroke  ·  drag to draw  ⌘8";
-"Equation  ·  click the board, then type LaTeX  ⌘9" = "Equation  ·  click the board, then type LaTeX  ⌘9";
+"Select  ·  move & edit cards  1" = "Select  ·  move & edit cards  1";
+"Text  ·  click the board, then type  2" = "Text  ·  click the board, then type  2";
+"Rectangle  ·  drag to draw  3" = "Rectangle  ·  drag to draw  3";
+"Ellipse  ·  drag to draw  4" = "Ellipse  ·  drag to draw  4";
+"Diamond  ·  drag to draw  5" = "Diamond  ·  drag to draw  5";
+"Line  ·  drag to draw  6" = "Line  ·  drag to draw  6";
+"Arrow  ·  drag to draw  7" = "Arrow  ·  drag to draw  7";
+"Freehand stroke  ·  drag to draw  8" = "Freehand stroke  ·  drag to draw  8";
+"Equation  ·  click the board, then type LaTeX  9" = "Equation  ·  click the board, then type LaTeX  9";
 "Heading  ·  cycles # / ## / ###" = "Heading  ·  cycles # / ## / ###";
 "Bold  ·  **text**" = "Bold  ·  **text**";
 "Italic  ·  *text*" = "Italic  ·  *text*";
@@ -510,3 +511,7 @@
 "Match macOS appearance" = "Match macOS appearance";
 "Swap to your theme's light or dark sibling when the system switches." = "Swap to your theme's light or dark sibling when the system switches.";
 "Text size" = "Text size";
+"Drawing" = "Drawing";
+"How the board behaves while you draw." = "How the board behaves while you draw.";
+"Snap sketches into shapes" = "Snap sketches into shapes";
+"Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip.";

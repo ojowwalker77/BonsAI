@@ -308,6 +308,17 @@ final class FloatingPanel: NSWindow {
       NotificationCenter.default.post(name: .composerDeleteSelection, object: nil)
       return
     }
+    // Bare 1–9 picks a tool (Excalidraw/Figma style) — switching must be one keypress, which is
+    // what makes one-shot tools livable (issue #78; a "keep tool selected" mode was tried and
+    // pulled). Requires no modifiers so ⇧1 stays "!" for anything that wants it, and the
+    // NSTextView guard above means typing digits into a card never switches tools. ⌘1–⌘9 keep
+    // working via performKeyEquivalent.
+    if !textIsEditing,
+       event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+       let raw, let index = Int(raw), (1...9).contains(index) {
+      NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["index": index])
+      return
+    }
     super.keyDown(with: event)
   }
 

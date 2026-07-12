@@ -249,6 +249,7 @@ final class BoardViewModel: ObservableObject {
   /// delete path so bound arrows refresh) instead of leaving a stray writing spot on the board.
   func endEditing(_ id: UUID) {
     interactions[id]?.captureEditorState()
+    fitTextSize(id)   // final hug on the settled text (the cache was just refreshed)
     textEditBaselines[id] = nil
     if editingCardID == id { editingCardID = nil }
     // `captureEditorState()` above refreshed the plain-text cache, so this reads what the user
@@ -270,6 +271,7 @@ final class BoardViewModel: ObservableObject {
   private func stopEditing() {
     guard let id = editingCardID else { return }
     interactions[id]?.captureEditorState()
+    fitTextSize(id)   // final hug on the settled text (the cache was just refreshed)
     textEditBaselines[id] = nil
     interactions[id]?.controller.resignFocus()
     editingCardID = nil
@@ -284,9 +286,11 @@ final class BoardViewModel: ObservableObject {
     currentBoardID = store.currentID
     let loaded = store.currentCards
     cards = loaded
-    // Fit every text card to its content — no live editor is mounted to report heights yet.
+    // Fit every text card's HEIGHT to its content at its stored width and font scale — no live
+    // editor is mounted to report heights yet. Width is left as saved (a scaled card persists its
+    // hugged width), so this never reflows the board's horizontal layout on load.
     for i in cards.indices where cards[i].elementKind == .text {
-      cards[i].h = Double(Self.fittedTextHeight(cards[i].text, width: cards[i].w))
+      cards[i].h = Double(Self.fittedTextHeight(cards[i].text, width: cards[i].w, fontScale: cards[i].textScale))
     }
     // Runtime bundles are created lazily as cards become visible or enter edit mode. A board can
     // contain hundreds of cards, but only a small cullable subset should carry editor state.
@@ -657,7 +661,7 @@ final class BoardViewModel: ObservableObject {
     let bundle = interaction(for: id)
     bundle.text = text
     bundle.cachePlainText(text)
-    if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w)) }
+    if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w, fontScale: cards[i].textScale)) }
     scheduleSave()
   }
 
@@ -829,6 +833,8 @@ final class BoardViewModel: ObservableObject {
     cards[targetIndex].points = nil
     cards[targetIndex].startBindingID = nil
     cards[targetIndex].endBindingID = nil
+    cards[targetIndex].startBindingAnchor = nil
+    cards[targetIndex].endBindingAnchor = nil
     cards[targetIndex].frame = targetFrame
     if editingCardID == id { editingCardID = nil }
     refreshBoundArrows()
@@ -1006,16 +1012,42 @@ final class BoardViewModel: ObservableObject {
 
   /// Height a text card needs to show `text` at `width`, measured the way the non-editing card
   /// renders it. Used for agent/programmatic edits and on load, where no live editor reports it.
-  static func fittedTextHeight(_ text: String, width: CGFloat) -> CGFloat {
+  /// `fontScale` scales the measuring font (and line spacing) so a corner-scaled card (issue #77)
+  /// measures at its own size; the default 1 keeps every legacy caller pixel-identical.
+  static func fittedTextHeight(_ text: String, width: CGFloat, fontScale: CGFloat = 1) -> CGFloat {
+    let scale = max(fontScale, 0.01)
     let paragraph = NSMutableParagraphStyle()
-    paragraph.lineSpacing = Theme.Typography.bodyLineSpacing
-    let attributes: [NSAttributedString.Key: Any] = [.font: Theme.Typography.body, .paragraphStyle: paragraph]
+    paragraph.lineSpacing = Theme.Typography.bodyLineSpacing * scale
+    let font = ComposerPreferences.appFont(ofSize: Theme.Typography.body.pointSize * scale)
+    let attributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph]
     let contentWidth = max(width - 32, 40)   // CanvasElementContent uses 16pt horizontal padding
     let measured = ((text.isEmpty ? " " : text) as NSString).boundingRect(
       with: NSSize(width: contentWidth, height: .greatestFiniteMagnitude),
       options: [.usesLineFragmentOrigin, .usesFontLeading],
       attributes: attributes).height
     return max(ceil(measured) + 36, CardState.textMinSize.height)   // 18pt vertical padding each side
+  }
+
+  /// The frame a text card needs to HUG `text` (issue #76): width follows the longest line up to a
+  /// wrap cap (`textDefaultSize.width × fontScale` of content), then text wraps and height grows.
+  /// Measured with the same font/paragraph attributes as the non-editing render, scaled by
+  /// `fontScale`, using the same 16pt horizontal / 18pt vertical content padding as `fittedTextHeight`.
+  /// Floors to `textMinSize` (120×40).
+  static func fittedTextSize(_ text: String, fontScale: CGFloat) -> CGSize {
+    let scale = max(fontScale, 0.01)
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.lineSpacing = Theme.Typography.bodyLineSpacing * scale
+    let font = ComposerPreferences.appFont(ofSize: Theme.Typography.body.pointSize * scale)
+    let attributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph]
+    let string = (text.isEmpty ? " " : text) as NSString
+    // Widest (unwrapped) line first — the card hugs it until it reaches the cap, then wraps.
+    let natural = ceil(string.boundingRect(
+      with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+      options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).width)
+    let cap = CardState.textDefaultSize.width * scale   // 360 × scale of CONTENT width
+    let width = min(natural, cap) + 32
+    let height = fittedTextHeight(text, width: width, fontScale: scale)
+    return CGSize(width: max(width, CardState.textMinSize.width), height: height)
   }
 
   /// Draw an arrow bound between two existing cards (its geometry tracks their centers). An
@@ -1326,20 +1358,63 @@ final class BoardViewModel: ObservableObject {
     if cards[i].elementKind == .arrow {
       cards[i].startBindingID = nil
       cards[i].endBindingID = nil
+      cards[i].startBindingAnchor = nil
+      cards[i].endBindingAnchor = nil
     }
     cards[i].frame = next
     refreshBoundArrows()
     scheduleSave()
   }
 
-  /// Grow/shrink a text card's height to fit what's typed. This is a layout consequence of
-  /// editing (the keystroke already registered undo), so it never pushes its own undo step and
-  /// only touches height — width stays where the user left it.
-  func fitTextHeight(_ id: UUID, to height: CGFloat) {
+  /// Grow/shrink a text card to HUG what's typed (issue #76): recompute both width and height from
+  /// its current text and font scale, top-left anchored (x,y unchanged — the card grows right and
+  /// down). This is a layout consequence of editing (the keystroke already registered undo), so it
+  /// never pushes its own undo step. Empty text keeps its current/seed frame (the placeholder needs
+  /// room) rather than collapsing to the minimum.
+  func fitTextSize(_ id: UUID) {
     guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text else { return }
-    let target = max(height, CardState.textMinSize.height)
-    guard abs(cards[i].h - Double(target)) > 0.5 else { return }
-    cards[i].h = Double(target)
+    let text = plainText(for: cards[i])
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    let fitted = Self.fittedTextSize(text, fontScale: cards[i].textScale)
+    guard abs(cards[i].w - Double(fitted.width)) > 0.5 || abs(cards[i].h - Double(fitted.height)) > 0.5 else { return }
+    cards[i].w = Double(fitted.width)
+    cards[i].h = Double(fitted.height)
+    scheduleSave()
+  }
+
+  /// Live-edit hug driven by the EDITOR's own layout (issue #76). While a card is being typed
+  /// into, the mounted NSTextView is the only sizing authority: `fittedTextSize`'s NSString twin
+  /// wraps ~10pt later than the view (different insets/fragment padding), and sizing from it left
+  /// the frame a line short — the editor then scrolled to the caret and clipped the top line.
+  /// Width follows the editor's unwrapped text (+ the card's 12pt mount padding each side, +2pt
+  /// wrap slack) up to the same total cap the static hug uses; height is the editor's laid-out
+  /// height + the mount's vertical padding. No undo step (a layout consequence of typing),
+  /// top-left anchored, empty text keeps its seed frame.
+  func fitTextEditing(_ id: UUID, naturalEditorWidth: CGFloat, editorContentHeight: CGFloat) {
+    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text else { return }
+    guard !plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    let cap = CardState.textDefaultSize.width * cards[i].textScale + 32
+    let width = min(max(naturalEditorWidth + 24 + 2, CardState.textMinSize.width), cap)
+    let height = max(editorContentHeight + 20, CardState.textMinSize.height)
+    guard abs(cards[i].w - Double(width)) > 0.5 || abs(cards[i].h - Double(height)) > 0.5 else { return }
+    cards[i].w = Double(width)
+    cards[i].h = Double(height)
+    scheduleSave()
+  }
+
+  /// Commit a corner-drag font scale on a text card (issue #77). One undo step restores BOTH the
+  /// previous `fontScale` and frame, because aspect-locked scaling is the whole gesture's single
+  /// intent — unlike the undo-free live typing fits above. `fontScale == 1` is stored as nil so a
+  /// scaled-then-reset card round-trips as a legacy card.
+  func scaleTextCard(_ id: UUID, fontScale: Double, frame: CGRect) {
+    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text, !cards[i].locked else { return }
+    registerUndo()
+    cards[i].fontScale = abs(fontScale - 1) < 0.0001 ? nil : fontScale
+    let minSize = cards[i].minimumSize
+    cards[i].frame = CGRect(x: frame.minX, y: frame.minY,
+                            width: max(frame.width, minSize.width),
+                            height: max(frame.height, minSize.height))
+    refreshBoundArrows()
     scheduleSave()
   }
 
@@ -1446,6 +1521,8 @@ final class BoardViewModel: ObservableObject {
       copy.whoWrote = nextAuthor
       copy.startBindingID = nil
       copy.endBindingID = nil
+      copy.startBindingAnchor = nil
+      copy.endBindingAnchor = nil
       if copy.elementKind == .image, let path = copy.imagePath {
         copy.imagePath = Self.storedImagePath(for: path)
       }
@@ -1694,6 +1771,8 @@ final class BoardViewModel: ObservableObject {
     for i in cards.indices where ids.contains(cards[i].id) && cards[i].elementKind == .arrow {
       cards[i].startBindingID = nil
       cards[i].endBindingID = nil
+      cards[i].startBindingAnchor = nil
+      cards[i].endBindingAnchor = nil
     }
   }
 
@@ -1703,14 +1782,59 @@ final class BoardViewModel: ObservableObject {
     var excluded: Set<UUID> = [id]
     if let start = nearestConnectable(to: endpoints.start, excluding: excluded) {
       cards[i].startBindingID = start.id
+      cards[i].startBindingAnchor = Self.bindingAnchor(on: start.frame, drawn: endpoints.start, otherEnd: endpoints.end)
       excluded.insert(start.id)
     }
     if let end = nearestConnectable(to: endpoints.end, excluding: excluded) {
       cards[i].endBindingID = end.id
+      cards[i].endBindingAnchor = Self.bindingAnchor(on: end.frame, drawn: endpoints.end, otherEnd: endpoints.start)
     }
     if cards[i].startBindingID != nil || cards[i].endBindingID != nil {
       updateBoundArrowGeometry(at: i)
     }
+  }
+
+  /// The normalized point on `frame` where a drawn endpoint attaches — the spot the user actually
+  /// aimed at. Inside the frame: where the drawn segment enters the box (so a preview line piercing
+  /// the box clips to its edge, direction intact). Outside (the 16pt edge slop): the nearest
+  /// boundary point. The bound endpoint then LANDS there, and stays there as the card moves — the
+  /// old center-ray re-route ("aim-assist") never touches a hand-drawn arrow again.
+  static func bindingAnchor(on frame: CGRect, drawn: CGPoint, otherEnd: CGPoint) -> CanvasPoint {
+    let point: CGPoint
+    if frame.contains(drawn) {
+      point = segmentEntry(into: frame, from: otherEnd, to: drawn) ?? drawn
+    } else {
+      point = CGPoint(x: min(max(drawn.x, frame.minX), frame.maxX),
+                      y: min(max(drawn.y, frame.minY), frame.maxY))
+    }
+    return CanvasPoint(
+      x: Double((point.x - frame.minX) / max(frame.width, 1)),
+      y: Double((point.y - frame.minY) / max(frame.height, 1)))
+  }
+
+  /// First intersection of the segment `from → to` with `rect` (Liang–Barsky entry point). nil when
+  /// `from` is already inside or the segment misses the rect entirely.
+  private static func segmentEntry(into rect: CGRect, from: CGPoint, to: CGPoint) -> CGPoint? {
+    guard !rect.contains(from) else { return nil }
+    let dx = to.x - from.x, dy = to.y - from.y
+    var tMin: CGFloat = 0, tMax: CGFloat = 1
+    for (p, q) in [(-dx, from.x - rect.minX), (dx, rect.maxX - from.x),
+                   (-dy, from.y - rect.minY), (dy, rect.maxY - from.y)] {
+      if p == 0 {
+        if q < 0 { return nil }
+        continue
+      }
+      let t = q / p
+      if p < 0 { tMin = max(tMin, t) } else { tMax = min(tMax, t) }
+      if tMin > tMax { return nil }
+    }
+    return CGPoint(x: from.x + dx * tMin, y: from.y + dy * tMin)
+  }
+
+  /// A stored binding anchor resolved against the bound card's CURRENT frame.
+  private static func anchoredPoint(_ anchor: CanvasPoint, in frame: CGRect) -> CGPoint {
+    CGPoint(x: frame.minX + CGFloat(anchor.x) * frame.width,
+            y: frame.minY + CGFloat(anchor.y) * frame.height)
   }
 
   private func refreshBoundArrows() {
@@ -1718,9 +1842,11 @@ final class BoardViewModel: ObservableObject {
     for i in cards.indices where cards[i].elementKind == .arrow {
       if let start = cards[i].startBindingID, !existing.contains(start) {
         cards[i].startBindingID = nil
+        cards[i].startBindingAnchor = nil
       }
       if let end = cards[i].endBindingID, !existing.contains(end) {
         cards[i].endBindingID = nil
+        cards[i].endBindingAnchor = nil
       }
       if cards[i].startBindingID != nil || cards[i].endBindingID != nil {
         updateBoundArrowGeometry(at: i)
@@ -1776,10 +1902,17 @@ final class BoardViewModel: ObservableObject {
     let endCard = cards[index].endBindingID.flatMap { card(id: $0) }
     let rawStart = startCard.map(center(of:)) ?? current.start
     let rawEnd = endCard.map(center(of:)) ?? current.end
-    // Land each bound endpoint on its node's boundary (aiming at the other end), with a small gap
-    // at the arrowhead — so the arrow touches the box edge instead of piercing the label.
-    let start = startCard.map { Self.boundaryPoint(of: $0.frame, toward: rawEnd, margin: 1) } ?? rawStart
-    let end = endCard.map { Self.boundaryPoint(of: $0.frame, toward: rawStart, margin: 7) } ?? rawEnd
+    // An anchored binding lands exactly where the user attached (tracking the card's current
+    // frame); only anchor-less bindings (legacy boards, agent connects) take the center-ray
+    // boundary route with the small arrowhead gap.
+    let start = startCard.map { card in
+      cards[index].startBindingAnchor.map { Self.anchoredPoint($0, in: card.frame) }
+        ?? Self.boundaryPoint(of: card.frame, toward: rawEnd, margin: 1)
+    } ?? rawStart
+    let end = endCard.map { card in
+      cards[index].endBindingAnchor.map { Self.anchoredPoint($0, in: card.frame) }
+        ?? Self.boundaryPoint(of: card.frame, toward: rawStart, margin: 7)
+    } ?? rawEnd
     applyLineGeometry(to: index, start: start, end: end)
   }
 

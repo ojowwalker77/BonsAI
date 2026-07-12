@@ -152,6 +152,7 @@
 "Stop" = "停止";
 "SUMMON" = "呼び出し";
 "Switch board" = "ボードを切り替え";
+"Switch tools" = "ツールを切り替え";
 "Teach your coding agent the BonsAI board?" = "コーディングエージェントに BonsAI ボードを教えますか？";
 "The agent reads your board and edits it as you talk - adding, sharpening, and connecting cards." = "エージェントは会話しながらボードを読み、カードを追加・改善・接続します。";
 "The agent you talk to in the canvas. Also switchable live in the Agent panel." = "キャンバスで会話するエージェントです。エージェントパネルでもライブ切り替えできます。";
@@ -370,15 +371,15 @@
 "unknown tool: %@" = "不明なツール: %@";
 
 /* Localization coverage pass */
-"Select  ·  move & edit cards  ⌘1" = "選択  ·  カードを移動・編集  ⌘1";
-"Text  ·  click the board, then type  ⌘2" = "テキスト  ·  ボードをクリックして入力  ⌘2";
-"Rectangle  ·  drag to draw  ⌘3" = "長方形  ·  ドラッグして描画  ⌘3";
-"Ellipse  ·  drag to draw  ⌘4" = "楕円  ·  ドラッグして描画  ⌘4";
-"Diamond  ·  drag to draw  ⌘5" = "ひし形  ·  ドラッグして描画  ⌘5";
-"Line  ·  drag to draw  ⌘6" = "線  ·  ドラッグして描画  ⌘6";
-"Arrow  ·  drag to draw  ⌘7" = "矢印  ·  ドラッグして描画  ⌘7";
-"Freehand stroke  ·  drag to draw  ⌘8" = "フリーハンド  ·  ドラッグして描画  ⌘8";
-"Equation  ·  click the board, then type LaTeX  ⌘9" = "方程式  ·  ボードをクリックして LaTeX を入力  ⌘9";
+"Select  ·  move & edit cards  1" = "選択  ·  カードを移動・編集  1";
+"Text  ·  click the board, then type  2" = "テキスト  ·  ボードをクリックして入力  2";
+"Rectangle  ·  drag to draw  3" = "長方形  ·  ドラッグして描画  3";
+"Ellipse  ·  drag to draw  4" = "楕円  ·  ドラッグして描画  4";
+"Diamond  ·  drag to draw  5" = "ひし形  ·  ドラッグして描画  5";
+"Line  ·  drag to draw  6" = "線  ·  ドラッグして描画  6";
+"Arrow  ·  drag to draw  7" = "矢印  ·  ドラッグして描画  7";
+"Freehand stroke  ·  drag to draw  8" = "フリーハンド  ·  ドラッグして描画  8";
+"Equation  ·  click the board, then type LaTeX  9" = "方程式  ·  ボードをクリックして LaTeX を入力  9";
 "Heading  ·  cycles # / ## / ###" = "見出し  ·  # / ## / ### を切り替え";
 "Bold  ·  **text**" = "太字  ·  **text**";
 "Italic  ·  *text*" = "斜体  ·  *text*";
@@ -512,3 +513,7 @@
 "Match macOS appearance" = "macOSの外観に合わせる";
 "Swap to your theme's light or dark sibling when the system switches." = "システムの切り替えに合わせて、テーマのライト/ダーク版に切り替わります。";
 "Text size" = "テキストサイズ";
+"Drawing" = "描画";
+"How the board behaves while you draw." = "描画中のボードの動作を設定します。";
+"Snap sketches into shapes" = "スケッチを図形にスナップ";
+"Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "認識されたストロークはペンを離すと整った図形になります。オフの場合は提案チップを表示します。";

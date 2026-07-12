@@ -190,6 +190,7 @@ private struct SettingsContent: View {
   let destination: SettingsDestination
 
   private let shortcuts: [(String, String)] = [
+    ("Switch tools".localizedUI, "1 – 9"),
     ("Compile board".localizedUI, "⌘R"),
     ("New board".localizedUI, "⌘N"),
     ("Navigate boards".localizedUI, "⌘[  ⌘]"),
@@ -222,6 +223,7 @@ private struct SettingsContent: View {
   @AppStorage(ComposerPreferences.languageKey) private var languageRaw = AppLanguage.system.rawValue
   @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
   @AppStorage(ComposerPreferences.followSystemAppearanceKey) private var followSystemAppearance = false
+  @AppStorage(ComposerPreferences.autoSnapFreehandKey) private var autoSnapFreehand = false
   /// The raw text-size preference. Written directly by the stepper; the change notification is
   /// posted from `.onChange` — AFTER the SwiftUI update transaction — because the observer
   /// rebuilds the whole canvas, and doing that synchronously from inside a binding setter tears
@@ -641,6 +643,36 @@ private struct SettingsContent: View {
       themeCard
       fontCard
       canvasGlassCard
+      drawingCard
+    }
+  }
+
+  /// Canvas drawing behavior — read at commit time on the canvas, so flipping it needs no
+  /// rebuild notification. (A "keep tool selected" toggle briefly lived here and was pulled:
+  /// bare 1–9 tool switching made the mode pointless — issue #78.)
+  private var drawingCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Drawing", "How the board behaves while you draw.")
+      VStack(spacing: 0) {
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Snap sketches into shapes".localizedUI)
+              .font(.callout.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+            Text("Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip.".localizedUI)
+              .font(.caption)
+              .foregroundStyle(Theme.Palette.menuDesc)
+          }
+          Spacer(minLength: 12)
+          Toggle("", isOn: $autoSnapFreehand)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(Theme.Palette.accent)
+        }
+        .padding(.vertical, 11)
+      }
+      .padding(.horizontal, 14)
+      .settingsCard()
     }
   }
 

@@ -11,6 +11,36 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-07-10
+
+### Fixed
+- **Arrows land where you draw them.** A bound arrow used to re-route through the card's center
+  on release — "aim-assist" that visibly moved the arrow away from where the preview showed it.
+  Bindings now remember the exact spot you attached (normalized to the card's frame): the arrow
+  commits where aimed and keeps that attachment as the card moves. Agent-drawn connections and
+  legacy boards keep the center routing.
+
+### Added
+- **Text boxes hug their text.** A text card's width now follows the longest line up to a wrap
+  cap, then wraps and grows down — Figma/Freeform point text, live while you type, instead of a
+  fixed-width box. Existing boards keep their layout until you edit a card. (#76)
+- **Corner handles scale the font.** Dragging a text card's corner handles scales its font
+  proportionally (Apple Freeform behavior) — aspect-locked, anchored at the opposite corner,
+  live during the drag, one undo step. Composes with the app-wide text-size slider. (#77)
+- **One-key tool switching.** Bare `1`–`9` now picks a tool whenever you're not typing in a card
+  (⌘1–⌘9 still work) — select, text, rectangle, ellipse, diamond, line, arrow, freehand,
+  equation. Tools stay one-shot; the next one is a single keypress away, which is what makes
+  that livable. (A "keep tool selected" mode was tried on this branch and pulled — a hidden
+  global mode felt terrible.) (#78)
+- **Snap sketches into shapes.** A second Drawing toggle converts a confidently recognized
+  freehand stroke into the clean shape on pen-up (OneNote "Ink to Shape"), no chip interaction
+  needed. One undo restores the original ink. Off by default — recognition stays an opt-in
+  suggestion chip. Recognition itself was retuned recall-first: the stroke is smoothed before
+  classification and every gate loosened, so wobbly sides, rounded corners, and loops that don't
+  quite close now snap — letters, zigzags, and scribbles still don't. Arrows are chip-only:
+  auto mode never converts a stroke to an arrow (the head heuristic misfired on ordinary hooked
+  strokes), it offers the chip instead. (#79)
+
 ## [1.4.4] - 2026-07-10
 
 ### Added

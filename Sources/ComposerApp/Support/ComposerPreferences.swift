@@ -121,6 +121,9 @@ enum ComposerPreferences {
   /// through the board surface.
   static let canvasTransparencyKey = "composer.canvas.backgroundTransparency"
   static let maxCanvasTransparency = 0.72
+  /// When on, a confidently recognized freehand stroke snaps straight into the clean shape on
+  /// pen-up (OneNote "Ink to Shape"). Off keeps recognition as the opt-in promotion chip.
+  static let autoSnapFreehandKey = "composer.canvas.autoSnapFreehand"
 
   static let minEditorFontSize: CGFloat = 11
   static let maxEditorFontSize: CGFloat = 28
@@ -145,6 +148,11 @@ enum ComposerPreferences {
   /// rendering reads `effectiveTheme`, which applies the follow-system swap on top.
   static var theme: ComposerTheme {
     ComposerTheme(rawValue: UserDefaults.standard.string(forKey: themeKey) ?? "") ?? .bonsaiDark
+  }
+
+  /// Whether recognized freehand strokes auto-convert on pen-up (Settings ▸ Appearance ▸ Drawing).
+  static var autoSnapFreehand: Bool {
+    UserDefaults.standard.bool(forKey: autoSnapFreehandKey)
   }
 
   /// Whether the rendered theme tracks macOS Light/Dark (Settings ▸ Appearance).
