@@ -224,6 +224,7 @@ private struct SettingsContent: View {
   @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
   @AppStorage(ComposerPreferences.followSystemAppearanceKey) private var followSystemAppearance = false
   @AppStorage(ComposerPreferences.autoSnapFreehandKey) private var autoSnapFreehand = false
+  @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
   /// The raw text-size preference. Written directly by the stepper; the change notification is
   /// posted from `.onChange` — AFTER the SwiftUI update transaction — because the observer
   /// rebuilds the whole canvas, and doing that synchronously from inside a binding setter tears
@@ -665,6 +666,26 @@ private struct SettingsContent: View {
           }
           Spacer(minLength: 12)
           Toggle("", isOn: $autoSnapFreehand)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(Theme.Palette.accent)
+        }
+        .padding(.vertical, 11)
+
+        Divider()
+          .overlay(Theme.Palette.separator)
+
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Helper lines".localizedUI)
+              .font(.callout.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+            Text("Show alignment lines while moving cards. Snapping stays enabled either way.".localizedUI)
+              .font(.caption)
+              .foregroundStyle(Theme.Palette.menuDesc)
+          }
+          Spacer(minLength: 12)
+          Toggle("", isOn: $helperLinesEnabled)
             .labelsHidden()
             .toggleStyle(.switch)
             .tint(Theme.Palette.accent)

@@ -256,7 +256,9 @@ final class CanvasAgent: ObservableObject {
   the chat or a separate note card. Use a node "shape" of "diamond" for decision points and \
   "ellipse" for data/stores when it adds clarity. Use direction "down" for hierarchies/architecture \
   and "right" for pipelines/flows. For one-off prose use add_text and omit x/y (the board places \
-  it). For math — a derivation step, a governing equation, a formula worth staring at — use \
+  it). Use `add_sticky` for a visually distinct reminder, `add_checklist` for actionable items \
+  (then `set_checklist` or `toggle_checklist_item` as work changes), and `add_table` for compact \
+  row/column comparisons (use `set_table` to revise it). For math — a derivation step, a governing equation, a formula worth staring at — use \
   `add_equation` with raw LaTeX math-mode source (no $ delimiters); it renders typeset on the \
   board, so never dump LaTeX into add_text where it would sit as raw markup. If you've added \
   cards incrementally and the board looks messy, call `tidy` to straighten everything. Treat the \

@@ -23,6 +23,9 @@ struct BoardCardView: View {
 
   @State private var moveDelta: CGSize = .zero
   @GestureState private var resize: ResizeSession?
+  /// Text-only side resize: changes the wrapping width while preserving font scale. Corner resize
+  /// remains proportional type scaling; the two gestures intentionally solve different jobs.
+  @GestureState private var textWidthResize: TextWidthResizeSession?
   @State private var hovering = false
   /// The ⌥-click Point Composer: prefilled X/Y (from the click's data coords), a label, and a tint
   /// swatch. Non-nil while the strip is up.
@@ -47,6 +50,8 @@ struct BoardCardView: View {
     case .text: 12
     case .equation: 12
     case .image: 8
+    case .sticky: 14
+    case .checklist, .table: 10
     case .rectangle: 8
     default: 6
     }
@@ -67,6 +72,9 @@ struct BoardCardView: View {
   /// The frame to draw right now — base frame plus any in-flight move or resize.
   private var liveFrame: CGRect {
     if let resize { return applyResize(resize.corner, translation: resize.translation, to: card.frame) }
+    if let textWidthResize {
+      return textWidthFrame(textWidthResize.edge, translation: textWidthResize.translation, in: card.frame)
+    }
     var f = card.frame
     f.origin.x += moveDelta.width / zoom
     f.origin.y += moveDelta.height / zoom
@@ -191,6 +199,24 @@ struct BoardCardView: View {
       // single/double tap recognizers wait out the double-click interval first.
       CardPointerCatcher(
         onPress: { modifiers, localPoint in
+          if card.elementKind == .checklist, modifiers.isEmpty {
+            let rowHeight = 30 * zoom
+            let index = Int(max(0, localPoint.y - 16 * zoom) / rowHeight)
+            if card.checklist?.indices.contains(index) == true {
+              board.toggleChecklistItem(card.id, index: index)
+              armedForMove = false
+              return .consumed
+            }
+          }
+          if card.elementKind == .text, modifiers.isEmpty {
+            let line = Int(max(0, localPoint.y - 18 * zoom) / (24 * zoom))
+            let lines = interaction.plainText.components(separatedBy: "\n")
+            if lines.indices.contains(line), lines[line].hasPrefix("- [") {
+              board.toggleTextChecklistLine(card.id, lineIndex: line)
+              armedForMove = false
+              return .consumed
+            }
+          }
           // Graph cards intercept ⌥-click (add/remove a data point) and — when selected — a plain
           // press that starts on a marker (drag that marker instead of the card). A consumed press
           // suppresses select/move for this gesture.
@@ -511,6 +537,17 @@ struct BoardCardView: View {
                   if inside { corner.resizeCursor.push() } else { NSCursor.pop() }
                 }
             }
+            if isTextElement {
+              ForEach(HorizontalEdge.allCases, id: \.self) { edge in
+                textWidthHandle
+                  .position(textWidthHandlePoint(edge, in: geo.size))
+                  .gesture(textWidthResizeGesture(edge))
+                  .onHover { inside in
+                    if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                  }
+                  .help("Drag to change text wrapping width".localizedUI)
+              }
+            }
           }
         }
       }
@@ -526,6 +563,10 @@ struct BoardCardView: View {
     }
   }
 
+  private func textWidthHandlePoint(_ edge: HorizontalEdge, in size: CGSize) -> CGPoint {
+    CGPoint(x: edge == .leading ? -selectionGap : size.width + selectionGap, y: size.height / 2)
+  }
+
   /// A small white square with a hairline accent edge and a soft shadow — reads as a crisp,
   /// premium resize handle on the dark glass rather than a flat blue block.
   private var handleDot: some View {
@@ -536,6 +577,29 @@ struct BoardCardView: View {
       .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
       .padding(9)
       .contentShape(Rectangle())
+  }
+
+  /// A vertical pill distinguishes reflow handles from the four square scale handles. The visible
+  /// mark stays quiet while its padded hit target remains easy to acquire with a pointer.
+  private var textWidthHandle: some View {
+    Capsule()
+      .fill(Color.white)
+      .frame(width: 6, height: 18)
+      .overlay(Capsule().strokeBorder(Theme.Palette.accent.opacity(0.9), lineWidth: 1))
+      .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 7)
+      .contentShape(Rectangle())
+  }
+
+  private func textWidthResizeGesture(_ edge: HorizontalEdge) -> some Gesture {
+    DragGesture(minimumDistance: 3, coordinateSpace: .local)
+      .updating($textWidthResize) { value, state, _ in
+        state = TextWidthResizeSession(edge: edge, translation: value.translation)
+      }
+      .onEnded { value in
+        board.setFrame(card.id, textWidthFrame(edge, translation: value.translation, in: card.frame))
+      }
   }
 
   private func resizeGesture(_ corner: Corner) -> some Gesture {
@@ -570,6 +634,20 @@ struct BoardCardView: View {
   /// preview box (see cardBody).
   private var staticLayoutSize: CGSize {
     (isTextElement && resize != nil) ? card.frame.size : liveFrame.size
+  }
+
+  /// Reflow a text card at a user-chosen width, keeping the opposite side anchored and deriving
+  /// height from the existing text metrics. Font scale is deliberately untouched.
+  private func textWidthFrame(_ edge: HorizontalEdge, translation: CGSize, in base: CGRect) -> CGRect {
+    let dx = translation.width / zoom
+    let proposedWidth = edge == .trailing ? base.width + dx : base.width - dx
+    let width = max(proposedWidth, CardState.textMinSize.width)
+    let x = edge == .leading ? base.maxX - width : base.minX
+    let text = board.plainText(for: card)
+    let height = text.trimmed.isEmpty
+      ? max(base.height, CardState.textMinSize.height)
+      : BoardViewModel.fittedTextHeight(text, width: width, fontScale: card.textScale)
+    return CGRect(x: x, y: base.minY, width: width, height: height)
   }
 
   /// Proportional font-scale factor from a corner drag on a text card: aspect-locked to the drag's
@@ -715,6 +793,8 @@ private struct CanvasElementContent: View {
                 .font(ComposerPreferences.appSwiftUIFont(size: Theme.Typography.body.pointSize * zoom))
                 .lineSpacing(Theme.Typography.bodyLineSpacing * zoom)
                 .foregroundStyle(Theme.Palette.placeholder)
+            } else if Self.containsChecklist(text) {
+              InlineChecklistText(text: text, zoom: zoom, tint: tint)
             } else {
               ComposerChipText(tint: tint, plain: text, ink: ink, definedVars: definedVars, failedCommands: failedCommands, zoom: zoom)
             }
@@ -758,6 +838,12 @@ private struct CanvasElementContent: View {
         case .graph:
           GraphCardView(spec: card.graph ?? CardState.GraphSpec(), tint: tint,
                         isDropTarget: graphDropTarget, interactiveLegend: graphSelected)
+        case .sticky:
+          StickyNoteView(title: card.stickyTitle ?? "", bodyText: text, tint: tint, zoom: zoom)
+        case .checklist:
+          ChecklistView(items: card.checklist ?? [], tint: tint, zoom: zoom)
+        case .table:
+          SimpleTableView(spec: card.table ?? CardState.TableSpec(), tint: tint, zoom: zoom)
         }
       }
 
@@ -773,6 +859,151 @@ private struct CanvasElementContent: View {
           EmptyView()
         }
       }
+    }
+  }
+
+  private static func containsChecklist(_ text: String) -> Bool {
+    text.components(separatedBy: "\n").contains { $0.hasPrefix("- [ ] ") || $0.lowercased().hasPrefix("- [x] ") }
+  }
+}
+
+private struct InlineChecklistText: View {
+  let text: String
+  let zoom: CGFloat
+  let tint: Color?
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3 * zoom) {
+      ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
+        if line.hasPrefix("- [ ] ") || line.lowercased().hasPrefix("- [x] ") {
+          let checked = line.lowercased().hasPrefix("- [x] ")
+          HStack(spacing: 8 * zoom) {
+            Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+              .foregroundStyle(checked ? (tint ?? Theme.Palette.accent) : Theme.Palette.menuDesc)
+            Text(String(line.dropFirst(6))).strikethrough(checked)
+          }
+          .foregroundStyle(checked ? Theme.Palette.menuDesc : (tint ?? Theme.Palette.body))
+        } else {
+          Text(line).foregroundStyle(tint ?? Theme.Palette.body)
+        }
+      }
+    }
+    .font(ComposerPreferences.appSwiftUIFont(size: Theme.Typography.body.pointSize * zoom))
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+}
+
+private struct StickyNoteView: View {
+  let title: String
+  let bodyText: String
+  let tint: Color?
+  let zoom: CGFloat
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text(title.trimmed.isEmpty ? "Untitled note".localizedUI : title)
+        .font(ComposerPreferences.appSwiftUIFont(size: 18 * zoom, weight: .semibold))
+        .foregroundStyle(title.trimmed.isEmpty ? Theme.Palette.placeholder : Theme.Palette.body)
+        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
+
+      Rectangle()
+        .fill(Theme.Palette.body.opacity(0.13))
+        .frame(height: max(0.5, 0.75 * zoom))
+        .padding(.vertical, 12 * zoom)
+
+      Text(bodyText.trimmed.isEmpty ? "Write something…".localizedUI : bodyText)
+        .font(ComposerPreferences.appSwiftUIFont(size: 15 * zoom))
+        .foregroundStyle(bodyText.trimmed.isEmpty ? Theme.Palette.placeholder : Theme.Palette.body.opacity(0.88))
+        .lineSpacing(3 * zoom)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .padding(18 * zoom)
+    .background(stickyFill, in: RoundedRectangle(cornerRadius: 14 * zoom, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 14 * zoom, style: .continuous)
+        .strokeBorder(Theme.Palette.body.opacity(Theme.flavor.isDark ? 0.12 : 0.08), lineWidth: 1)
+    }
+    .shadow(color: Theme.Palette.elementShadow.opacity(0.45), radius: 8 * zoom, y: 3 * zoom)
+  }
+
+  private var stickyFill: Color {
+    (tint ?? Color.yellow).opacity(Theme.flavor.isDark ? 0.22 : 0.20)
+  }
+}
+
+private struct ChecklistView: View {
+  let items: [CardState.ChecklistItem]
+  let tint: Color?
+  let zoom: CGFloat
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8 * zoom) {
+      ForEach(items) { item in
+        HStack(alignment: .firstTextBaseline, spacing: 9 * zoom) {
+          Image(systemName: item.isChecked ? "checkmark.square.fill" : "square")
+            .foregroundStyle(item.isChecked ? (tint ?? Theme.Palette.accent) : Theme.Palette.menuDesc)
+          Text(item.text).strikethrough(item.isChecked).foregroundStyle(item.isChecked ? Theme.Palette.menuDesc : Theme.Palette.body)
+        }
+        .font(ComposerPreferences.appSwiftUIFont(size: 15 * zoom))
+        .frame(minHeight: 22 * zoom)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .padding(16 * zoom)
+    .background(Theme.Palette.raisedTint, in: RoundedRectangle(cornerRadius: 10 * zoom))
+  }
+}
+
+private struct SimpleTableView: View {
+  let spec: CardState.TableSpec
+  let tint: Color?
+  let zoom: CGFloat
+  var body: some View {
+    VStack(spacing: 0) {
+      tableRow(spec.columns, header: true, rowIndex: nil)
+      ForEach(Array(spec.rows.enumerated()), id: \.offset) { index, row in
+        tableRow(normalized(row), header: false, rowIndex: index)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .background(Theme.Palette.raisedTint.opacity(0.72))
+    .clipShape(RoundedRectangle(cornerRadius: 10 * zoom, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10 * zoom, style: .continuous)
+        .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1)
+    }
+    .shadow(color: Theme.Palette.elementShadow.opacity(0.28), radius: 6 * zoom, y: 2 * zoom)
+  }
+
+  private func normalized(_ row: [String]) -> [String] {
+    Array((row + Array(repeating: "", count: max(0, spec.columns.count - row.count))).prefix(spec.columns.count))
+  }
+
+  private func tableRow(_ values: [String], header: Bool, rowIndex: Int?) -> some View {
+    HStack(spacing: 0) {
+      ForEach(Array(values.enumerated()), id: \.offset) { index, value in
+        Text(value.isEmpty && header ? "Column \(index + 1)" : value)
+          .font(ComposerPreferences.appSwiftUIFont(size: (header ? 12.5 : 13) * zoom,
+                                                    weight: header ? .semibold : .regular))
+          .foregroundStyle(header ? (tint ?? Theme.Palette.body) : Theme.Palette.body.opacity(0.88))
+          .lineLimit(2)
+          .frame(maxWidth: .infinity, minHeight: (header ? 40 : 38) * zoom, alignment: .leading)
+          .padding(.horizontal, 12 * zoom)
+          .overlay(alignment: .trailing) {
+            if index < values.count - 1 {
+              Rectangle().fill(Theme.Palette.separator.opacity(0.5)).frame(width: 0.5)
+            }
+          }
+      }
+    }
+    .background {
+      if header {
+        (tint ?? Theme.Palette.accent).opacity(Theme.flavor.isDark ? 0.16 : 0.10)
+      } else if let rowIndex, rowIndex.isMultiple(of: 2) {
+        Theme.Palette.body.opacity(Theme.flavor.isDark ? 0.025 : 0.018)
+      }
+    }
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(Theme.Palette.separator.opacity(0.55)).frame(height: 0.5)
     }
   }
 }
@@ -2154,6 +2385,15 @@ private enum Corner: CaseIterable, Hashable {
 
 private struct ResizeSession: Equatable {
   let corner: Corner
+  var translation: CGSize
+}
+
+private enum HorizontalEdge: CaseIterable, Hashable {
+  case leading, trailing
+}
+
+private struct TextWidthResizeSession: Equatable {
+  let edge: HorizontalEdge
   var translation: CGSize
 }
 

@@ -84,6 +84,51 @@ final class CanvasBridge {
       }
       return ok(["id": board.insertEquationAutoPlaced(latex).uuidString])
 
+    case "add_sticky":
+      let title = string(op["title"])
+      let text = string(op["text"]) ?? ""
+      let point = placement(op, board: board, size: CardState.stickySize)
+      return ok(["id": board.insertStructured(.sticky, title: title, text: text, at: point).uuidString])
+
+    case "set_sticky":
+      guard let id = uuid(op["id"]),
+            board.setSticky(id, title: string(op["title"]) ?? "", body: string(op["text"]) ?? "")
+      else { return fail("sticky note not found") }
+      return ok()
+
+    case "add_checklist":
+      guard let rawItems = op["items"] as? [[String: Any]] else { return fail("missing \"items\"") }
+      let items = rawItems.compactMap { value -> CardState.ChecklistItem? in
+        guard let text = string(value["text"]) else { return nil }
+        return CardState.ChecklistItem(text: text, isChecked: value["checked"] as? Bool ?? false)
+      }
+      let point = placement(op, board: board, size: CardState.checklistSize)
+      return ok(["id": board.insertStructured(.checklist, checklist: items, at: point).uuidString])
+
+    case "toggle_checklist_item":
+      guard let id = uuid(op["id"]), let index = (op["index"] as? NSNumber)?.intValue else { return fail("bad \"id\"/\"index\"") }
+      guard board.toggleChecklistItem(id, index: index) else { return fail("checklist not found or item index out of range") }
+      return ok()
+
+    case "set_checklist":
+      guard let id = uuid(op["id"]), let rawItems = op["items"] as? [[String: Any]] else { return fail("bad \"id\"/\"items\"") }
+      let items = rawItems.compactMap { value -> CardState.ChecklistItem? in
+        guard let text = string(value["text"]) else { return nil }
+        return CardState.ChecklistItem(text: text, isChecked: value["checked"] as? Bool ?? false)
+      }
+      guard board.setChecklist(id, items) else { return fail("checklist not found") }
+      return ok()
+
+    case "add_table":
+      guard let columns = op["columns"] as? [String], let rows = op["rows"] as? [[String]] else { return fail("missing \"columns\"/\"rows\"") }
+      let point = placement(op, board: board, size: CardState.tableSize)
+      return ok(["id": board.insertStructured(.table, table: CardState.TableSpec(columns: columns, rows: rows), at: point).uuidString])
+
+    case "set_table":
+      guard let id = uuid(op["id"]), let columns = op["columns"] as? [String], let rows = op["rows"] as? [[String]] else { return fail("bad \"id\"/table") }
+      guard board.setTable(id, CardState.TableSpec(columns: columns, rows: rows)) else { return fail("table not found") }
+      return ok()
+
     case "add_shape":
       guard let kind = string(op["kind"]).flatMap(CanvasElementKind.init(rawValue:)) else {
         return fail("bad \"kind\"")
@@ -230,5 +275,9 @@ final class CanvasBridge {
     if let n = value as? NSNumber { return n.doubleValue }
     if let i = value as? Int { return Double(i) }
     return nil
+  }
+  private func placement(_ op: [String: Any], board: BoardViewModel, size: CGSize) -> CGPoint {
+    if let x = double(op["x"]), let y = double(op["y"]) { return CGPoint(x: x, y: y) }
+    return board.autoPlacePoint(for: size)
   }
 }

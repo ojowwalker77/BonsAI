@@ -12,6 +12,9 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
   case image
   case equation
   case graph
+  case sticky
+  case checklist
+  case table
 
   /// Box shapes constrain to a square while Shift is held (draw + resize) — rectangle→square,
   /// ellipse→circle, diamond→uniform. Lines and arrows instead snap to an axis (`constrainsToAxis`);
@@ -54,6 +57,16 @@ struct CanvasPoint: Codable, Equatable {
 /// `[CardState]` serialized as JSON into `Dump.cardsData`. Chips stay a within-session
 /// cosmetic layer; only this plain text persists.
 struct CardState: Codable, Identifiable, Equatable {
+  struct ChecklistItem: Codable, Equatable, Identifiable {
+    var id: UUID = UUID()
+    var text: String = ""
+    var isChecked: Bool = false
+  }
+
+  struct TableSpec: Codable, Equatable {
+    var columns: [String] = ["Column 1", "Column 2"]
+    var rows: [[String]] = [["", ""], ["", ""]]
+  }
   var id: UUID
   /// Missing on legacy boards; nil means `.text`.
   var kind: CanvasElementKind?
@@ -230,6 +243,12 @@ struct CardState: Codable, Identifiable, Equatable {
   }
   /// For `.graph` cards: axis labels, units, ranges, and grid preference.
   var graph: GraphSpec?
+  /// Structured payloads are optional so boards written before 1.4.6 decode unchanged.
+  /// Sticky notes keep their heading separate from `text`, which remains the body and preserves
+  /// backward compatibility with sticky notes created by the first 1.4.6 build.
+  var stickyTitle: String?
+  var checklist: [ChecklistItem]?
+  var table: TableSpec?
 
   init(id: UUID = UUID(),
        kind: CanvasElementKind = .text,
@@ -247,6 +266,9 @@ struct CardState: Codable, Identifiable, Equatable {
        imagePath: String? = nil,
        latex: String? = nil,
        graph: GraphSpec? = nil,
+       stickyTitle: String? = nil,
+       checklist: [ChecklistItem]? = nil,
+       table: TableSpec? = nil,
        imageUnderstanding: String? = nil,
        archived: Bool = false,
        whoWrote: Int? = nil,
@@ -269,6 +291,9 @@ struct CardState: Codable, Identifiable, Equatable {
     self.imagePath = imagePath
     self.latex = latex
     self.graph = graph
+    self.stickyTitle = stickyTitle
+    self.checklist = checklist
+    self.table = table
     self.imageUnderstanding = imageUnderstanding
     self.archived = archived ? true : nil
     self.whoWrote = whoWrote
@@ -307,6 +332,9 @@ struct CardState: Codable, Identifiable, Equatable {
   static let lineSize = CGSize(width: 240, height: 96)
   static let equationSize = CGSize(width: 220, height: 96)
   static let graphSize = CGSize(width: 320, height: 240)
+  static let stickySize = CGSize(width: 240, height: 220)
+  static let checklistSize = CGSize(width: 300, height: 200)
+  static let tableSize = CGSize(width: 420, height: 240)
 
   var minimumSize: CGSize {
     switch elementKind {
@@ -316,6 +344,12 @@ struct CardState: Codable, Identifiable, Equatable {
       CGSize(width: 100, height: 48)
     case .graph:
       CGSize(width: 180, height: 140)
+    case .sticky:
+      CGSize(width: 140, height: 120)
+    case .checklist:
+      CGSize(width: 200, height: 100)
+    case .table:
+      CGSize(width: 240, height: 120)
     case .rectangle, .ellipse, .diamond, .image:
       CardState.shapeMinSize
     case .line, .arrow, .freehand:
