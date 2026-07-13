@@ -11,6 +11,23 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Added
+- **Sticky notes with a real title and body.** Add theme-aware notes from the canvas More menu,
+  edit both fields in a dedicated composer, and keep the structure intact through saves, exports,
+  and agent edits. (#80)
+- **Tappable checklists.** Add standalone to-do cards whose items toggle directly on the canvas;
+  regular text cards also render Markdown `- [ ]` and `- [x]` lines as clickable tasks. (#81)
+- **Simple editable tables.** Create clean, theme-aware tables, edit headers and cells, and add or
+  remove rows and columns without leaving the canvas. Tables serialize as Markdown for copy,
+  export, and agent workflows. (#82)
+- **Optional helper lines.** Settings ▸ Appearance ▸ Drawing now includes a persisted Helper lines
+  toggle. Guides are hidden by default while alignment snapping remains active.
+
+### Changed
+- **Text width can be corrected without changing its size.** Drag a text card's left or right
+  handle to reflow line wrapping while preserving the font size; corner handles still scale the
+  card and type proportionally.
+
 ## [1.4.5] - 2026-07-10
 
 ### Fixed

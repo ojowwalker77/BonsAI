@@ -47,6 +47,11 @@ struct EditingStage: View {
   /// rule: Esc cancels the draft, exactly as the old in-card label chip did.
   @State private var labelDraft = ""
   @FocusState private var labelFocused: Bool
+  @State private var stickyTitleDraft = ""
+  @State private var stickyBodyDraft = ""
+  @FocusState private var stickyTitleFocused: Bool
+  @State private var checklistDraft: [CardState.ChecklistItem] = []
+  @State private var tableDraft = CardState.TableSpec()
 
   private var tint: Color? { Theme.tintColor(card.tint).map { Color(nsColor: $0) } }
   private var canMakeGraph: Bool { card.elementKind == .line || card.elementKind == .arrow }
@@ -96,12 +101,194 @@ struct EditingStage: View {
       graphStage
     case .line, .arrow, .rectangle, .ellipse, .diamond:
       labelStage
+    case .sticky:
+      stickyStage
+    case .checklist:
+      checklistStage
+    case .table:
+      tableStage
     case .freehand, .image:
       // These kinds have no edit session; the canvas guards against opening a stage for them, so
       // this branch is unreachable. Render nothing rather than an empty glass panel.
       EmptyView()
     }
   }
+
+  private var stickyStage: some View {
+    VStack(spacing: 0) {
+      header("Sticky note".localizedUI)
+      VStack(alignment: .leading, spacing: 0) {
+        TextField("Title".localizedUI, text: $stickyTitleDraft)
+          .textFieldStyle(.plain)
+          .font(ComposerPreferences.appSwiftUIFont(size: 22, weight: .semibold))
+          .foregroundStyle(Theme.Palette.body)
+          .focused($stickyTitleFocused)
+          .padding(.horizontal, 18)
+          .padding(.top, 16)
+          .padding(.bottom, 12)
+
+        Rectangle()
+          .fill(Theme.Palette.separator.opacity(0.7))
+          .frame(height: 1)
+          .padding(.horizontal, 18)
+
+        TextEditor(text: $stickyBodyDraft)
+          .font(ComposerPreferences.appSwiftUIFont(size: 16))
+          .foregroundStyle(Theme.Palette.body)
+          .scrollContentBackground(.hidden)
+          .padding(.horizontal, 13)
+          .padding(.vertical, 10)
+          .frame(minHeight: 180)
+      }
+      .background(stickySurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+          .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1)
+      }
+      .padding(.horizontal, 20)
+      .padding(.bottom, 16)
+
+      editorActions(commit: commitSticky, cancel: cancelStructuredEdit)
+    }
+    .frame(width: 500, height: min(540, size.height * 0.78))
+    .onAppear { DispatchQueue.main.async { stickyTitleFocused = true } }
+    .onExitCommand(perform: cancelStructuredEdit)
+  }
+
+  private var stickySurface: Color {
+    (tint ?? Color.yellow).opacity(Theme.flavor.isDark ? 0.18 : 0.16)
+  }
+
+  private var checklistStage: some View {
+    VStack(spacing: 0) {
+      header("Checklist".localizedUI)
+      ScrollView {
+        VStack(spacing: 8) {
+          ForEach($checklistDraft) { $item in
+            HStack(spacing: 9) {
+              Toggle("", isOn: $item.isChecked).toggleStyle(.checkbox).labelsHidden()
+              TextField("Task".localizedUI, text: $item.text).textFieldStyle(.plain)
+              Button { checklistDraft.removeAll { $0.id == item.id } } label: {
+                Image(systemName: "minus.circle").foregroundStyle(Theme.Palette.menuDesc)
+              }.buttonStyle(.plain).help("Remove task".localizedUI)
+            }
+            .padding(.horizontal, 10).frame(height: 34).background(labelFieldSurface)
+          }
+          Button { checklistDraft.append(.init(text: "")) } label: {
+            Label("Add task".localizedUI, systemImage: "plus")
+          }.buttonStyle(.plain).foregroundStyle(Theme.Palette.accent).padding(.top, 4)
+        }.padding(.horizontal, 20).padding(.bottom, 12)
+      }
+      editorActions(commit: commitChecklist, cancel: cancelStructuredEdit)
+    }
+    .frame(width: 480, height: min(520, size.height * 0.72))
+    .onExitCommand(perform: cancelStructuredEdit)
+  }
+
+  private var tableStage: some View {
+    VStack(spacing: 0) {
+      header("Table".localizedUI)
+      ScrollView([.horizontal, .vertical]) {
+        VStack(alignment: .leading, spacing: 0) {
+          HStack(spacing: 0) {
+            ForEach(tableDraft.columns.indices, id: \.self) { column in
+              TextField("Column".localizedUI, text: columnBinding(column))
+                .textFieldStyle(.plain)
+                .font(ComposerPreferences.appSwiftUIFont(size: 13, weight: .semibold))
+                .frame(width: 148, height: 40, alignment: .leading)
+                .padding(.horizontal, 12)
+                .background(Theme.Palette.accentFill.opacity(0.72))
+                .overlay(alignment: .trailing) {
+                  if column < tableDraft.columns.count - 1 {
+                    Rectangle().fill(Theme.Palette.separator.opacity(0.55)).frame(width: 0.5)
+                  }
+                }
+            }
+          }
+          ForEach(tableDraft.rows.indices, id: \.self) { row in
+            HStack(spacing: 0) {
+              ForEach(tableDraft.columns.indices, id: \.self) { column in
+                TextField("", text: cellBinding(row: row, column: column))
+                  .textFieldStyle(.plain)
+                  .font(ComposerPreferences.appSwiftUIFont(size: 13))
+                  .frame(width: 148, height: 38, alignment: .leading)
+                  .padding(.horizontal, 12)
+                  .overlay(alignment: .trailing) {
+                    if column < tableDraft.columns.count - 1 {
+                      Rectangle().fill(Theme.Palette.separator.opacity(0.48)).frame(width: 0.5)
+                    }
+                  }
+              }
+              Button { tableDraft.rows.remove(at: row) } label: {
+                Image(systemName: "minus.circle")
+                  .foregroundStyle(Theme.Palette.menuDesc)
+                  .frame(width: 40, height: 38)
+                  .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .help("Remove row".localizedUI)
+            }
+            .background(row.isMultiple(of: 2) ? Theme.Palette.body.opacity(0.025) : Color.clear)
+            .overlay(alignment: .bottom) {
+              Rectangle().fill(Theme.Palette.separator.opacity(0.48)).frame(height: 0.5)
+            }
+          }
+        }
+        .background(Theme.Palette.raisedTint.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1)
+        }
+        .padding(20)
+      }
+      HStack(spacing: 18) {
+        Button { tableDraft.rows.append(Array(repeating: "", count: tableDraft.columns.count)) } label: {
+          Label("Add row".localizedUI, systemImage: "plus")
+        }
+        Button {
+          tableDraft.columns.append("Column \(tableDraft.columns.count + 1)")
+          for row in tableDraft.rows.indices { tableDraft.rows[row].append("") }
+        } label: {
+          Label("Add column".localizedUI, systemImage: "rectangle.split.3x1")
+        }
+        Button {
+          guard tableDraft.columns.count > 1 else { return }
+          tableDraft.columns.removeLast()
+          for row in tableDraft.rows.indices where !tableDraft.rows[row].isEmpty { tableDraft.rows[row].removeLast() }
+        } label: {
+          Label("Remove last column".localizedUI, systemImage: "minus")
+        }
+        .disabled(tableDraft.columns.count <= 1)
+        Spacer()
+      }
+      .buttonStyle(.plain)
+      .foregroundStyle(Theme.Palette.accent)
+      .padding(.horizontal, 20)
+      .padding(.bottom, 14)
+      editorActions(commit: commitTable, cancel: cancelStructuredEdit)
+    }
+    .frame(width: min(760, size.width * 0.82), height: min(560, size.height * 0.76))
+    .onExitCommand(perform: cancelStructuredEdit)
+  }
+
+  private func editorActions(commit: @escaping () -> Void, cancel: @escaping () -> Void) -> some View {
+    HStack { Spacer(); Button("Cancel".localizedUI, action: cancel); Button("Done".localizedUI, action: commit).keyboardShortcut(.defaultAction) }
+      .padding(.horizontal, 20).padding(.bottom, 16)
+  }
+
+  private func columnBinding(_ column: Int) -> Binding<String> {
+    Binding(get: { tableDraft.columns.indices.contains(column) ? tableDraft.columns[column] : "" },
+            set: { if tableDraft.columns.indices.contains(column) { tableDraft.columns[column] = $0 } })
+  }
+  private func cellBinding(row: Int, column: Int) -> Binding<String> {
+    Binding(get: { tableDraft.rows.indices.contains(row) && tableDraft.rows[row].indices.contains(column) ? tableDraft.rows[row][column] : "" },
+            set: { if tableDraft.rows.indices.contains(row) && tableDraft.rows[row].indices.contains(column) { tableDraft.rows[row][column] = $0 } })
+  }
+  private func commitChecklist() { board.setChecklist(card.id, checklistDraft); board.endEditing(card.id) }
+  private func commitTable() { board.setTable(card.id, tableDraft); board.endEditing(card.id) }
+  private func commitSticky() { board.setSticky(card.id, title: stickyTitleDraft, body: stickyBodyDraft); board.endEditing(card.id) }
+  private func cancelStructuredEdit() { board.endEditing(card.id) }
 
   // MARK: Text stage (the old Focus Write sheet, verbatim)
 
@@ -324,6 +511,13 @@ struct EditingStage: View {
         showingGraphConfig = true
       }
       onGraphConfigConsumed()
+    case .sticky:
+      stickyTitleDraft = card.stickyTitle ?? ""
+      stickyBodyDraft = card.text
+    case .checklist:
+      checklistDraft = card.checklist ?? []
+    case .table:
+      tableDraft = card.table ?? CardState.TableSpec()
     default:
       break
     }
@@ -363,6 +557,12 @@ struct EditingStage: View {
     case .line, .arrow, .rectangle, .ellipse, .diamond:
       // Click-away commits the label draft (Esc is the revert path).
       commitLabel()
+    case .sticky:
+      commitSticky()
+    case .checklist:
+      commitChecklist()
+    case .table:
+      commitTable()
     default:
       onClose()
     }

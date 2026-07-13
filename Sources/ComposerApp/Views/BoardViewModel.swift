@@ -181,6 +181,20 @@ final class BoardViewModel: ObservableObject {
       let latex = (card.latex ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
       return latex.isEmpty ? "" : "$$\(latex)$$"
     }
+    if card.elementKind == .sticky {
+      return [card.stickyTitle?.trimmed ?? "", card.text.trimmed]
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n\n")
+    }
+    if card.elementKind == .checklist {
+      return (card.checklist ?? []).map { "\($0.isChecked ? "[x]" : "[ ]") \($0.text)" }.joined(separator: "\n")
+    }
+    if card.elementKind == .table {
+      let spec = card.table ?? CardState.TableSpec()
+      let header = "| " + spec.columns.joined(separator: " | ") + " |"
+      let rule = "| " + spec.columns.map { _ in "---" }.joined(separator: " | ") + " |"
+      return ([header, rule] + spec.rows.map { "| " + $0.joined(separator: " | ") + " |" }).joined(separator: "\n")
+    }
     return interactions[card.id]?.plainText ?? card.text
   }
 
@@ -324,7 +338,14 @@ final class BoardViewModel: ObservableObject {
   }
 
   private func persistedText(for card: CardState) -> String {
-    card.elementKind == .image ? card.text : plainText(for: card)
+    switch card.elementKind {
+    case .image, .sticky, .checklist, .table:
+      // Structured elements expose a composed Markdown/plain-text representation to Compile and
+      // agents, but their persisted `text` field must remain only their own body/label payload.
+      return card.text
+    default:
+      return plainText(for: card)
+    }
   }
 
   /// Build the persistence snapshot only when the debounce actually fires. This avoids cloning
@@ -416,6 +437,9 @@ final class BoardViewModel: ObservableObject {
       case .line, .arrow, .freehand: CardState.lineSize
       case .equation: CardState.equationSize
       case .graph: CardState.graphSize
+      case .sticky: CardState.stickySize
+      case .checklist: CardState.checklistSize
+      case .table: CardState.tableSize
       case .image: CardState.shapeSize
       case .rectangle, .ellipse, .diamond: CardState.shapeSize
       case .text: CardState.defaultSize
@@ -427,11 +451,11 @@ final class BoardViewModel: ObservableObject {
         return CardState.defaultLinePoints()
       case .freehand:
         return CardState.defaultFreehandPoints()
-      case .text, .rectangle, .ellipse, .diamond, .image, .equation, .graph:
+      case .text, .rectangle, .ellipse, .diamond, .image, .equation, .graph, .sticky, .checklist, .table:
         return nil
       }
     }()
-    let card = CardState(
+    var card = CardState(
       kind: kind,
       text: "",
       x: Double(center.x - size.width / 2),
@@ -443,6 +467,11 @@ final class BoardViewModel: ObservableObject {
       whoWrote: nextAuthor,
       tint: kind == .image ? nil : currentTint
     )
+    if kind == .checklist {
+      card.checklist = [CardState.ChecklistItem(text: "New task")]
+    } else if kind == .table {
+      card.table = CardState.TableSpec()
+    }
     nextZ += 1
     cards.append(card)
     if kind == .arrow { bindArrowIfPossible(card.id) }
@@ -615,6 +644,76 @@ final class BoardViewModel: ObservableObject {
     editingCardID = nil
     scheduleSave()
     return card.id
+  }
+
+  @discardableResult
+  func insertStructured(_ kind: CanvasElementKind, title: String? = nil, text: String = "", checklist: [CardState.ChecklistItem]? = nil,
+                        table: CardState.TableSpec? = nil, at point: CGPoint) -> UUID {
+    registerUndo()
+    let size = kind == .sticky ? CardState.stickySize : (kind == .checklist ? CardState.checklistSize : CardState.tableSize)
+    let card = CardState(kind: kind, text: text, x: Double(point.x), y: Double(point.y),
+                         w: Double(size.width), h: Double(size.height), z: nextZ,
+                         stickyTitle: title, checklist: checklist, table: table,
+                         whoWrote: nextAuthor, tint: currentTint)
+    nextZ += 1
+    cards.append(card)
+    selectedCardIDs = [card.id]
+    primarySelectedCardID = card.id
+    scheduleSave()
+    return card.id
+  }
+
+  @discardableResult
+  func setSticky(_ id: UUID, title: String, body: String) -> Bool {
+    guard let i = index(for: id), cards[i].elementKind == .sticky else { return false }
+    registerUndo()
+    cards[i].stickyTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    cards[i].text = body
+    cards[i].whoWrote = nextAuthor
+    let bundle = interaction(for: id)
+    bundle.text = body
+    bundle.cachePlainText(body)
+    scheduleSave()
+    return true
+  }
+
+  @discardableResult
+  func toggleChecklistItem(_ id: UUID, index itemIndex: Int) -> Bool {
+    guard let i = index(for: id), cards[i].elementKind == .checklist,
+          cards[i].checklist?.indices.contains(itemIndex) == true else { return false }
+    registerUndo()
+    cards[i].checklist![itemIndex].isChecked.toggle()
+    cards[i].whoWrote = nextAuthor
+    scheduleSave()
+    return true
+  }
+
+  /// Apple Notes-style checklist syntax remains ordinary text, so an existing note can opt into
+  /// tappable todos without converting to a different element or losing mentions/markdown.
+  func toggleTextChecklistLine(_ id: UUID, lineIndex: Int) {
+    guard let i = index(for: id), cards[i].elementKind == .text else { return }
+    var lines = plainText(for: cards[i]).components(separatedBy: "\n")
+    guard lines.indices.contains(lineIndex) else { return }
+    if lines[lineIndex].hasPrefix("- [ ] ") {
+      lines[lineIndex].replaceSubrange(lines[lineIndex].startIndex..<lines[lineIndex].index(lines[lineIndex].startIndex, offsetBy: 6), with: "- [x] ")
+    } else if lines[lineIndex].lowercased().hasPrefix("- [x] ") {
+      lines[lineIndex].replaceSubrange(lines[lineIndex].startIndex..<lines[lineIndex].index(lines[lineIndex].startIndex, offsetBy: 6), with: "- [ ] ")
+    } else { return }
+    setText(id, lines.joined(separator: "\n"))
+  }
+
+  @discardableResult
+  func setChecklist(_ id: UUID, _ items: [CardState.ChecklistItem]) -> Bool {
+    guard let i = index(for: id), cards[i].elementKind == .checklist else { return false }
+    registerUndo(); cards[i].checklist = items; cards[i].whoWrote = nextAuthor; scheduleSave()
+    return true
+  }
+
+  @discardableResult
+  func setTable(_ id: UUID, _ spec: CardState.TableSpec) -> Bool {
+    guard let i = index(for: id), cards[i].elementKind == .table else { return false }
+    registerUndo(); cards[i].table = spec; cards[i].whoWrote = nextAuthor; scheduleSave()
+    return true
   }
 
   /// Drop a blank graph card centered on `point` (board space), carrying a default spec so it
@@ -1289,7 +1388,7 @@ final class BoardViewModel: ObservableObject {
 
   private static func isLayoutNode(_ card: CardState) -> Bool {
     switch card.elementKind {
-    case .text, .rectangle, .ellipse, .diamond, .image, .equation, .graph: return true
+    case .text, .rectangle, .ellipse, .diamond, .image, .equation, .graph, .sticky, .checklist, .table: return true
     case .line, .arrow, .freehand: return false
     }
   }

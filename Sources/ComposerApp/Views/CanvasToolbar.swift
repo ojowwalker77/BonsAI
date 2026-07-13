@@ -13,6 +13,9 @@ enum CanvasTool: Equatable {
   case freehand
   case equation
   case image
+  case sticky
+  case checklist
+  case table
 
   var elementKind: CanvasElementKind? {
     switch self {
@@ -26,6 +29,9 @@ enum CanvasTool: Equatable {
     case .freehand: .freehand
     case .equation: .equation
     case .image: .image
+    case .sticky: .sticky
+    case .checklist: .checklist
+    case .table: .table
     }
   }
 
@@ -70,6 +76,19 @@ struct CanvasToolbar: View {
                  active: tool == .freehand, shortcut: 8) { tool = .freehand }
       ToolButton(symbol: "x.squareroot", help: "Equation  ·  click the board, then type LaTeX  9".localizedUI,
                  active: tool == .equation, shortcut: 9) { tool = .equation }
+      Menu {
+        Button("Sticky note".localizedUI) { tool = .sticky }
+        Button("Checklist".localizedUI) { tool = .checklist }
+        Button("Table".localizedUI) { tool = .table }
+      } label: {
+        Image(systemName: "plus.square.on.square")
+          .font(WindowChrome.iconFont)
+          .foregroundStyle([.sticky, .checklist, .table].contains(tool) ? Theme.Palette.accent : Theme.Palette.chromeGlyph)
+          .frame(width: ToolMetrics.side, height: ToolMetrics.side)
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .help("More canvas elements".localizedUI)
     }
   }
 }

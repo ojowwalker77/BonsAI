@@ -54,6 +54,12 @@ escaping is correct, then send it.
 |----|----------|----------|---------|
 | `add_text` | `text` | `x`, `y` | `id` |
 | `add_equation` | `latex` | `x`, `y` | `id` |
+| `add_sticky` | `text` | `x`, `y` | `id` |
+| `add_checklist` | `items` (`text`, `checked`) | `x`, `y` | `id` |
+| `set_checklist` | `id`, `items` | — | — |
+| `toggle_checklist_item` | `id`, `index` (zero-based) | — | — |
+| `add_table` | `columns`, `rows` | `x`, `y` | `id` |
+| `set_table` | `id`, `columns`, `rows` | — | — |
 | `add_shape` | `kind` (`rectangle`\|`ellipse`\|`diamond`\|`line`\|`arrow`) | `w`, `h`, `x`, `y` | `id` |
 | `create_diagram` | `nodes` | `edges`, `direction` | `nodes` (key→id map) |
 | `relayout` | — | `direction` | — |

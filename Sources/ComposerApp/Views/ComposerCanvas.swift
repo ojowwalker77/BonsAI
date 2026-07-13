@@ -12,6 +12,7 @@ struct ComposerCanvas: View {
   @StateObject private var board = BoardViewModel()
   @ObservedObject private var engineCapabilities = EngineCapabilityStore.shared
   @ObservedObject private var userFacingErrors = UserFacingErrorStore.shared
+  @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
 
   @State private var tool: CanvasTool = .select
   @State private var isWorking = false
@@ -443,7 +444,7 @@ struct ComposerCanvas: View {
   /// pointer-transparent, and NEVER animated — snapping must feel instant.
   @ViewBuilder
   private var snapGuidesOverlay: some View {
-    if !board.snapGuides.isEmpty {
+    if helperLinesEnabled, !board.snapGuides.isEmpty {
       let overshoot: CGFloat = 8
       Path { path in
         for guide in board.snapGuides {
@@ -533,7 +534,7 @@ struct ComposerCanvas: View {
     // Text and equation both drop straight into edit mode — an empty card is useless until you
     // type. The editor now lives in the centered `EditingStage` (keyed off `editingCardID`), which
     // owns its own focus delay, so both kinds just arm edit mode after the card mounts.
-    if kind == .text || kind == .equation {
+    if kind == .text || kind == .equation || kind == .sticky || kind == .checklist || kind == .table {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
         board.beginEditing(id)
       }
@@ -2850,7 +2851,7 @@ private struct ElementDraftPreview: View {
           }
         }
       }
-    case .equation, .graph:
+    case .equation, .graph, .sticky, .checklist, .table:
       // Neither drag-places (equations click-to-place; graphs come from converting a line/arrow),
       // so this preview is only ever hit for exhaustiveness — a plain rounded box if it ever renders.
       return Path(roundedRect: r, cornerRadius: 6)

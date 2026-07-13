@@ -124,6 +124,9 @@ enum ComposerPreferences {
   /// When on, a confidently recognized freehand stroke snaps straight into the clean shape on
   /// pen-up (OneNote "Ink to Shape"). Off keeps recognition as the opt-in promotion chip.
   static let autoSnapFreehandKey = "composer.canvas.autoSnapFreehand"
+  /// Visual alignment hairlines shown while moving cards. Snapping remains active independently;
+  /// the helpers are off by default so the canvas stays quiet unless the user asks for them.
+  static let helperLinesEnabledKey = "composer.canvas.helperLinesEnabled"
 
   static let minEditorFontSize: CGFloat = 11
   static let maxEditorFontSize: CGFloat = 28
