@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  # Skip doc-only changes — there's nothing to compile or test when only
+  # Markdown, docs, or the license moved.
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - '.gitignore'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & test
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift toolchain
+        run: swift --version
+
+      # Release build is what users actually get, so compile it the same way.
+      - name: Build (release)
+        run: swift build -c release
+
+      # Pure-logic suites (token codecs, Shell draining) — no display required.
+      # An empty suite isn't a failure: tests can land incrementally. A real test
+      # failure still fails this step.
+      - name: Test
+        run: |
+          if out=$(swift test 2>&1); then
+            echo "$out"
+          else
+            echo "$out"
+            echo "$out" | grep -q "no tests found" || exit 1
+            echo "::notice::No test target in this tree yet — skipping."
+          fi

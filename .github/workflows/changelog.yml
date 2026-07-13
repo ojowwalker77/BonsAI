@@ -1,0 +1,38 @@
+name: Changelog
+
+# Every PR into main must record a user-facing note in CHANGELOG.md, or opt out
+# with the `skip-changelog` label for chores that don't warrant one.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # Doc-only PRs (Markdown, docs, license) aren't user-facing app changes,
+    # so don't demand a CHANGELOG.md note for them.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - '.gitignore'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  ensure-entry:
+    name: Ensure changelog entry
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a CHANGELOG.md update
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh pr diff "$PR" --repo "$REPO" --name-only | grep -qx 'CHANGELOG.md'; then
+            echo "✓ CHANGELOG.md was updated."
+          else
+            echo "::error::This PR does not update CHANGELOG.md. Add a note under '## [Unreleased]', or apply the 'skip-changelog' label if this change isn't user-facing."
+            exit 1
+          fi
