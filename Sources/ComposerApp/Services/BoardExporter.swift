@@ -23,10 +23,13 @@ enum BoardExporter {
     contentBounds(of: cards)?.insetBy(dx: -margin, dy: -margin)
   }
 
-  /// Decode a card image at full resolution for the export render. Synchronous on purpose: the
-  /// offscreen render can't wait on the canvas's async thumbnail cache.
-  static func loadImage(atPath path: String) -> NSImage? {
-    NSImage(contentsOfFile: path)
+  /// Decode a card image at full resolution for the export render. Cards persist attachment names
+  /// relative to `AssetStore`, while legacy cards may still carry absolute paths; resolving through
+  /// the same store seam as the live canvas supports both. Synchronous on purpose: the offscreen
+  /// render can't wait on the canvas's async thumbnail cache.
+  static func loadImage(storedPath path: String) -> NSImage? {
+    guard let url = AssetStore.resolve(path) else { return nil }
+    return NSImage(contentsOf: url)
   }
 
   /// Pixel scale of the exported PNG (2× for retina-crisp text).
@@ -47,7 +50,7 @@ enum BoardExporter {
     // Pre-decode every image card so the provider is a synchronous lookup during the render.
     var images: [String: NSImage] = [:]
     for card in cards where card.elementKind == .image {
-      if let path = card.imagePath, images[path] == nil, let image = loadImage(atPath: path) {
+      if let path = card.imagePath, images[path] == nil, let image = loadImage(storedPath: path) {
         images[path] = image
       }
     }

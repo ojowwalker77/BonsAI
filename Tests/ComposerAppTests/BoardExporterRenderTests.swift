@@ -160,7 +160,96 @@ final class BoardExporterRenderTests: XCTestCase {
     XCTAssertGreaterThan(distinctColors.count, 3, "text-card region should contain drawn text, not a flat fill")
   }
 
+  func testStoredAttachmentFilenameLoadsThroughAssetStore() throws {
+    let filename = try writeStoredTestImage()
+    defer { try? FileManager.default.removeItem(at: AssetStore.storeDirectory.appendingPathComponent(filename)) }
+
+    guard let image = BoardExporter.loadImage(storedPath: filename) else {
+      return XCTFail("export should resolve the stored attachment filename through AssetStore")
+    }
+    XCTAssertEqual(image.size.width, 32, accuracy: 0.5)
+    XCTAssertEqual(image.size.height, 32, accuracy: 0.5)
+  }
+
+  func testWholeBoardRenderIncludesStoredImageCardAtDistantEdge() throws {
+    let filename = try writeStoredTestImage()
+    defer { try? FileManager.default.removeItem(at: AssetStore.storeDirectory.appendingPathComponent(filename)) }
+
+    let text = CardState(kind: .text, text: "Top-left", x: -240, y: -120, w: 180, h: 80, z: 1)
+    let picture = CardState(
+      kind: .image,
+      x: 980,
+      y: 720,
+      w: 160,
+      h: 120,
+      z: 2,
+      imagePath: filename
+    )
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let ids = board.insertCopies([text, picture], offset: .zero)
+    let cards = board.cards.filter { ids.contains($0.id) }
+
+    guard let bounds = BoardExporter.exportBounds(of: cards) else {
+      return XCTFail("distant cards should produce export bounds")
+    }
+    XCTAssertLessThanOrEqual(bounds.minX, CGFloat(text.x) - BoardExporter.margin)
+    XCTAssertGreaterThanOrEqual(bounds.maxX, CGFloat(picture.x + picture.w) + BoardExporter.margin)
+    XCTAssertGreaterThanOrEqual(bounds.maxY, CGFloat(picture.y + picture.h) + BoardExporter.margin)
+
+    guard let image = BoardExporter.renderBoardImage(cards: cards, board: board),
+          let rep = bitmapRep(of: image) else {
+      return XCTFail("whole-board render failed")
+    }
+
+    // Find pixels from the solid-red fixture anywhere in the whole-board bitmap. Before the fix
+    // export showed the neutral dashed placeholder because it treated the stored filename as an
+    // absolute path, so no red pixels existed. Scanning also avoids coupling the assertion to
+    // AppKit's bottom-left bitmap origin versus SwiftUI's top-left board coordinates.
+    var foundImagePixel = false
+    outer: for x in stride(from: 0, to: rep.pixelsWide, by: 12) {
+      for y in stride(from: 0, to: rep.pixelsHigh, by: 12) {
+        guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+        if color.redComponent > 0.75, color.greenComponent < 0.20, color.blueComponent < 0.20 {
+          foundImagePixel = true
+          break outer
+        }
+      }
+    }
+    XCTAssertTrue(foundImagePixel, "stored image pixels should appear in the whole-board export")
+  }
+
   // MARK: Helpers
+
+  private func writeStoredTestImage() throws -> String {
+    try FileManager.default.createDirectory(
+      at: AssetStore.storeDirectory,
+      withIntermediateDirectories: true
+    )
+    guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+          let context = CGContext(
+            data: nil,
+            width: 32,
+            height: 32,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+          ) else {
+      throw TestImageError.bitmapAllocationFailed
+    }
+    context.setFillColor(red: 0.95, green: 0.02, blue: 0.02, alpha: 1)
+    context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+    guard let cgImage = context.makeImage() else {
+      throw TestImageError.bitmapAllocationFailed
+    }
+    let rep = NSBitmapImageRep(cgImage: cgImage)
+    guard let png = rep.representation(using: .png, properties: [:]) else {
+      throw TestImageError.pngEncodingFailed
+    }
+    let filename = "board-export-test-\(UUID().uuidString).png"
+    try png.write(to: AssetStore.storeDirectory.appendingPathComponent(filename))
+    return filename
+  }
 
   private func bitmapRep(of image: NSImage) -> NSBitmapImageRep? {
     if let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first { return rep }
@@ -178,5 +267,10 @@ final class BoardExporterRenderTests: XCTestCase {
   private func rgbString(_ color: NSColor) -> String {
     guard let c = color.usingColorSpace(.sRGB) else { return "??" }
     return String(format: "(%.2f, %.2f, %.2f)", c.redComponent, c.greenComponent, c.blueComponent)
+  }
+
+  private enum TestImageError: Error {
+    case bitmapAllocationFailed
+    case pngEncodingFailed
   }
 }
