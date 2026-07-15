@@ -11,6 +11,8 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.4.7] - 2026-07-14
+
 ### Added
 - **Sticky notes with a real title and body.** Add theme-aware notes from the canvas More menu,
   edit both fields in a dedicated composer, and keep the structure intact through saves, exports,
@@ -24,9 +26,17 @@ under the new version heading.
   toggle. Guides are hidden by default while alignment snapping remains active.
 
 ### Changed
+- **Every board is one click away.** The top-left board picker is now a row of individual,
+  horizontally scrollable pills with a dedicated New Board button; switching, renaming, and
+  deleting boards no longer requires opening a hover menu.
 - **Text width can be corrected without changing its size.** Drag a text card's left or right
   handle to reflow line wrapping while preserving the font size; corner handles still scale the
   card and type proportionally.
+
+### Fixed
+- **Board image exports include stored attachments again.** Copy PNG and Save PNG now resolve the
+  relative image paths used by saved boards, so image cards render their real pixels instead of a
+  missing-image placeholder — including cards far from the canvas origin.
 
 ## [1.4.5] - 2026-07-10
 
