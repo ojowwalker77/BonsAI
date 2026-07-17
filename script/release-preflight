@@ -31,8 +31,9 @@ grep -Fq 'BUNDLE_ID="dev.jow.BonsAI"' script/build_and_run.sh
 grep -Fq 'UPDATE_REPOSITORY="${BONSAI_UPDATE_REPOSITORY:-ojowwalker77/BonsAI}"' script/build_and_run.sh
 [[ -f icon/BonsAI.png ]]
 [[ -d icon/BonsAI.icon ]]
-grep -Fq 'MACOS_CERTIFICATE_P12_BASE64' .github/workflows/release.yml
-grep -Fq 'APPLE_API_KEY_P8' .github/workflows/release.yml
+grep -Fq 'MACOS_CERT_P12_BASE64' .github/workflows/release.yml
+grep -Fq 'APPLE_ID' .github/workflows/release.yml
+grep -Fq 'APPLE_APP_PASSWORD' .github/workflows/release.yml
 grep -Fq 'SPARKLE_PRIVATE_KEY' .github/workflows/release.yml
 
 echo "BonsAI $version is ready for a signed release."
