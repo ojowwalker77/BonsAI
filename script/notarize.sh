@@ -8,8 +8,9 @@ set -euo pipefail
 # Local use (after `xcrun notarytool store-credentials "BonsAI-notary" …`):
 #     ./script/notarize.sh
 #
-# CI use (API-key notarization, no stored profile):
+# CI use (API key or Apple ID/app-specific password, no stored profile):
 #     NOTARY_PROFILE= APPLE_API_KEY_PATH=… APPLE_API_KEY_ID=… APPLE_API_ISSUER_ID=… ./script/notarize.sh
+#     NOTARY_PROFILE= APPLE_ID=… APPLE_TEAM_ID=… APPLE_APP_PASSWORD=… ./script/notarize.sh
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -55,14 +56,22 @@ ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 if [ -n "${NOTARY_PROFILE:-}" ]; then
   xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
 else
-  : "${APPLE_API_KEY_PATH:?APPLE_API_KEY_PATH is required when NOTARY_PROFILE is empty}"
-  : "${APPLE_API_KEY_ID:?APPLE_API_KEY_ID is required when NOTARY_PROFILE is empty}"
-  : "${APPLE_API_ISSUER_ID:?APPLE_API_ISSUER_ID is required when NOTARY_PROFILE is empty}"
-  xcrun notarytool submit "$ZIP" \
-    --key "$APPLE_API_KEY_PATH" \
-    --key-id "$APPLE_API_KEY_ID" \
-    --issuer "$APPLE_API_ISSUER_ID" \
-    --wait
+  if [ -n "${APPLE_API_KEY_PATH:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER_ID:-}" ]; then
+    xcrun notarytool submit "$ZIP" \
+      --key "$APPLE_API_KEY_PATH" \
+      --key-id "$APPLE_API_KEY_ID" \
+      --issuer "$APPLE_API_ISSUER_ID" \
+      --wait
+  else
+    : "${APPLE_ID:?APPLE_ID is required when NOTARY_PROFILE is empty}"
+    : "${APPLE_TEAM_ID:?APPLE_TEAM_ID is required when NOTARY_PROFILE is empty}"
+    : "${APPLE_APP_PASSWORD:?APPLE_APP_PASSWORD is required when NOTARY_PROFILE is empty}"
+    xcrun notarytool submit "$ZIP" \
+      --apple-id "$APPLE_ID" \
+      --team-id "$APPLE_TEAM_ID" \
+      --password "$APPLE_APP_PASSWORD" \
+      --wait
+  fi
 fi
 
 echo "==> staple ticket & repackage"

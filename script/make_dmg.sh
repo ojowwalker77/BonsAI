@@ -10,7 +10,7 @@ set -euo pipefail
 #     ./script/make_dmg.sh
 #     DMG_NOTARIZE=false ./script/make_dmg.sh   # local-only unsigned package
 #
-# CI use mirrors notarize.sh's API-key path.
+# CI use mirrors notarize.sh's API-key or Apple ID/app-password path.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -53,6 +53,8 @@ if [ -n "${NOTARY_PROFILE:-}" ]; then
   have_creds=true
 elif [ -n "${APPLE_API_KEY_PATH:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER_ID:-}" ]; then
   have_creds=true
+elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ]; then
+  have_creds=true
 fi
 
 if [ "$DMG_NOTARIZE" = "true" ]; then
@@ -73,11 +75,17 @@ if [ "$DMG_NOTARIZE" = "true" ]; then
   echo "==> notarize + staple $DMG (this can take a few minutes)"
   if [ -n "${NOTARY_PROFILE:-}" ]; then
     xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
-  else
+  elif [ -n "${APPLE_API_KEY_PATH:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER_ID:-}" ]; then
     xcrun notarytool submit "$DMG" \
       --key "$APPLE_API_KEY_PATH" \
       --key-id "$APPLE_API_KEY_ID" \
       --issuer "$APPLE_API_ISSUER_ID" \
+      --wait
+  else
+    xcrun notarytool submit "$DMG" \
+      --apple-id "$APPLE_ID" \
+      --team-id "$APPLE_TEAM_ID" \
+      --password "$APPLE_APP_PASSWORD" \
       --wait
   fi
   xcrun stapler staple "$DMG"

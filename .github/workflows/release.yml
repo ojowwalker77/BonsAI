@@ -50,21 +50,19 @@ jobs:
 
       - name: Require release credentials
         env:
-          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           missing=0
           for name in \
-            MACOS_CERTIFICATE_P12_BASE64 \
-            MACOS_CERTIFICATE_PASSWORD \
-            APPLE_API_KEY_P8 \
-            APPLE_API_KEY_ID \
-            APPLE_API_ISSUER_ID \
+            MACOS_CERT_P12_BASE64 \
+            MACOS_CERT_PASSWORD \
+            APPLE_ID \
+            APPLE_APP_PASSWORD \
             APPLE_TEAM_ID \
             SPARKLE_PRIVATE_KEY; do
             if [ -z "${!name:-}" ]; then
@@ -79,18 +77,18 @@ jobs:
 
       - name: Import Developer ID certificate
         env:
-          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           KEYCHAIN_PASSWORD="bonsai-${{ github.run_id }}"
-          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 -D > "$RUNNER_TEMP/certificate.p12"
+          printf '%s' "$MACOS_CERT_P12_BASE64" | base64 -D > "$RUNNER_TEMP/certificate.p12"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security import "$RUNNER_TEMP/certificate.p12" \
             -k "$KEYCHAIN_PATH" \
-            -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -P "$MACOS_CERT_PASSWORD" \
             -T /usr/bin/codesign
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign: \
@@ -101,20 +99,12 @@ jobs:
           rm -f "$RUNNER_TEMP/certificate.p12"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
-      - name: Write App Store Connect API key
-        env:
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-        run: |
-          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-          chmod 600 "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-
       - name: Build, sign, notarize, and staple
         env:
           NOTARY_PROFILE: ''
-          APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           export BONSAI_VERSION="${TAG#v}"
           ./script/notarize.sh
