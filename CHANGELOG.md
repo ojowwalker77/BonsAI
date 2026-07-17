@@ -11,6 +11,8 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.4.8] - 2026-07-17
+
 ### Changed
 - **BonsAI now has one dependable path from checkout to release.** Shared developer
   commands drive CI, releases come from verified `main` tags, public artifacts require
