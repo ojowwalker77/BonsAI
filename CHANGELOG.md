@@ -11,6 +11,12 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Changed
+- **BonsAI now has one dependable path from checkout to release.** Shared developer
+  commands drive CI, releases come from verified `main` tags, public artifacts require
+  Developer ID signing and API-key notarization, the updater points at the BonsAI
+  repository, and the coordinated BonsAI icon ships in both source and app-icon forms.
+
 ## [1.4.7] - 2026-07-14
 
 ### Added

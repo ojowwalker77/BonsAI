@@ -61,7 +61,7 @@ or contributing? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Installing a release
 
-Each `v*` tag publishes a **Developer ID-signed and notarized** `BonsAI.dmg` to
+Each `vX.Y.Z` tag publishes a **Developer ID-signed and notarized** `BonsAI.dmg` to
 **Releases**. Download it, open it, and drag **BonsAI** onto the **Applications** folder —
 it launches with a double-click; no right-click or quarantine workaround. (A zipped
 `BonsAI.app` is also attached for Sparkle's auto-update; the `.dmg` is the recommended

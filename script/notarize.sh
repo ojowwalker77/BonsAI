@@ -8,8 +8,8 @@ set -euo pipefail
 # Local use (after `xcrun notarytool store-credentials "BonsAI-notary" …`):
 #     ./script/notarize.sh
 #
-# CI use (env-driven notarization, no stored profile):
-#     NOTARY_PROFILE= APPLE_ID=… APPLE_TEAM_ID=… APPLE_APP_PASSWORD=… ./script/notarize.sh
+# CI use (API-key notarization, no stored profile):
+#     NOTARY_PROFILE= APPLE_API_KEY_PATH=… APPLE_API_KEY_ID=… APPLE_API_ISSUER_ID=… ./script/notarize.sh
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -55,7 +55,14 @@ ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 if [ -n "${NOTARY_PROFILE:-}" ]; then
   xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
 else
-  xcrun notarytool submit "$ZIP" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+  : "${APPLE_API_KEY_PATH:?APPLE_API_KEY_PATH is required when NOTARY_PROFILE is empty}"
+  : "${APPLE_API_KEY_ID:?APPLE_API_KEY_ID is required when NOTARY_PROFILE is empty}"
+  : "${APPLE_API_ISSUER_ID:?APPLE_API_ISSUER_ID is required when NOTARY_PROFILE is empty}"
+  xcrun notarytool submit "$ZIP" \
+    --key "$APPLE_API_KEY_PATH" \
+    --key-id "$APPLE_API_KEY_ID" \
+    --issuer "$APPLE_API_ISSUER_ID" \
+    --wait
 fi
 
 echo "==> staple ticket & repackage"
@@ -65,7 +72,7 @@ shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
 
 echo "==> verify Gatekeeper acceptance"
 xcrun stapler validate "$APP"
-spctl -a -vvv --type exec "$APP" || true
+spctl -a -vvv --type exec "$APP"
 echo "✓ notarized + stapled: $ZIP"
 
 # Package the notarized, stapled app into a drag-to-install dmg too (the human download), then

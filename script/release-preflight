@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+version="${1:-}"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "usage: $0 X.Y.Z" >&2
+  exit 2
+fi
+
+if [[ "${BONSAI_PREFLIGHT_ALLOW_DIRTY:-0}" != "1" ]] && [[ -n "$(git status --porcelain)" ]]; then
+  echo "error: release preflight requires a clean working tree." >&2
+  exit 1
+fi
+
+if [[ "${BONSAI_PREFLIGHT_SKIP_CHANGELOG:-0}" != "1" ]] && ! grep -Fq "## [$version]" CHANGELOG.md; then
+  echo "error: CHANGELOG.md has no release section for $version." >&2
+  exit 1
+fi
+
+stale_repository='kiwi-init/BonsAI'
+if git grep -n "$stale_repository" -- ':!script/release-preflight'; then
+  echo "error: stale upstream BonsAI release endpoint found." >&2
+  exit 1
+fi
+
+grep -Fq 'APP_NAME="BonsAI"' script/build_and_run.sh
+grep -Fq 'BUNDLE_ID="dev.jow.BonsAI"' script/build_and_run.sh
+grep -Fq 'UPDATE_REPOSITORY="${BONSAI_UPDATE_REPOSITORY:-ojowwalker77/BonsAI}"' script/build_and_run.sh
+[[ -f icon/BonsAI.png ]]
+[[ -d icon/BonsAI.icon ]]
+grep -Fq 'MACOS_CERTIFICATE_P12_BASE64' .github/workflows/release.yml
+grep -Fq 'APPLE_API_KEY_P8' .github/workflows/release.yml
+grep -Fq 'SPARKLE_PRIVATE_KEY' .github/workflows/release.yml
+
+echo "BonsAI $version is ready for a signed release."

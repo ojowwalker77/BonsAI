@@ -13,6 +13,7 @@ MIN_SYSTEM_VERSION="14.0"
 # (only the private key is secret; it lives in the SPARKLE_PRIVATE_KEY CI secret). Fill this in after
 # running setup; until then the updater stays idle (no SUPublicEDKey is emitted, so no insecure feed).
 SPARKLE_PUBLIC_KEY="RwEq55AfbXnJMuIxXySJMyzspkDrUla/TRFKZrGQ6PI="
+UPDATE_REPOSITORY="${BONSAI_UPDATE_REPOSITORY:-ojowwalker77/BonsAI}"
 BUILD_CONFIGURATION="release"
 
 # Normal launches should exercise the same optimized, compact binary users get. Keep an explicit
@@ -179,7 +180,7 @@ cat >"$INFO_PLIST" <<PLIST
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
   <key>SUFeedURL</key>
-  <string>https://github.com/kiwi-init/BonsAI/releases/latest/download/appcast.xml</string>
+  <string>https://github.com/$UPDATE_REPOSITORY/releases/latest/download/appcast.xml</string>
   <key>SUEnableAutomaticChecks</key>
   <true/>
   <key>SUAutomaticallyUpdate</key>

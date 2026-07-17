@@ -1,6 +1,6 @@
 # Raycast extension scripts for BonsAI
 
-Requires [BonsAI](https://github.com/kiwi-init/BonsAI) running with a board open.
+Requires [BonsAI](https://github.com/ojowwalker77/BonsAI) running with a board open.
 
 ## Capture text to the board
 
