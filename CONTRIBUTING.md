@@ -120,9 +120,11 @@ be rejected.** Smaller and sharper beats bigger and busier, every time.
 ## Development
 
 ```bash
-./script/build_and_run.sh        # build (release), stage, and launch
-./script/build_and_run.sh bundle # build + stage only, no launch
-swift test                       # run the test suite
+./script/bootstrap               # resolve the SwiftPM dependency graph
+./script/run                     # build, stage, and launch BonsAI
+./script/check                   # release build plus the complete test suite
+./script/verify                  # stage and inspect the distributable app bundle
+./script/release-preflight 1.2.3 # validate metadata before tagging a release
 ```
 
 A **Swift 6.2+ toolchain (Xcode 26)** is all you need to build — the Tahoe SDK is
@@ -133,7 +135,7 @@ external dependency — [Sparkle](https://sparkle-project.org) (auto-update) —
 by SwiftPM and bundled into the `.app` by `build_and_run.sh`. See the
 [README](README.md) for the full set of requirements.
 
-Releases are fully automated — pushing a `v*` tag builds and publishes the app with a
+Releases are fully automated — pushing a `vX.Y.Z` tag builds and publishes the app with a
 Sparkle auto-update feed. Contributors never touch the release flow; it's documented
 for maintainers in [docs/releasing.md](docs/releasing.md).
 
@@ -141,15 +143,12 @@ for maintainers in [docs/releasing.md](docs/releasing.md).
 
 - **Keep it focused and small.** One idea per PR. It's easier to review, and
   easier to say yes to.
-- **Target the release branch.** Open contributor and agent branches against the
-  active release branch, not directly against `main`. If there is no active
-  release branch yet, create one from the latest `main` named
-  `release-[next_release_number]` (for example, `release-1.0.6`), then open the
-  PR from your branch into that release branch. When the release branch is ready,
-  maintainers merge it into `main`.
+- **Target `main`.** Use a short-lived branch and open the pull request directly
+  against `main`. Releases are immutable `vX.Y.Z` tags created from a commit that
+  already passed the required `Quality` check on `main`.
 - **Add a CHANGELOG entry.** Every non-doc app change adds a note under
-  `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), so the release branch has
-  complete notes before it merges to `main`. For changes that genuinely aren't
+  `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), so `main` has complete notes
+  before its next release tag. For changes that genuinely aren't
   user-facing (refactors, CI tweaks), apply the `skip-changelog` label instead.
 - **Cover pure logic with tests.** Codecs, parsing, and other deterministic
   logic should get tests like those in `Tests/ComposerAppTests`.
@@ -158,7 +157,8 @@ for maintainers in [docs/releasing.md](docs/releasing.md).
   load-bearing. If your change touches panel layout, read [CLAUDE.md](CLAUDE.md)
   and [AGENTS.md](AGENTS.md) first, and launch the app to verify both Settings
   and Agent open beside a shrunken board with aligned edges.
-- **Make CI green.** `swift build -c release` and `swift test` must pass.
+- **Make CI green.** Run `./script/check` for the fast gate and `./script/verify`
+  when packaging, resources, the updater, or release behavior changes.
 
 If you're unsure whether an idea fits the philosophy, open an issue and ask
 before building it — it's the fastest way to find out, and we're happy to talk it

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+if [[ "${BONSAI_VERIFY_EXISTING:-0}" != "1" ]]; then
+  ./script/build_and_run.sh bundle
+fi
+
+APP="dist/BonsAI.app"
+PLIST="$APP/Contents/Info.plist"
+ICON="icon/BonsAI.png"
+
+[[ -x "$APP/Contents/MacOS/BonsAI" ]] || {
+  echo "error: staged BonsAI executable is missing." >&2
+  exit 1
+}
+
+[[ -f "$PLIST" ]] || {
+  echo "error: staged BonsAI Info.plist is missing." >&2
+  exit 1
+}
+
+[[ -f "$APP/Contents/Resources/AppIcon.icns" ]] || {
+  echo "error: staged BonsAI icon is missing." >&2
+  exit 1
+}
+
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" == "dev.jow.BonsAI" ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$PLIST")" == "BonsAI" ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$PLIST")" == "https://github.com/ojowwalker77/BonsAI/releases/latest/download/appcast.xml" ]]
+
+dimensions="$(sips -g pixelWidth -g pixelHeight "$ICON" 2>/dev/null)"
+grep -q 'pixelWidth: 1024' <<<"$dimensions"
+grep -q 'pixelHeight: 1024' <<<"$dimensions"
+
+echo "BonsAI release bundle identity, updater, and icon are valid."
