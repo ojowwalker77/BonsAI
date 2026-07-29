@@ -93,18 +93,23 @@ pieces bridge that gap, loopback-only:
 
 A tiny, dependency-free HTTP server (`Network.framework`) bound to
 **`127.0.0.1:7337`**, so the board never leaves the machine. `AppDelegate` starts
-it at launch. Endpoints:
+it at launch. API v2 rotates a 256-bit capability every launch, publishes it only in a private
+mode-`0600` session descriptor, and validates `Host`, `Origin`, and authorization before body
+decoding or `MainActor` dispatch. `/health` is the only endpoint that does not require the
+capability. Endpoints:
 
 | Method · path   | Does                                                              |
 | --------------- | ---------------------------------------------------------------- |
 | `GET /canvas`   | The full `CanvasGraph` as JSON.                                   |
 | `POST /canvas`  | One `{ "op": …, … }` mutation → `{ "ok": …, … }`. (raw op names)  |
+| `POST /capture` | Append one text card to the active board.                        |
 | `POST /mcp`     | One MCP JSON-RPC message (the agent's transport).                 |
+| `POST /permission` | One permission-arbiter JSON-RPC message for in-app Claude.    |
 | `GET /health`   | Liveness check.                                                   |
 
 It's request/response only (no server-initiated SSE — `GET /mcp` returns 405),
-and it caps the request buffer at 1 MB so a buggy client can't grow it unbounded.
-Canvas mutations are deliberately tiny JSON.
+does not enable CORS, and caps the request buffer at 1 MB so a buggy client can't grow it
+unbounded. Canvas mutations are deliberately tiny JSON.
 
 ### [`CanvasMCP`](../Sources/ComposerApp/Services/CanvasMCP.swift) — the MCP tool surface
 

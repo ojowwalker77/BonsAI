@@ -14,7 +14,7 @@ import Network
 final class CanvasServer {
   static let shared = CanvasServer()
   static let port: UInt16 = 7337
-  static let apiVersion = "1"
+  static let apiVersion = "2"
   /// The server is loopback-only, but an agent/tool bug should still not be able to grow an
   /// in-memory request buffer without bound. Canvas mutations are deliberately tiny JSON.
   private static let maximumRequestBytes = 1 * 1_024 * 1_024
@@ -23,9 +23,53 @@ final class CanvasServer {
 
   private var listener: NWListener?
   private let queue = DispatchQueue(label: "dev.jow.Composer.canvas-server")
+  private let sessionResult: Result<CanvasSessionDescriptor, Error>
+  private let sessionDescriptorURL: URL
+
+  init(
+    session: CanvasSessionDescriptor? = nil,
+    sessionDescriptorURL: URL = CanvasSessionDescriptorStore.defaultURL
+  ) {
+    self.sessionDescriptorURL = sessionDescriptorURL
+    if let session {
+      sessionResult = .success(session)
+    } else {
+      sessionResult = Result {
+        try CanvasSessionDescriptor.generate(apiVersion: Self.apiVersion, port: Self.port)
+      }
+    }
+  }
+
+  /// Raw capability for a child process environment. Callers must never put it in argv or logs.
+  func capabilityForClient() throws -> String {
+    try sessionResult.get().capability
+  }
 
   func start() {
     guard listener == nil else { return }
+    do {
+      try CanvasSessionDescriptorStore.invalidate(at: sessionDescriptorURL)
+    } catch {
+      let message = UserFacingError.message(
+        for: error,
+        while: "Invalidating the previous local canvas session".localizedUI
+      )
+      UserFacingError.report(message)
+      NSLog("[canvas] secure session unavailable")
+      return
+    }
+    let session: CanvasSessionDescriptor
+    do {
+      session = try sessionResult.get()
+    } catch {
+      let message = UserFacingError.message(
+        for: error,
+        while: "Creating a secure local canvas session".localizedUI
+      )
+      UserFacingError.report(message)
+      NSLog("[canvas] secure session unavailable")
+      return
+    }
     let params = NWParameters.tcp
     params.allowLocalEndpointReuse = true
     params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: Self.port)!)
@@ -40,8 +84,49 @@ final class CanvasServer {
     }
     self.listener = listener
     listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+    listener.stateUpdateHandler = { [weak self, weak listener] state in
+      guard let self, let listener, self.listener === listener else { return }
+      switch state {
+      case .ready:
+        do {
+          try CanvasSessionDescriptorStore.publish(session, at: self.sessionDescriptorURL)
+          NSLog(Self.startupLogMessage)
+        } catch {
+          listener.cancel()
+          self.listener = nil
+          let message = UserFacingError.message(
+            for: error,
+            while: "Publishing the private canvas-session descriptor".localizedUI
+          )
+          UserFacingError.report(message)
+          NSLog("[canvas] secure session unavailable")
+        }
+      case .failed(let error):
+        self.listener = nil
+        let message = UserFacingError.message(
+          for: error,
+          while: "Starting Composer's local canvas service on 127.0.0.1:%d".localizedUI(Self.port)
+        )
+        UserFacingError.report(message)
+        NSLog("[canvas] local service failed")
+      default:
+        break
+      }
+    }
     listener.start(queue: queue)
-    NSLog("[canvas] serving on http://127.0.0.1:\(Self.port)")
+  }
+
+  static var startupLogMessage: String {
+    "[canvas] serving on http://127.0.0.1:\(port)"
+  }
+
+  static var healthResponse: [String: Any] {
+    [
+      "ok": true,
+      "service": "bonsai-canvas",
+      "apiVersion": apiVersion,
+      "port": port,
+    ]
   }
 
   private func accept(_ connection: NWConnection) {
@@ -78,14 +163,27 @@ final class CanvasServer {
   }
 
   private func route(_ request: HTTPRequest, buffer: Data, on connection: NWConnection) {
+    let session: CanvasSessionDescriptor
+    do {
+      session = try sessionResult.get()
+    } catch {
+      send(connection, status: "503 Service Unavailable", json: [
+        "ok": false,
+        "error": "secure canvas session unavailable".localizedUI,
+      ])
+      return
+    }
+    if let rejection = CanvasRequestAuthorizer(session: session).rejection(for: request) {
+      send(connection, status: rejection.status, json: [
+        "ok": false,
+        "error": rejection.message,
+      ])
+      return
+    }
+
     switch (request.method, request.path) {
     case ("GET", "/health"):
-      send(connection, status: "200 OK", json: [
-        "ok": true,
-        "service": "bonsai-canvas",
-        "apiVersion": Self.apiVersion,
-        "port": Self.port,
-      ])
+      send(connection, status: "200 OK", json: Self.healthResponse)
 
     case ("GET", "/canvas"):
       Task { @MainActor in
@@ -219,23 +317,29 @@ final class CanvasServer {
   }
 
   private func send(_ connection: NWConnection, status: String, data: Data) {
+    let payload = Self.httpResponse(status: status, data: data)
+    connection.send(content: payload, completion: .contentProcessed { _ in connection.cancel() })
+  }
+
+  static func httpResponse(status: String, data: Data) -> Data {
     let header = "HTTP/1.1 \(status)\r\n"
       + "Content-Type: application/json\r\n"
       + "Content-Length: \(data.count)\r\n"
-      + "Access-Control-Allow-Origin: *\r\n"
+      + "Cache-Control: no-store\r\n"
       + "Connection: close\r\n\r\n"
     var payload = Data(header.utf8)
     payload.append(data)
-    connection.send(content: payload, completion: .contentProcessed { _ in connection.cancel() })
+    return payload
   }
 }
 
 // MARK: - Minimal HTTP request parsing
 
-private struct HTTPRequest {
+struct HTTPRequest {
   let method: String
   let path: String
   let headers: [String: String]
+  let duplicateHeaders: Set<String>
   let bodyStart: Int
   let contentLength: Int
 
@@ -249,14 +353,70 @@ private struct HTTPRequest {
     method = String(requestLine[0])
     path = String(requestLine[1])
     var parsed: [String: String] = [:]
+    var duplicates = Set<String>()
     for line in lines.dropFirst() {
       guard let colon = line.firstIndex(of: ":") else { continue }
-      parsed[line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()] =
-        line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+      let name = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+      if parsed[name] != nil { duplicates.insert(name) }
+      parsed[name] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
     }
     headers = parsed
+    duplicateHeaders = duplicates
     bodyStart = separator.upperBound - buffer.startIndex
     guard let length = Int(parsed["content-length"] ?? "0"), length >= 0 else { return nil }
     contentLength = length
+  }
+}
+
+// MARK: - Request security
+
+struct CanvasRequestRejection: Equatable {
+  let status: String
+  let message: String
+}
+
+/// Host/origin/capability checks kept separate from routing so tests can prove the gate without
+/// opening a real user board. `CanvasServer.route` calls this before slicing or decoding the body
+/// and before dispatching any work to the MainActor.
+struct CanvasRequestAuthorizer {
+  private static let sensitiveHeaders: Set<String> = [
+    "authorization", "content-length", "host", "origin",
+  ]
+
+  let session: CanvasSessionDescriptor
+
+  func rejection(for request: HTTPRequest) -> CanvasRequestRejection? {
+    if !request.duplicateHeaders.isDisjoint(with: Self.sensitiveHeaders) {
+      return CanvasRequestRejection(
+        status: "400 Bad Request",
+        message: "duplicate security-sensitive header".localizedUI
+      )
+    }
+    guard request.headers["host"] == expectedHost else {
+      return CanvasRequestRejection(
+        status: "403 Forbidden",
+        message: "request host is not allowed".localizedUI
+      )
+    }
+    if let origin = request.headers["origin"], origin != session.baseURL {
+      return CanvasRequestRejection(
+        status: "403 Forbidden",
+        message: "request origin is not allowed".localizedUI
+      )
+    }
+    guard request.path == "/health" || request.headers["authorization"] == session.authorizationHeader else {
+      return CanvasRequestRejection(
+        status: "401 Unauthorized",
+        message: "canvas authorization required".localizedUI
+      )
+    }
+    return nil
+  }
+
+  private var expectedHost: String {
+    URL(string: session.baseURL)?.host.map { host in
+      let port = URL(string: session.baseURL)?.port ?? Int(CanvasServer.port)
+      return "\(host):\(port)"
+    } ?? "127.0.0.1:\(CanvasServer.port)"
   }
 }

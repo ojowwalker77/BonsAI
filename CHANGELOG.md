@@ -12,6 +12,9 @@ under the new version heading.
 ## [Unreleased]
 
 ### Fixed
+- **Web pages can no longer drive an open board through the loopback API.** Every app launch now
+  rotates a private capability, validates loopback hosts and browser origins before handling a
+  request, and gives local agents a protected discovery file instead of an open CORS endpoint.
 - **Boards no longer lose data when opened by an older or incompatible build.** Saved boards now
   carry a format version, preserve unknown element records across autosaves, and keep unreadable
   payloads write-protected with a recovery copy.

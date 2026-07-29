@@ -16,10 +16,17 @@ enum AgentStreamEvent: Equatable {
 /// a pure function of the turn's inputs.
 struct AgentLaunch {
   var arguments: [String]
-  /// Extra environment entries merged over the process environment (OpenCode ships its MCP config
-  /// this way). Empty for engines that pass everything on the command line.
+  /// Extra environment entries merged over the process environment. The canvas capability lives
+  /// here so it is inherited by the child without appearing in process arguments or logs.
   var extraEnvironment: [String: String] = [:]
+  /// Secret-free configuration files that must exist before the process starts.
+  var configurationFiles: [AgentLaunchConfigurationFile] = []
   var workingDirectory: URL
+}
+
+struct AgentLaunchConfigurationFile {
+  let url: URL
+  let data: Data
 }
 
 /// Adapts one coding-agent CLI to the in-canvas streaming chat: how to launch a turn, and how to
@@ -33,7 +40,7 @@ protocol CanvasChatEngine {
   /// Build the invocation for one turn. `resume` is the prior session id (nil on the first turn);
   /// `grounding` is a folder the agent may read (nil ⇒ canvas-only, run in `workdir`).
   func launch(prompt: String, resume: String?, grounding: URL?, model: ClaudeModel,
-              port: UInt16, workdir: URL) -> AgentLaunch
+              port: UInt16, capability: String, workdir: URL) -> AgentLaunch
 
   /// Parse one line of streaming stdout into zero or more normalized events. An empty result means
   /// "not a protocol line" — the caller keeps it as diagnostic output for a failed run.
@@ -64,10 +71,15 @@ struct ClaudeChatEngine: CanvasChatEngine {
   let engine = HeadlessEngine.claude
 
   func launch(prompt: String, resume: String?, grounding: URL?, model: ClaudeModel,
-              port: UInt16, workdir: URL) -> AgentLaunch {
+              port: UInt16, capability: String, workdir: URL) -> AgentLaunch {
     // Two in-process MCP servers: `canvas` exposes the board tools; `composer` exposes only the
     // permission arbiter that backs `--permission-prompt-tool`.
-    let mcp = #"{"mcpServers":{"canvas":{"type":"http","url":"http://127.0.0.1:\#(port)/mcp"},"\#(PermissionMCP.serverName)":{"type":"http","url":"http://127.0.0.1:\#(port)/permission"}}}"#
+    let capabilityVariable = CanvasSessionDescriptor.capabilityEnvironmentVariable
+    let mcp = #"{"mcpServers":{"canvas":{"type":"http","url":"http://127.0.0.1:\#(port)/mcp","headers":{"Authorization":"Bearer ${\#(capabilityVariable)}"}},"\#(PermissionMCP.serverName)":{"type":"http","url":"http://127.0.0.1:\#(port)/permission","headers":{"Authorization":"Bearer ${\#(capabilityVariable)}"}}}}"#
+    let mcpConfiguration = AgentLaunchConfigurationFile(
+      url: workdir.appendingPathComponent("claude-canvas-mcp.json"),
+      data: Data(mcp.utf8)
+    )
     let grounded = grounding != nil
     // Grounded: read-only file tools so the agent can argue from real files. Otherwise canvas-only.
     let tools = grounded ? "mcp__canvas__*,Read,Grep,Glob" : "mcp__canvas__*"
@@ -76,12 +88,17 @@ struct ClaudeChatEngine: CanvasChatEngine {
     var args = ["-p", prompt,
                 "--model", model.cliAlias,
                 "--output-format", "stream-json", "--verbose",
-                "--mcp-config", mcp,
+                "--mcp-config", mcpConfiguration.url.path,
                 "--allowedTools", tools,
                 "--permission-prompt-tool", "mcp__\(PermissionMCP.serverName)__\(PermissionMCP.toolName)",
                 "--append-system-prompt", systemPrompt]
     if let resume { args += ["--resume", resume] }
-    return AgentLaunch(arguments: args, workingDirectory: grounding ?? workdir)
+    return AgentLaunch(
+      arguments: args,
+      extraEnvironment: [capabilityVariable: capability],
+      configurationFiles: [mcpConfiguration],
+      workingDirectory: grounding ?? workdir
+    )
   }
 
   /// Parse one stream-json line: `system`/`result` carry the session id; `assistant` carries text and
@@ -132,7 +149,7 @@ struct CodexChatEngine: CanvasChatEngine {
   let engine = HeadlessEngine.codex
 
   func launch(prompt: String, resume: String?, grounding: URL?, model: ClaudeModel,
-              port: UInt16, workdir: URL) -> AgentLaunch {
+              port: UInt16, capability: String, workdir: URL) -> AgentLaunch {
     let cwd = grounding ?? workdir
     // Codex has no `--append-system-prompt`; give it the canvas rules once, on the first turn (later
     // turns resume the same thread and keep the context). Grounded turns add the file-reading note.
@@ -149,6 +166,7 @@ struct CodexChatEngine: CanvasChatEngine {
     if resume == nil { args += ["--sandbox", "read-only", "--cd", cwd.path] }
     args += ["-c", "approval_policy=\"never\"",
              "-c", "mcp_servers.canvas.url=\"http://127.0.0.1:\(port)/mcp\"",
+             "-c", "mcp_servers.canvas.bearer_token_env_var=\"\(CanvasSessionDescriptor.capabilityEnvironmentVariable)\"",
              "-c", "mcp_servers.canvas.default_tools_approval_mode=\"approve\""]
     // `--ignore-user-config` drops the user's `~/.codex/config.toml` model, so pass it (or their pick
     // in BonsAI) explicitly — otherwise Codex silently falls back to its built-in default.
@@ -156,7 +174,11 @@ struct CodexChatEngine: CanvasChatEngine {
       args += ["-m", model]
     }
     args.append(fullPrompt)
-    return AgentLaunch(arguments: args, workingDirectory: cwd)
+    return AgentLaunch(
+      arguments: args,
+      extraEnvironment: [CanvasSessionDescriptor.capabilityEnvironmentVariable: capability],
+      workingDirectory: cwd
+    )
   }
 
   /// Codex emits one JSON object per line. The session id rides `thread.started`; finished items
@@ -206,7 +228,7 @@ struct OpenCodeChatEngine: CanvasChatEngine {
   let engine = HeadlessEngine.opencode
 
   func launch(prompt: String, resume: String?, grounding: URL?, model: ClaudeModel,
-              port: UInt16, workdir: URL) -> AgentLaunch {
+              port: UInt16, capability: String, workdir: URL) -> AgentLaunch {
     let cwd = grounding ?? workdir
     let firstTurn = resume == nil
     let system = grounding != nil ? CanvasAgent.systemPrompt + "\n\n" + CanvasAgent.groundingAddendum
@@ -221,8 +243,16 @@ struct OpenCodeChatEngine: CanvasChatEngine {
 
     // Inline config (precedence over project/global) so canvas MCP is always present and edits/bash
     // are denied regardless of what the grounded folder's own opencode.json might say.
-    let config = #"{"mcp":{"canvas":{"type":"remote","url":"http://127.0.0.1:\#(port)/mcp","enabled":true}},"permission":{"edit":"deny","bash":"deny"}}"#
-    return AgentLaunch(arguments: args, extraEnvironment: ["OPENCODE_CONFIG_CONTENT": config], workingDirectory: cwd)
+    let capabilityVariable = CanvasSessionDescriptor.capabilityEnvironmentVariable
+    let config = #"{"mcp":{"canvas":{"type":"remote","url":"http://127.0.0.1:\#(port)/mcp","enabled":true,"oauth":false,"headers":{"Authorization":"Bearer {env:\#(capabilityVariable)}"}}},"permission":{"edit":"deny","bash":"deny"}}"#
+    return AgentLaunch(
+      arguments: args,
+      extraEnvironment: [
+        "OPENCODE_CONFIG_CONTENT": config,
+        capabilityVariable: capability,
+      ],
+      workingDirectory: cwd
+    )
   }
 
   /// OpenCode emits one JSON event per line. `text` parts carry assistant prose, `tool_use` parts

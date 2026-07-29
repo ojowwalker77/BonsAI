@@ -96,6 +96,10 @@ final class AgentSkillsInstallerTests: XCTestCase {
       let url = resourcesDir.appendingPathComponent(name)
       let contents = try String(contentsOf: url, encoding: .utf8)
       XCTAssertFalse(contents.isEmpty, "\(name) is empty")
+      XCTAssertTrue(contents.contains("Composer/Canvas/session.json"), "\(name) misses secure discovery")
+      XCTAssertTrue(contents.contains("Authorization"), "\(name) misses authenticated requests")
+      XCTAssertTrue(contents.contains("ProxyHandler({})"), "\(name) may proxy the loopback capability")
+      XCTAssertFalse(contents.contains("curl -s http://127.0.0.1:7337/canvas"), "\(name) has an unauthenticated read")
     }
   }
 }

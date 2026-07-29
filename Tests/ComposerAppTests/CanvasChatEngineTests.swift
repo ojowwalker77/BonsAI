@@ -73,6 +73,7 @@ final class CanvasChatEngineTests: XCTestCase {
   func testCodexFreshTurnSetsSandboxAndCwd() {
     let launch = CodexChatEngine().launch(
       prompt: "hi", resume: nil, grounding: nil, model: .opus, port: 7337,
+      capability: "test-secret",
       workdir: URL(fileURLWithPath: "/tmp/scratch"))
     XCTAssertTrue(launch.arguments.contains("--sandbox"))
     XCTAssertTrue(launch.arguments.contains("--cd"))
@@ -83,6 +84,7 @@ final class CanvasChatEngineTests: XCTestCase {
     // `codex exec resume` rejects --sandbox/--cd; a resumed session inherits them.
     let launch = CodexChatEngine().launch(
       prompt: "again", resume: "thread-123", grounding: nil, model: .opus, port: 7337,
+      capability: "test-secret",
       workdir: URL(fileURLWithPath: "/tmp/scratch"))
     XCTAssertEqual(Array(launch.arguments.prefix(3)), ["exec", "resume", "thread-123"])
     XCTAssertFalse(launch.arguments.contains("--sandbox"))
@@ -94,12 +96,62 @@ final class CanvasChatEngineTests: XCTestCase {
   func testOpenCodeResumePassesSessionAndInlineMCPConfig() {
     let launch = OpenCodeChatEngine().launch(
       prompt: "again", resume: "ses_9", grounding: nil, model: .opus, port: 7337,
+      capability: "test-secret",
       workdir: URL(fileURLWithPath: "/tmp/scratch"))
     XCTAssertTrue(launch.arguments.contains("--session"))
     XCTAssertTrue(launch.arguments.contains("ses_9"))
     XCTAssertTrue(launch.arguments.contains("--dangerously-skip-permissions"))
     XCTAssertNotNil(launch.extraEnvironment["OPENCODE_CONFIG_CONTENT"])
     XCTAssertTrue((launch.extraEnvironment["OPENCODE_CONFIG_CONTENT"] ?? "").contains("\"canvas\""))
+  }
+
+  func testEveryEngineKeepsCapabilityOutOfArgumentsAndAddsAuthorization() throws {
+    let secret = "capability-must-never-reach-argv"
+    let engines: [CanvasChatEngine] = [
+      ClaudeChatEngine(), CodexChatEngine(), OpenCodeChatEngine(),
+    ]
+
+    for engine in engines {
+      let launch = engine.launch(
+        prompt: "hi", resume: nil, grounding: nil, model: .opus, port: 7337,
+        capability: secret, workdir: URL(fileURLWithPath: "/tmp/scratch")
+      )
+      XCTAssertFalse(launch.arguments.joined(separator: " ").contains(secret), engine.engine.rawValue)
+      XCTAssertEqual(
+        launch.extraEnvironment[CanvasSessionDescriptor.capabilityEnvironmentVariable],
+        secret,
+        engine.engine.rawValue
+      )
+    }
+
+    let claude = ClaudeChatEngine().launch(
+      prompt: "hi", resume: nil, grounding: nil, model: .opus, port: 7337,
+      capability: secret, workdir: URL(fileURLWithPath: "/tmp/scratch")
+    )
+    XCTAssertFalse(claude.arguments.contains { $0.contains("Bearer") })
+    let claudeConfiguration = String(
+      data: try XCTUnwrap(claude.configurationFiles.first).data,
+      encoding: .utf8
+    )
+    XCTAssertTrue(claudeConfiguration?.contains("Bearer ${BONSAI_CANVAS_CAPABILITY}") == true)
+    XCTAssertFalse(claudeConfiguration?.contains(secret) == true)
+
+    let codex = CodexChatEngine().launch(
+      prompt: "hi", resume: nil, grounding: nil, model: .opus, port: 7337,
+      capability: secret, workdir: URL(fileURLWithPath: "/tmp/scratch")
+    )
+    XCTAssertTrue(codex.arguments.contains(
+      "mcp_servers.canvas.bearer_token_env_var=\"BONSAI_CANVAS_CAPABILITY\""
+    ))
+
+    let openCode = OpenCodeChatEngine().launch(
+      prompt: "hi", resume: nil, grounding: nil, model: .opus, port: 7337,
+      capability: secret, workdir: URL(fileURLWithPath: "/tmp/scratch")
+    )
+    XCTAssertTrue(
+      (openCode.extraEnvironment["OPENCODE_CONFIG_CONTENT"] ?? "")
+        .contains("Bearer {env:BONSAI_CANVAS_CAPABILITY}")
+    )
   }
 
   // MARK: OpenCode one-shot text extraction (real --format json shape)

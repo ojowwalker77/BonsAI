@@ -21,19 +21,31 @@ if [ -z "$TEXT" ]; then
   exit 1
 fi
 
-PAYLOAD=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "$TEXT")
-RESULT=$(curl -s -m 5 -X POST http://127.0.0.1:7337/capture \
-  -H 'Content-Type: application/json' \
-  -d "$PAYLOAD")
-
-echo "$RESULT" | python3 -c '
-import json, sys
-data = json.load(sys.stdin)
+BONSAI_TEXT="$TEXT" python3 - "$HOME/Library/Application Support/Composer/Canvas/session.json" <<'PY'
+import json, os, sys, urllib.error, urllib.request
+with open(sys.argv[1], encoding="utf-8") as file:
+    session = json.load(file)
+request = urllib.request.Request(
+    session["baseURL"] + "/capture",
+    data=json.dumps({"text": os.environ["BONSAI_TEXT"]}).encode(),
+    headers={
+        "Authorization": "Bearer " + session["capability"],
+        "Content-Type": "application/json",
+    },
+    method="POST",
+)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+try:
+    with opener.open(request, timeout=5) as response:
+        data = json.load(response)
+except urllib.error.HTTPError as error:
+    print(error.read().decode(), file=sys.stderr)
+    raise SystemExit(1)
 if not data.get("ok"):
     print(data.get("error", "Capture failed"), file=sys.stderr)
     sys.exit(1)
 print("Captured on board:", data.get("id", ""))
-'
+PY
 ```
 
 ## Read the board (JSON)
@@ -45,7 +57,18 @@ print("Captured on board:", data.get("id", ""))
 # @raycast.title BonsAI board graph
 # @raycast.mode fullOutput
 
-curl -s -m 5 http://127.0.0.1:7337/canvas | python3 -m json.tool
+python3 - "$HOME/Library/Application Support/Composer/Canvas/session.json" <<'PY'
+import json, sys, urllib.request
+with open(sys.argv[1], encoding="utf-8") as file:
+    session = json.load(file)
+request = urllib.request.Request(
+    session["baseURL"] + "/canvas",
+    headers={"Authorization": "Bearer " + session["capability"]},
+)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+with opener.open(request, timeout=5) as response:
+    print(json.dumps(json.load(response), indent=2))
+PY
 ```
 
 ## Health check
