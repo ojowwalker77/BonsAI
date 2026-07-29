@@ -7,6 +7,7 @@ import SwiftUI
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
   private var panel: FloatingPanel?
+  private let workspace = CanvasWorkspaceSession()
   var isVisible: Bool { panel?.isVisible ?? false }
 
   override init() {
@@ -15,13 +16,20 @@ final class PanelController: NSObject, NSWindowDelegate {
       self, selector: #selector(handleDismiss), name: .composerDismiss, object: nil)
     NotificationCenter.default.addObserver(
       forName: .composerThemeChanged, object: nil, queue: .main
-    ) { [weak self] _ in MainActor.assumeIsolated { self?.applyTheme() } }
+    ) { [weak self] notification in
+      MainActor.assumeIsolated {
+        let trigger = notification.object as? CanvasRemountTrigger ?? .theme
+        self?.applyTheme(trigger: trigger)
+      }
+    }
     // Font size/family changes deliberately DON'T rebuild here: the canvas remounts just its
     // board subtree (ComposerCanvas.typographyRevision), so the Settings overlay hosting those
     // controls keeps its identity — a full rebuild reset its scroll position on every click.
     NotificationCenter.default.addObserver(
       forName: .composerLanguageChanged, object: nil, queue: .main
-    ) { [weak self] _ in MainActor.assumeIsolated { self?.rebuildCanvas() } }
+    ) { [weak self] _ in
+      MainActor.assumeIsolated { self?.rebuildCanvas(for: .language) }
+    }
   }
 
   @objc private func handleDismiss() { hide() }
@@ -52,8 +60,8 @@ final class PanelController: NSObject, NSWindowDelegate {
 
   /// Apply the selected theme: set the window's appearance class AND rebuild the canvas —
   /// palette tokens are plain flavor lookups captured at render, so the tree must re-render from
-  /// scratch. Board content is store-backed and the agent is a singleton, so nothing is lost.
-  private func applyTheme() {
+  /// scratch. The controller-owned workspace is retained and flushed before that replacement.
+  private func applyTheme(trigger: CanvasRemountTrigger) {
     guard let panel else { return }
     panel.appearance = ComposerPreferences.effectiveTheme.nsAppearance
     // Full screen runs on an opaque solid backing (see windowWillEnterFullScreen) — keep it on
@@ -61,16 +69,16 @@ final class PanelController: NSObject, NSWindowDelegate {
     if panel.styleMask.contains(.fullScreen) {
       panel.backgroundColor = Theme.nsWindowCanvas
     }
-    rebuildCanvas()
+    rebuildCanvas(for: trigger)
   }
 
   /// Tear down and re-mount the canvas so every plain-value lookup captured at render (palette
-  /// tokens, the app-font resolver, measurement caches) re-resolves. Board content is store-backed
-  /// and the agent is a singleton, so nothing is lost. Font-family switches reuse this — same reason
-  /// as a theme switch, minus the appearance-class change.
-  private func rebuildCanvas() {
+  /// tokens, the app-font resolver, measurement caches) re-resolves. Board state and viewport live
+  /// in the retained workspace; only replaceable view state is rebuilt.
+  private func rebuildCanvas(for trigger: CanvasRemountTrigger) {
     guard let panel else { return }
-    installContent(ComposerCanvas(), in: panel)
+    workspace.prepareForRemount(trigger)
+    installContent(ComposerCanvas(workspace: workspace), in: panel)
     panel.layoutWindowChromeButtons()
   }
 
@@ -82,7 +90,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     panel.minSize = NSSize(width: 640, height: 460)
     // Restore (and keep persisting) the size/position the user last left the window at.
     panel.setFrameAutosaveName("BonsAIBoardWindow")
-    installContent(ComposerCanvas(), in: panel)
+    installContent(ComposerCanvas(workspace: workspace), in: panel)
     return panel
   }
 
@@ -158,7 +166,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     // There is no public notification for a failed entry, so ComposerPanelBackground can't
     // hear it — remount the canvas; the backdrop re-reads the window's real full-screen state
     // on appear and drops its pinned-solid mode.
-    rebuildCanvas()
+    rebuildCanvas(for: .fullScreenRecovery)
   }
 
   /// Undo `windowWillEnterFullScreen`'s preparation: transparent glass-capable backing and the

@@ -57,8 +57,8 @@ extension Notification.Name {
   static let composerStyleCacheUpdated = Notification.Name("composerStyleCacheUpdated")
   /// Re-bind the global summon hotkey after the user records a new shortcut in Settings.
   static let composerShortcutChanged = Notification.Name("composerShortcutChanged")
-  /// Fires when the app-wide theme (System / Light / Dark) changes — windows re-apply their
-  /// `NSAppearance` in place, no rebuild needed.
+  /// Fires when the app-wide theme (System / Light / Dark) changes. The board window remounts its
+  /// SwiftUI root with the same retained workspace after synchronously flushing pending edits.
   static let composerThemeChanged = Notification.Name("composerThemeChanged")
   /// Fires when the app-wide body font family changes — the canvas rebuilds (like a theme switch)
   /// so measurement caches and chrome labels re-resolve against the new face.

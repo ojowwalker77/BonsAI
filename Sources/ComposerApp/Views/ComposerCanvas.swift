@@ -8,8 +8,9 @@ import UniformTypeIdentifiers
 /// (mentions, connector search, the semantic linter) is routed to the active card; board-level
 /// actions (Compile, Copy) span every card.
 struct ComposerCanvas: View {
-  @StateObject private var store = DumpStore.shared
-  @StateObject private var board = BoardViewModel()
+  @ObservedObject private var workspace: CanvasWorkspaceSession
+  @ObservedObject private var store: DumpStore
+  @ObservedObject private var board: BoardViewModel
   @ObservedObject private var engineCapabilities = EngineCapabilityStore.shared
   @ObservedObject private var userFacingErrors = UserFacingErrorStore.shared
   @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
@@ -61,10 +62,8 @@ struct ComposerCanvas: View {
   /// search field steals first responder — so a cancel can hand editing back to it.
   @State private var paletteReturnCardID: UUID?
 
-  // Board transform. Pointer locations are normalized back into board space so selection,
-  // placement, and dragging keep working at every zoom level.
-  @State private var scale: CGFloat = 1
-  @State private var pan: CGSize = .zero
+  // Board transform. Committed scale/pan live in the retained workspace so changing the theme or
+  // language does not teleport the user back to the origin. The in-flight gesture remains local.
   @State private var panLive: CGSize = .zero
 
   /// The ⇧⌘F writing sheet's card. Separate from `editingCardID` on purpose: text edits inline on
@@ -85,6 +84,22 @@ struct ComposerCanvas: View {
 
   private let service = HeadlessPromptService()
   private let cardPasteboardType = NSPasteboard.PasteboardType("dev.jow.Composer.cards")
+
+  init(workspace: CanvasWorkspaceSession) {
+    self.workspace = workspace
+    store = workspace.store
+    board = workspace.board
+  }
+
+  private var scale: CGFloat {
+    get { workspace.scale }
+    nonmutating set { workspace.scale = newValue }
+  }
+
+  private var pan: CGSize {
+    get { workspace.pan }
+    nonmutating set { workspace.pan = newValue }
+  }
 
   private var effectiveScale: CGFloat { scale }
 

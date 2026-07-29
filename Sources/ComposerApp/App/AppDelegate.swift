@@ -42,7 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     appearanceObservation = NSApp.observe(\.effectiveAppearance) { _, _ in
       DispatchQueue.main.async {
         guard ComposerPreferences.followsSystemAppearance else { return }
-        NotificationCenter.default.post(name: .composerThemeChanged, object: nil)
+        NotificationCenter.default.post(
+          name: .composerThemeChanged, object: CanvasRemountTrigger.systemAppearance)
       }
     }
 
