@@ -44,7 +44,7 @@ This backs the **Refine** actions (selection rewrite, whole-draft intents) and
 command line, read stdout, done. No streaming, no session, no tools, no MCP.
 
 ```text
-claude -p "<prompt>"
+BONSAI_CANVAS_CAPABILITY="<inherited per-launch capability>" claude -p "<prompt>"
 ```
 
 The prompts live in
@@ -85,7 +85,7 @@ The three invocations, same board over the same loopback MCP endpoint:
 claude -p "<prompt>"
   --model <opus|sonnet|haiku>                # the chat model; default opus
   --output-format stream-json --verbose
-  --mcp-config '{"mcpServers":{"canvas":{"type":"http","url":"http://127.0.0.1:7337/mcp"}}}'
+  --mcp-config "<private app workspace>/claude-canvas-mcp.json"
   --allowedTools "mcp__canvas__*"            # + ,Read,Grep,Glob when grounded
   --append-system-prompt "<system prompt>"
   [--resume "<session-id>"]                  # second turn onward
@@ -103,7 +103,10 @@ What each piece buys us:
   per line (`system` / `assistant` / `result`). `handleLine(_:)` parses those
   into the chat transcript: assistant `text` becomes a reply, `tool_use` becomes
   a one-line "read the board" / "drew a diagram · 4 cards" summary.
-- **`--mcp-config …`** — points Claude at the loopback
+- **`--mcp-config …`** — points Claude at a secret-free config file whose canvas and permission
+  server headers use `Bearer ${BONSAI_CANVAS_CAPABILITY}`. Claude expands that child-environment
+  variable while loading the file, so the capability itself is never present in argv. This points
+  Claude at the authenticated loopback
   [canvas MCP server](canvas-agent.md). This is *how* the agent reaches the
   board; the tool half is documented in [canvas-agent.md](canvas-agent.md).
 - **`--allowedTools`** — canvas tools only by default. When a **grounding
@@ -125,10 +128,13 @@ codex exec [resume "<thread-id>"] "<system prompt + prompt on turn 1>"
   --sandbox read-only --cd <grounding-or-scratch-dir>
   -c approval_policy="never"
   -c mcp_servers.canvas.url="http://127.0.0.1:7337/mcp"
+  -c mcp_servers.canvas.bearer_token_env_var="BONSAI_CANVAS_CAPABILITY"
   -c mcp_servers.canvas.default_tools_approval_mode="approve"
 ```
 
-The load-bearing choices: **`default_tools_approval_mode="approve"`** auto-approves
+The load-bearing choices: **`bearer_token_env_var`** makes Codex read the raw per-launch capability
+from its child environment and construct the bearer header without putting the secret in argv.
+**`default_tools_approval_mode="approve"`** auto-approves
 the (board-only) canvas tools — without it, headless `exec` cancels every MCP call
 because it can't answer the approval prompt. **`--sandbox read-only`** keeps Codex
 off the user's disk while still letting it read grounded files (its file reads don't
@@ -142,7 +148,9 @@ and `item.completed` for the assistant message, MCP tool calls, and shell comman
 **OpenCode** — `run --format json`, canvas MCP injected inline:
 
 ```text
-OPENCODE_CONFIG_CONTENT='{"mcp":{"canvas":{"type":"remote","url":".../mcp","enabled":true}},
+OPENCODE_CONFIG_CONTENT='{"mcp":{"canvas":{"type":"remote","url":".../mcp","enabled":true,
+                          "oauth":false,
+                          "headers":{"Authorization":"Bearer {env:BONSAI_CANVAS_CAPABILITY}"}}},
                           "permission":{"edit":"deny","bash":"deny"}}'
 opencode run --format json --dangerously-skip-permissions
   --dir <grounding-or-scratch-dir> [--session "<id>"]
@@ -155,6 +163,9 @@ that **denies edits and shell** — the agent's writes belong on the board, not 
 disk — while `--dangerously-skip-permissions` auto-approves what's left (the canvas
 tools and file reads). Continuity is `--session <id>`. `OpenCodeChatEngine.parse`
 reads `text` / `tool_use` parts and the `sessionID` that rides every event.
+
+For all three engines, BonsAI injects `BONSAI_CANVAS_CAPABILITY` directly into the child
+environment. The value is never serialized into a board, URL, CLI argument, transcript, or log.
 
 Unlike Path 1, this path streams: `CanvasAgent` reads `stdout.bytes.lines`
 incrementally and appends messages as they arrive, and `stop()` terminates the

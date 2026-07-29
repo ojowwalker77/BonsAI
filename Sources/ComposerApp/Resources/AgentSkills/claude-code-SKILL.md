@@ -5,10 +5,9 @@ description: Write to (or read) the user's BonsAI board — the spatial idea can
 
 # Writing to the BonsAI board
 
-BonsAI is a spatial idea canvas (a macOS app). It exposes a tiny **loopback-only** HTTP
-server on `http://127.0.0.1:7337` so any local process — including this agent session — can
-read and shape the live board. Your writes appear on screen instantly and are tagged as
-agent-authored (`whoWrote: 2`), so the user can tell your cards from theirs.
+BonsAI is a spatial idea canvas (a macOS app). It exposes an **authenticated loopback-only**
+HTTP server on `http://127.0.0.1:7337`. Your writes appear on screen instantly and are tagged
+as agent-authored (`whoWrote: 2`), so the user can tell your cards from theirs.
 
 The board you write to is **whichever board is currently open** in BonsAI — there is no
 board addressing.
@@ -24,10 +23,44 @@ curl -s -m 3 http://127.0.0.1:7337/health
 - A write that returns `{"ok":false,"error":"no active canvas"}` → BonsAI is running but no
   board is open/registered. Ask the user to open a board.
 
+## Authenticated request helper
+
+Every request below uses the per-launch, mode-0600 descriptor. Never print its capability or put
+the capability in a shell variable, URL, or command argument. Define this helper and call it in the
+same shell command:
+
+```bash
+bonsai_request() {
+  BONSAI_METHOD="$1" BONSAI_PATH="$2" BONSAI_BODY="${3-}" \
+  python3 - "$HOME/Library/Application Support/Composer/Canvas/session.json" <<'PY'
+import json, os, sys, urllib.error, urllib.request
+with open(sys.argv[1], encoding="utf-8") as file:
+    session = json.load(file)
+body = os.environ["BONSAI_BODY"]
+headers = {"Authorization": "Bearer " + session["capability"]}
+if body:
+    headers["Content-Type"] = "application/json"
+request = urllib.request.Request(
+    session["baseURL"] + os.environ["BONSAI_PATH"],
+    data=body.encode() if body else None,
+    headers=headers,
+    method=os.environ["BONSAI_METHOD"],
+)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+try:
+    with opener.open(request, timeout=5) as response:
+        print(response.read().decode())
+except urllib.error.HTTPError as error:
+    print(error.read().decode(), file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+```
+
 ## Reading the board
 
 ```bash
-curl -s http://127.0.0.1:7337/canvas
+bonsai_request GET /canvas
 ```
 
 Returns `{ nodes, edges, readingOrder }`. Each node has `id`, `kind`, `text`, `x/y/w/h`, and
@@ -41,8 +74,7 @@ Every mutation is a single JSON object `{"op": "...", ...}` POSTed to `/canvas`.
 `{"ok": true, ...}` (often with the new `id`) or `{"ok": false, "error": "..."}`.
 
 ```bash
-curl -s -X POST http://127.0.0.1:7337/canvas \
-  --data-binary '{"op":"add_text","text":"Ship the loopback skill"}'
+bonsai_request POST /canvas '{"op":"add_text","text":"Ship the loopback skill"}'
 ```
 
 For text with quotes, newlines, or any length, write the JSON payload to a file first so

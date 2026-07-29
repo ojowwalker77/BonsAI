@@ -143,11 +143,45 @@ final class CanvasAgent: ObservableObject {
       finish {}
       return
     }
+    let capability: String
+    do {
+      capability = try CanvasServer.shared.capabilityForClient()
+    } catch {
+      transcript.append(AgentMessage(
+        role: .error,
+        text: UserFacingError.message(
+          for: error,
+          while: "Preparing %@ to connect to the board securely".localizedUI(engine.title)
+        )
+      ))
+      finish {}
+      return
+    }
     // Each engine reaches the same board over the loopback MCP server; the adapter builds its own
     // dialect of the invocation (Claude stream-json + --mcp-config, Codex exec --json + -c
     // mcp_servers.*, OpenCode run --format json + an inline config).
     let launch = adapter.launch(prompt: prompt, resume: resume, grounding: groundingDirectory,
-                                model: model, port: CanvasServer.port, workdir: Self.workdir)
+                                model: model, port: CanvasServer.port, capability: capability,
+                                workdir: Self.workdir)
+    do {
+      for configuration in launch.configurationFiles {
+        try configuration.data.write(to: configuration.url, options: [.atomic])
+        try FileManager.default.setAttributes(
+          [.posixPermissions: 0o600],
+          ofItemAtPath: configuration.url.path
+        )
+      }
+    } catch {
+      transcript.append(AgentMessage(
+        role: .error,
+        text: UserFacingError.message(
+          for: error,
+          while: "Preparing %@'s secure canvas configuration".localizedUI(engine.title)
+        )
+      ))
+      finish {}
+      return
+    }
 
     let process = Process()
     process.executableURL = executable

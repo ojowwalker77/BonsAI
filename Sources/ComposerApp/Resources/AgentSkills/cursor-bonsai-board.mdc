@@ -6,7 +6,7 @@ alwaysApply: false
 
 # BonsAI canvas API
 
-BonsAI is a spatial idea board (macOS app). When it's running, it exposes a **loopback-only**
+BonsAI is a spatial idea board (macOS app). When it's running, it exposes an **authenticated loopback-only**
 HTTP server at `http://127.0.0.1:7337` for reading and writing the board that's currently
 open. Use this whenever asked to put/drop/add something on the BonsAI board, sketch a
 diagram onto the canvas, or read what's on it.
@@ -14,15 +14,46 @@ diagram onto the canvas, or read what's on it.
 Check it's up first: `curl -s -m 3 http://127.0.0.1:7337/health` — if that fails to connect,
 BonsAI isn't running; say so and don't retry in a loop.
 
-Read the board: `curl -s http://127.0.0.1:7337/canvas` → `{ nodes, edges, readingOrder }`.
+Authenticated requests read the per-launch descriptor at
+`~/Library/Application Support/Composer/Canvas/session.json`. Never print its capability or put it
+in a shell variable, URL, or command argument. Use this helper in the same shell command:
+
+```bash
+bonsai_request() {
+  BONSAI_METHOD="$1" BONSAI_PATH="$2" BONSAI_BODY="${3-}" \
+  python3 - "$HOME/Library/Application Support/Composer/Canvas/session.json" <<'PY'
+import json, os, sys, urllib.error, urllib.request
+with open(sys.argv[1], encoding="utf-8") as file:
+    session = json.load(file)
+body = os.environ["BONSAI_BODY"]
+headers = {"Authorization": "Bearer " + session["capability"]}
+if body:
+    headers["Content-Type"] = "application/json"
+request = urllib.request.Request(
+    session["baseURL"] + os.environ["BONSAI_PATH"],
+    data=body.encode() if body else None,
+    headers=headers,
+    method=os.environ["BONSAI_METHOD"],
+)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+try:
+    with opener.open(request, timeout=5) as response:
+        print(response.read().decode())
+except urllib.error.HTTPError as error:
+    print(error.read().decode(), file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+```
+
+Read the board: `bonsai_request GET /canvas` → `{ nodes, edges, readingOrder }`.
 Each node has `whoWrote` (1 = human, 2 = agent, 0 = unknown) — treat `whoWrote: 1` nodes as
 the human's latest input.
 
 Write by POSTing one JSON op per request to `/canvas`:
 
 ```bash
-curl -s -X POST http://127.0.0.1:7337/canvas \
-  --data-binary '{"op":"add_text","text":"Ship the loopback skill"}'
+bonsai_request POST /canvas '{"op":"add_text","text":"Ship the loopback skill"}'
 ```
 
 Ops: `add_text {text,x?,y?}`, `add_sticky {text,x?,y?}`, `add_checklist {items,x?,y?}`,
