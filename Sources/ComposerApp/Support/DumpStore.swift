@@ -4,24 +4,25 @@ import SwiftData
 // MARK: - Model
 
 /// One board. The whole memory layer is a stack of these. A board is a set of positioned
-/// text cards (`cardsData`, JSON of `[CardState]`); `text` is kept as a lightweight mirror
-/// of the cards' content so the history list (`title`/`isBlank`), legacy migration, and any
+/// cards (`cardsData`, a versioned `BoardPayload`); `text` is kept as a lightweight mirror
+/// of the cards' content so the history title, legacy migration, and any
 /// pre-canvas note keep working unchanged. Stored locally via SwiftData today; flipping on
 /// iCloud later is a CloudKit config + entitlement, no model change.
 @Model
 final class Dump {
-  /// Mirror of the board's text (joined card contents) — drives `title`/`isBlank` and is the
-  /// single-card fallback for legacy/un-migrated boards. The cards are the real content.
+  /// Mirror of the board's text (joined card contents) — drives `title` and is the single-card
+  /// fallback for legacy/un-migrated boards. The cards are the real content.
   var text: String
   var createdAt: Date
   var updatedAt: Date
-  /// JSON of `[CardState]`. `nil` on a legacy/fresh board → one card synthesized from `text`.
+  /// Versioned board JSON. `nil` on a legacy/fresh board → one card synthesized from `text`.
   var cardsData: Data?
   /// A user-given board name. When set it overrides the auto-derived `title` and survives card
   /// edits, so a rename sticks. `nil`/empty falls back to the first line of the content.
   var customTitle: String?
 
-  init(text: String = "", createdAt: Date = Date(), updatedAt: Date = Date(), cardsData: Data? = nil, customTitle: String? = nil) {
+  init(text: String = "", createdAt: Date = Date(), updatedAt: Date = Date(),
+       cardsData: Data? = nil, customTitle: String? = nil) {
     self.text = text
     self.createdAt = createdAt
     self.updatedAt = updatedAt
@@ -43,11 +44,16 @@ extension Dump {
     }
     return ""
   }
-  /// Blank = no content AND no user-given name — a named board is worth keeping even while empty,
-  /// so it isn't auto-pruned out from under the user.
+  /// Blank = one disposable empty text placeholder and no user-given name. Unreadable and unknown
+  /// payloads are always worth keeping; deleting them would turn a compatibility problem into loss.
   var isBlank: Bool {
-    text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      && (customTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          customTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true else {
+      return false
+    }
+    guard let cardsData else { return true }
+    guard let payload = try? BoardPayload.decode(cardsData) else { return false }
+    return !payload.hasMeaningfulContent
   }
 }
 
@@ -57,6 +63,10 @@ extension Dump {
 /// Ordering is by creation (newest first) so editing an old board never reshuffles it.
 @MainActor
 final class DumpStore: ObservableObject {
+  struct BoardProtection: Equatable {
+    let recoveryURL: URL?
+  }
+
   static let shared = DumpStore()
   private static let welcomeSeededKey = "composer.didSeedWelcomeBoard"
   private static let welcomeBoard13InstalledKey = "composer.didInstallWelcomeBoard.1.3.0"
@@ -76,6 +86,11 @@ final class DumpStore: ObservableObject {
   private var context: ModelContext { container.mainContext }
   private var saveWork: DispatchWorkItem?
   private var reportedUnreadableBoardIDs = Set<String>()
+  @Published private var protectedBoardIDs = Set<PersistentIdentifier>()
+  private var opaqueCardsByBoardID: [PersistentIdentifier: [BoardPayload.OpaqueCard]] = [:]
+  private var recoveryDataByBoardID: [PersistentIdentifier: Data] = [:]
+  private var recoveryURLByBoardID: [PersistentIdentifier: URL] = [:]
+  private let recoveryDirectory: URL?
   /// The next save asks the board for one fresh snapshot when the debounce fires. Keeping a
   /// closure (rather than an array captured by every queued work item) prevents fast typing from
   /// retaining many whole-board copies until their cancelled timers drain.
@@ -96,7 +111,10 @@ final class DumpStore: ObservableObject {
   /// `inMemoryOnly` exists for tests: `swift test` runs unsandboxed, so the default on-disk
   /// configuration resolves to the user's REAL `Composer.store` — a test that touched it could
   /// persist junk cards into a real board.
-  init(inMemoryOnly: Bool = false) {
+  init(inMemoryOnly: Bool = false, loadInitialContent: Bool = true,
+       recoveryDirectory: URL? = nil) {
+    self.recoveryDirectory = recoveryDirectory
+      ?? (inMemoryOnly ? nil : BoardRecoveryStore.defaultDirectory)
     let schema = Schema([Dump.self])
     let config = inMemoryOnly
       ? ModelConfiguration(isStoredInMemoryOnly: true)
@@ -113,9 +131,11 @@ final class DumpStore: ObservableObject {
         fatalError("Composer could not create either persistent or temporary board storage: \(error.localizedDescription)")
       }
     }
-    migrateLegacyNoteIfNeeded()
-    seedWelcomeBoardIfFirstRun()
-    installWelcomeBoard13IfNeeded()
+    if loadInitialContent {
+      migrateLegacyNoteIfNeeded()
+      seedWelcomeBoardIfFirstRun()
+      installWelcomeBoard13IfNeeded()
+    }
     reload()
     ensureCurrent()
   }
@@ -124,6 +144,10 @@ final class DumpStore: ObservableObject {
 
   var current: Dump? { dumps.first { $0.persistentModelID == currentID } }
   var currentText: String { current?.text ?? "" }
+  var currentBoardProtection: BoardProtection? {
+    guard let currentID, protectedBoardIDs.contains(currentID) else { return nil }
+    return BoardProtection(recoveryURL: recoveryURLByBoardID[currentID])
+  }
   private var currentIndex: Int { dumps.firstIndex { $0.persistentModelID == currentID } ?? 0 }
   var canGoOlder: Bool { currentIndex < dumps.count - 1 }
   var canGoNewer: Bool { currentIndex > 0 }
@@ -138,11 +162,30 @@ final class DumpStore: ObservableObject {
     guard let dump else { return [CardState.firstCard()] }
     if let data = dump.cardsData {
       do {
-        let decoded = try JSONDecoder().decode([CardState].self, from: data)
-        if !decoded.isEmpty { return migrateImagePaths(in: decoded, for: dump) }
-        reportUnreadableBoard(dump, message: "A saved board contained no cards. Composer loaded its text fallback instead.".localizedUI)
+        let payload = try BoardPayload.decode(data)
+        opaqueCardsByBoardID[dump.persistentModelID] = payload.opaqueCards
+        if !payload.cards.isEmpty {
+          protectedBoardIDs.remove(dump.persistentModelID)
+          return migrateImagePaths(in: payload.cards, for: dump)
+        }
+        if payload.opaqueCards.isEmpty {
+          protectedBoardIDs.remove(dump.persistentModelID)
+          return [CardState.firstCard(text: dump.text)]
+        }
+        protectUnreadableBoard(
+          dump,
+          data: data,
+          message: "A saved board contained no cards this BonsAI build can display. The original data was preserved; automatic saves are disabled for this board.".localizedUI
+        )
       } catch {
-      reportUnreadableBoard(dump, message: UserFacingError.message(for: error, while: "Reading this saved board".localizedUI))
+        opaqueCardsByBoardID.removeValue(forKey: dump.persistentModelID)
+        protectUnreadableBoard(
+          dump,
+          data: data,
+          message: UserFacingError.message(for: error, while: "Reading this saved board".localizedUI)
+            + " "
+            + "The original data was preserved; automatic saves are disabled for this board.".localizedUI
+        )
       }
     }
     return [CardState.firstCard(text: dump.text)]
@@ -169,7 +212,10 @@ final class DumpStore: ObservableObject {
     }
     guard changed else { return cards }
     do {
-      dump.cardsData = try JSONEncoder().encode(migrated)
+      dump.cardsData = try BoardPayload.encode(
+        cards: migrated,
+        preserving: opaqueCardsByBoardID[dump.persistentModelID] ?? []
+      )
       _ = save("Migrating board image attachments".localizedUI)
     } catch {
       UserFacingError.report(error, while: "Encoding migrated board image attachments".localizedUI)
@@ -205,20 +251,31 @@ final class DumpStore: ObservableObject {
   }
 
   private func commit(cards: [CardState]) {
-    let data: Data
-    do {
-      data = try JSONEncoder().encode(cards)
-    } catch {
-      UserFacingError.report(error, while: "Encoding the board before autosave".localizedUI)
-      return
-    }
     let mirror = Self.titleMirror(for: cards)
     guard let dump = current else {
+      let data: Data
+      do {
+        data = try BoardPayload.encode(cards: cards)
+      } catch {
+        UserFacingError.report(error, while: "Encoding the board before autosave".localizedUI)
+        return
+      }
       let dump = Dump(text: mirror, cardsData: data)
       context.insert(dump)
       guard save("Creating a new board".localizedUI) else { return }
       reload()
       currentID = dump.persistentModelID
+      return
+    }
+    guard prepareForWrite(dump) else { return }
+    let data: Data
+    do {
+      data = try BoardPayload.encode(
+        cards: cards,
+        preserving: opaqueCardsByBoardID[dump.persistentModelID] ?? []
+      )
+    } catch {
+      UserFacingError.report(error, while: "Encoding the board before autosave".localizedUI)
       return
     }
     guard dump.cardsData != data || dump.text != mirror else { return }
@@ -288,6 +345,35 @@ final class DumpStore: ObservableObject {
     objectWillChange.send()
   }
 
+  /// Make an editable copy of the visible fallback while leaving unreadable source bytes untouched.
+  /// This is the only path that persists edits made while a protected board is open.
+  func duplicateProtectedCurrentBoard(cards: [CardState]) -> Bool {
+    guard let source = current, protectedBoardIDs.contains(source.persistentModelID) else {
+      return false
+    }
+    let data: Data
+    do {
+      data = try BoardPayload.encode(cards: cards)
+    } catch {
+      UserFacingError.report(error, while: "Encoding the recovered board copy".localizedUI)
+      return false
+    }
+
+    let sourceName = source.customTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let copyName = sourceName.flatMap { $0.isEmpty ? nil : "%@ — Recovered Copy".localizedUI($0) }
+    let copy = Dump(
+      text: Self.titleMirror(for: cards),
+      cardsData: data,
+      customTitle: copyName
+    )
+    context.insert(copy)
+    guard save("Creating an editable recovered board copy".localizedUI) else { return false }
+    reload()
+    currentID = copy.persistentModelID
+    isHistoryOpen = false
+    return true
+  }
+
   // MARK: Housekeeping
 
   private func pruneCurrentIfEmpty() {
@@ -335,7 +421,7 @@ final class DumpStore: ObservableObject {
     }
     let data: Data
     do {
-      data = try JSONEncoder().encode(cards)
+      data = try BoardPayload.encode(cards: cards)
     } catch {
       UserFacingError.report(error, while: "Encoding the welcome board".localizedUI)
       return
@@ -353,7 +439,7 @@ final class DumpStore: ObservableObject {
     guard let cards = WelcomeBoard.seedCards() else { return }
     let data: Data
     do {
-      data = try JSONEncoder().encode(cards)
+      data = try BoardPayload.encode(cards: cards)
     } catch {
       UserFacingError.report(error, while: "Encoding the BonsAI 1.3 welcome board".localizedUI)
       return
@@ -390,7 +476,7 @@ final class DumpStore: ObservableObject {
 
   private func decodedCards(for dump: Dump) -> [CardState]? {
     guard let data = dump.cardsData else { return nil }
-    return try? JSONDecoder().decode([CardState].self, from: data)
+    return try? BoardPayload.decode(data).cards
   }
 
   private func migrateLegacyNoteIfNeeded() {
@@ -421,5 +507,63 @@ final class DumpStore: ObservableObject {
     let id = String(describing: dump.persistentModelID)
     guard reportedUnreadableBoardIDs.insert(id).inserted else { return }
     UserFacingError.report(message)
+  }
+
+  /// Returns the persistent recovery copy captured before this build exposed a text fallback.
+  func recoveryData(for dump: Dump?) -> Data? {
+    guard let dump else { return nil }
+    let key = dump.persistentModelID
+    if let data = recoveryDataByBoardID[key] { return data }
+    guard let data = dump.cardsData, let recoveryDirectory else { return nil }
+    return BoardRecoveryStore.load(copyOf: data, in: recoveryDirectory)
+  }
+
+  private func prepareForWrite(_ dump: Dump) -> Bool {
+    let key = dump.persistentModelID
+    guard !protectedBoardIDs.contains(key) else { return false }
+    guard opaqueCardsByBoardID[key] == nil, let data = dump.cardsData else { return true }
+
+    do {
+      let payload = try BoardPayload.decode(data)
+      opaqueCardsByBoardID[key] = payload.opaqueCards
+      guard !payload.cards.isEmpty || payload.opaqueCards.isEmpty else {
+        protectUnreadableBoard(
+          dump,
+          data: data,
+          message: "A saved board contained no cards this BonsAI build can display. The original data was preserved; automatic saves are disabled for this board.".localizedUI
+        )
+        return false
+      }
+      return true
+    } catch {
+      protectUnreadableBoard(
+        dump,
+        data: data,
+        message: UserFacingError.message(for: error, while: "Reading this saved board".localizedUI)
+          + " "
+          + "The original data was preserved; automatic saves are disabled for this board.".localizedUI
+      )
+      return false
+    }
+  }
+
+  private func protectUnreadableBoard(_ dump: Dump, data: Data, message: String) {
+    let key = dump.persistentModelID
+    protectedBoardIDs.insert(key)
+    if recoveryDataByBoardID[key] == nil {
+      recoveryDataByBoardID[key] = data
+    }
+
+    var recoveryMessage = ""
+    if let recoveryDirectory {
+      do {
+        let url = try BoardRecoveryStore.preserve(data, in: recoveryDirectory)
+        recoveryURLByBoardID[key] = url
+        recoveryMessage = " Recovery copy: %@".localizedUI(url.path)
+      } catch {
+        recoveryMessage = " BonsAI could not create the extra recovery copy: %@".localizedUI(error.localizedDescription)
+      }
+    }
+    reportUnreadableBoard(dump, message: message + recoveryMessage)
   }
 }

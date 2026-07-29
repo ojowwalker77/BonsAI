@@ -154,6 +154,7 @@ struct ComposerCanvas: View {
       promotionOverlay(in: inner)
       boardSwitcherPill(in: proxy.size)
       boardActionsPill(in: proxy.size)
+      protectedBoardBanner(in: proxy.size)
       bottomCommandBar(fit: inner)
       dockOverlay(in: proxy.size)
       editingStageOverlay(in: proxy.size)
@@ -636,6 +637,56 @@ struct ComposerCanvas: View {
   }
 
   // MARK: Floating chrome
+
+  @ViewBuilder
+  private func protectedBoardBanner(in size: CGSize) -> some View {
+    if let protection = store.currentBoardProtection {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack(spacing: 8) {
+          Image(systemName: "lock.trianglebadge.exclamationmark")
+            .font(WindowChrome.iconFont)
+            .foregroundStyle(.orange)
+          Text("This board's original data is protected. Changes on this fallback are not saved.".localizedUI)
+            .font(WindowChrome.labelFont)
+            .foregroundStyle(Theme.Palette.body)
+            .lineLimit(2)
+          Spacer(minLength: 8)
+          if let recoveryURL = protection.recoveryURL {
+            Button("Show Recovery".localizedUI) {
+              NSWorkspace.shared.activateFileViewerSelecting([recoveryURL])
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.Palette.chromeText)
+          }
+          Button("Duplicate to Edit".localizedUI) {
+            if board.duplicateProtectedBoardForEditing() {
+              show(Toast(
+                text: "Created an editable copy; the original board remains unchanged.".localizedUI,
+                symbol: "doc.on.doc.fill",
+                tint: .accentColor
+              ))
+            }
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(Theme.Palette.accent)
+        }
+        if let recoveryURL = protection.recoveryURL {
+          Text("Recovery copy: %@".localizedUI(recoveryURL.path))
+            .font(Theme.Typography.count)
+            .foregroundStyle(Theme.Palette.title)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 10)
+      .frame(maxWidth: min(720, max(280, size.width - WindowChrome.edgeInset * 2)))
+      .composerPopupSurface()
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      .padding(.top, WindowChrome.edgeInset + WindowChrome.controlHeight + WindowChrome.padV * 2 + 10)
+      .zIndex(70)
+    }
+  }
 
   /// The existing board-picker pill repeated horizontally: board, space, board, space, plus. Each
   /// board owns its own glass surface; there is deliberately no enclosing tab-bar component.

@@ -11,6 +11,13 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Fixed
+- **Boards no longer lose data when opened by an older or incompatible build.** Saved boards now
+  carry a format version, preserve unknown element records across autosaves, and keep unreadable
+  payloads write-protected with a recovery copy.
+- **Drawing-only boards stay in history.** Freehand strokes, shapes, images, equations, and
+  structured cards now count as board content even when their text mirror is empty.
+
 ## [1.4.8] - 2026-07-17
 
 ### Changed
