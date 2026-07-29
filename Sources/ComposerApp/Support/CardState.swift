@@ -54,7 +54,7 @@ struct CanvasPoint: Codable, Equatable {
 
 /// One text card on a board: its content (plain `@token` text — the source of truth, same
 /// as the single-note era) plus its board-space frame and z-order. The whole board is a
-/// `[CardState]` serialized as JSON into `Dump.cardsData`. Chips stay a within-session
+/// `BoardPayload` serialized as JSON into `Dump.cardsData`. Chips stay a within-session
 /// cosmetic layer; only this plain text persists.
 struct CardState: Codable, Identifiable, Equatable {
   struct ChecklistItem: Codable, Equatable, Identifiable {
@@ -318,6 +318,9 @@ struct CardState: Codable, Identifiable, Equatable {
   }
 
   var isBlank: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  /// A fresh board's one empty text card is disposable. Every other element represents a deliberate
+  /// canvas action even when it has no text (a stroke, shape, image, equation, or structured card).
+  var hasMeaningfulContent: Bool { elementKind != .text || !isBlank }
 
   // Board-space geometry (points; the board is effectively infinite).
   static let defaultSize = CGSize(width: 360, height: 220)

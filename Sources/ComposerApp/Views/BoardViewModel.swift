@@ -353,6 +353,13 @@ final class BoardViewModel: ObservableObject {
   func scheduleSave() { store.scheduleUpdate { [weak self] in self?.snapshot() } }
   func flushSave() { store.flush(cards: snapshot()) }
 
+  @discardableResult
+  func duplicateProtectedBoardForEditing() -> Bool {
+    guard store.duplicateProtectedCurrentBoard(cards: snapshot()) else { return false }
+    loadFromStore()
+    return true
+  }
+
   private func historySnapshot(cards overrideCards: [CardState]? = nil) -> HistorySnapshot {
     HistorySnapshot(
       cards: overrideCards ?? snapshot(),
