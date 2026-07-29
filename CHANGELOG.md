@@ -12,6 +12,9 @@ under the new version heading.
 ## [Unreleased]
 
 ### Fixed
+- **Changing appearance or language no longer resets an in-progress board.** BonsAI now retains
+  the working board, undo/redo history, and pan/zoom across canvas remounts, flushing pending text
+  and geometry before the view is replaced.
 - **Web pages can no longer drive an open board through the loopback API.** Every app launch now
   rotates a private capability, validates loopback hosts and browser origins before handling a
   request, and gives local agents a protected discovery file instead of an open CORS endpoint.
