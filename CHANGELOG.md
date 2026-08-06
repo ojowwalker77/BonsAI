@@ -11,6 +11,8 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.4.9] - 2026-08-06
+
 ### Fixed
 - **Board names and connector credentials now persist reliably.** A failed rename stays editable
   instead of appearing saved, while connector API tokens live in the macOS Keychain and migrate
