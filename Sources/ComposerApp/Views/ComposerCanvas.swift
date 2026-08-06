@@ -1493,6 +1493,7 @@ struct ComposerCanvas: View {
 
     let target = ComposerEscapeCoordinator.target(for: ComposerEscapeState(
       hasBoardDeletionConfirmation: pendingBoardDeletion != nil,
+      hasBoardRename: renamingBoardID != nil,
       hasCommandPalette: showPalette,
       hasFocusedEditor: focusedCardID != nil,
       hasCompiledOverlay: store.compiledDraft != nil,
@@ -1508,6 +1509,8 @@ struct ComposerCanvas: View {
     switch target {
     case .boardDeletionConfirmation:
       pendingBoardDeletion = nil
+    case .boardRename:
+      cancelBoardRename()
     case .commandPalette:
       dismissPalette()
     case .focusedEditor:

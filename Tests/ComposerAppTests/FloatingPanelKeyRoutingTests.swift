@@ -134,6 +134,16 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     )
   }
 
+  func testEscapeCoordinatorCancelsBoardRenameBeforeWindowDismissal() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasBoardRename: true,
+        hasSelection: true
+      )),
+      .boardRename
+    )
+  }
+
   func testEscapeCoordinatorKeepsTextEditingAboveDrawingAndWindowDismissal() {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(
