@@ -49,8 +49,6 @@ struct ComposerCanvas: View {
   @ObservedObject private var agent = CanvasAgent.shared
   @ObservedObject private var updater = UpdaterController.shared
   @State private var showAgent = false
-  /// Retained outside AgentDock so closing the dock cannot discard an unsent prompt.
-  @State private var agentDraft = ""
   /// A board delete is only executed by the destructive action in this confirmation surface.
   @State private var pendingBoardDeletion: PendingBoardDeletion?
   /// AppKit may deliver Escape through both keyDown and cancelOperation for one physical press.
@@ -1255,7 +1253,7 @@ struct ComposerCanvas: View {
       AgentDock(
         agent: agent,
         width: width,
-        draft: $agentDraft,
+        draft: $workspace.agentDraft,
         onClose: { toggleAgent() },
         onEscape: { handleEscapeBoard() }
       )
@@ -1582,13 +1580,15 @@ struct ComposerCanvas: View {
   private func confirmBoardDeletion(_ pending: PendingBoardDeletion) {
     pendingBoardDeletion = nil
     guard commitBoardRename() else { return }
-    guard board.flushSave() else {
-      show(Toast(
-        text: "The board was not deleted because its latest changes could not be saved.".localizedUI,
-        symbol: "exclamationmark.triangle.fill",
-        tint: Theme.Palette.warning
-      ))
-      return
+    if pending.boardID == store.currentID {
+      guard board.flushSave() else {
+        show(Toast(
+          text: "The board was not deleted because its latest changes could not be saved.".localizedUI,
+          symbol: "exclamationmark.triangle.fill",
+          tint: Theme.Palette.warning
+        ))
+        return
+      }
     }
     guard store.delete(pending.boardID) else {
       show(Toast(
