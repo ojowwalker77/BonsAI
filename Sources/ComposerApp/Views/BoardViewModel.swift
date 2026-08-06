@@ -88,6 +88,15 @@ final class CardInteraction: ObservableObject, Identifiable {
 
 // MARK: - Board view-model
 
+/// Immutable board-wide text state shared by every card renderer for one text revision.
+///
+/// The revision is deliberately separate from the set of names: changing a definition's value can
+/// leave the names unchanged, but it still needs to invalidate the rendered chips that depend on it.
+struct BoardTextContext: Equatable {
+  let revision: UInt64
+  let definedVariableNames: Set<String>
+}
+
 /// Owns the working board: the cards' geometry (`cards`) and their runtime bundles
 /// (`interactions`), plus which card is active. The single `@StateObject` the canvas holds;
 /// the only writer to the store for the current board.
@@ -150,8 +159,35 @@ final class BoardViewModel: ObservableObject {
   enum Author { static let human = 1; static let agent = 2 }
   private let maxHistoryDepth = 80
   /// Undo/redo kept per board, so flipping to another board and back doesn't lose your history.
-  private var undoCache: [PersistentIdentifier: (undo: [HistorySnapshot], redo: [HistorySnapshot])] = [:]
+  /// Inactive boards are evicted by least-recent use and by the total number of cards retained in
+  /// their snapshots. The active board always remains in `undoStack`/`redoStack`, never this cache.
+  static let maxCachedHistoryBoards = 8
+  static let maxCachedHistorySnapshotCards = 8_000
+  private struct HistoryCacheEntry {
+    var undo: [HistorySnapshot]
+    var redo: [HistorySnapshot]
+    var lastAccess: UInt64
+
+    var snapshotCardCount: Int {
+      undo.reduce(0) { $0 + $1.cards.count } + redo.reduce(0) { $0 + $1.cards.count }
+    }
+  }
+  private var undoCache: [PersistentIdentifier: HistoryCacheEntry] = [:]
+  private var historyCacheClock: UInt64 = 0
   private var currentBoardID: PersistentIdentifier?
+  /// A live editor frame is local rendering state until the edit boundary. Keeping it out of
+  /// `cards` prevents every editor layout callback from publishing the whole board layer.
+  private var liveTextFrames: [UUID: CGRect] = [:]
+
+  private(set) var boardTextContextDerivationCount = 0
+  @Published private(set) var boardTextContext = BoardTextContext(revision: 0, definedVariableNames: [])
+  private var boardTextRevision: UInt64 = 0
+
+  /// Test/diagnostic seam for proving the bounded history policy without exposing the cache itself.
+  var cachedHistoryBoardCount: Int { undoCache.count }
+  var cachedHistorySnapshotCardCount: Int {
+    undoCache.values.reduce(0) { $0 + $1.snapshotCardCount }
+  }
 
   /// The injectable store exists for tests (an in-memory `DumpStore`); the app always uses shared.
   /// (`nil` default rather than `= .shared`: a default-argument expression is nonisolated, so it
@@ -263,7 +299,9 @@ final class BoardViewModel: ObservableObject {
   /// delete path so bound arrows refresh) instead of leaving a stray writing spot on the board.
   func endEditing(_ id: UUID) {
     interactions[id]?.captureEditorState()
-    fitTextSize(id)   // final hug on the settled text (the cache was just refreshed)
+    if !commitLiveTextFrame(id) {
+      fitTextSize(id)   // final hug on the settled text (the cache was just refreshed)
+    }
     textEditBaselines[id] = nil
     if editingCardID == id { editingCardID = nil }
     // `captureEditorState()` above refreshed the plain-text cache, so this reads what the user
@@ -285,7 +323,9 @@ final class BoardViewModel: ObservableObject {
   private func stopEditing() {
     guard let id = editingCardID else { return }
     interactions[id]?.captureEditorState()
-    fitTextSize(id)   // final hug on the settled text (the cache was just refreshed)
+    if !commitLiveTextFrame(id) {
+      fitTextSize(id)   // final hug on the settled text (the cache was just refreshed)
+    }
     textEditBaselines[id] = nil
     interactions[id]?.controller.resignFocus()
     editingCardID = nil
@@ -295,9 +335,17 @@ final class BoardViewModel: ObservableObject {
 
   /// Pull the current board's cards into the working set, rebuilding bundles.
   func loadFromStore() {
-    // Stash the outgoing board's undo history, then restore the incoming board's (if any).
-    if let previous = currentBoardID { undoCache[previous] = (undoStack, redoStack) }
-    currentBoardID = store.currentID
+    // Move the outgoing board to the bounded inactive cache before restoring the incoming board.
+    // Set the active id first so eviction can never mistake the board being loaded for an inactive
+    // entry when a large history cache is trimmed.
+    let nextBoardID = store.currentID
+    let isReloadingSameBoard = currentBoardID == nextBoardID
+    if let previous = currentBoardID, previous != nextBoardID {
+      currentBoardID = nextBoardID
+      cacheHistory(for: previous, undo: undoStack, redo: redoStack)
+    } else {
+      currentBoardID = nextBoardID
+    }
     let loaded = store.currentCards
     cards = loaded
     // Fit every text card's HEIGHT to its content at its stored width and font scale — no live
@@ -309,10 +357,11 @@ final class BoardViewModel: ObservableObject {
     // Runtime bundles are created lazily as cards become visible or enter edit mode. A board can
     // contain hundreds of cards, but only a small cullable subset should carry editor state.
     interactions = [:]
+    liveTextFrames = [:]
     nextZ = (cards.map(\.z).max() ?? 0) + 1
-    let restored = currentBoardID.flatMap { undoCache[$0] }
-    undoStack = restored?.undo ?? []
-    redoStack = restored?.redo ?? []
+    let restored = currentBoardID.flatMap { undoCache.removeValue(forKey: $0) }
+    undoStack = restored?.undo ?? (isReloadingSameBoard ? undoStack : [])
+    redoStack = restored?.redo ?? (isReloadingSameBoard ? redoStack : [])
     textEditBaselines = [:]
     if let first = loaded.first?.id {
       selectedCardIDs = [first]
@@ -322,12 +371,41 @@ final class BoardViewModel: ObservableObject {
       primarySelectedCardID = nil
     }
     editingCardID = nil
+    invalidateBoardTextContext()
+  }
+
+  private func cacheHistory(for boardID: PersistentIdentifier,
+                            undo: [HistorySnapshot],
+                            redo: [HistorySnapshot]) {
+    guard boardID != currentBoardID else { return }
+    historyCacheClock &+= 1
+    undoCache[boardID] = HistoryCacheEntry(undo: undo, redo: redo, lastAccess: historyCacheClock)
+    trimHistoryCache()
+  }
+
+  private func trimHistoryCache() {
+    while undoCache.count > Self.maxCachedHistoryBoards ||
+            cachedHistorySnapshotCardCount > Self.maxCachedHistorySnapshotCards {
+      guard let oldestID = undoCache
+        .filter({ $0.key != currentBoardID })
+        .min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key else { return }
+      undoCache.removeValue(forKey: oldestID)
+    }
+  }
+
+  private func invalidateBoardTextContext() {
+    boardTextRevision &+= 1
+    boardTextContextDerivationCount += 1
+    boardTextContext = BoardTextContext(
+      revision: boardTextRevision,
+      definedVariableNames: ShellTemplate.definedNames(in: joinedPlainText()))
   }
 
   /// Geometry + live plain text, ready to persist.
   private func snapshot() -> [CardState] {
     cards.map { card in
       var copy = card
+      if let liveFrame = liveTextFrames[card.id] { copy.frame = liveFrame }
       copy.text = persistedText(for: card)
       if card.elementKind == .text {
         let runs = ink(for: card)
@@ -385,6 +463,7 @@ final class BoardViewModel: ObservableObject {
     isRestoringHistory = true
     cards = value.cards
     interactions = [:]
+    liveTextFrames = [:]
     selectedCardIDs = value.selectedCardIDs.intersection(Set(value.cards.map(\.id)))
     primarySelectedCardID = selectedCardIDs.contains(value.primarySelectedCardID ?? UUID())
       ? value.primarySelectedCardID
@@ -395,6 +474,7 @@ final class BoardViewModel: ObservableObject {
     textEditBaselines = [:]
     scheduleSave()
     isRestoringHistory = false
+    invalidateBoardTextContext()
   }
 
   func undo() {
@@ -431,6 +511,7 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = card.id
+    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -486,6 +567,7 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
+    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -518,6 +600,7 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
+    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -551,6 +634,7 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
+    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -577,6 +661,7 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
+    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -630,6 +715,7 @@ final class BoardViewModel: ObservableObject {
     interactions[card.id] = CardInteraction(card)
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
+    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -649,6 +735,7 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
+    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -666,6 +753,7 @@ final class BoardViewModel: ObservableObject {
     cards.append(card)
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
+    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -680,6 +768,7 @@ final class BoardViewModel: ObservableObject {
     let bundle = interaction(for: id)
     bundle.text = body
     bundle.cachePlainText(body)
+    invalidateBoardTextContext()
     scheduleSave()
     return true
   }
@@ -691,6 +780,7 @@ final class BoardViewModel: ObservableObject {
     registerUndo()
     cards[i].checklist![itemIndex].isChecked.toggle()
     cards[i].whoWrote = nextAuthor
+    invalidateBoardTextContext()
     scheduleSave()
     return true
   }
@@ -712,14 +802,16 @@ final class BoardViewModel: ObservableObject {
   @discardableResult
   func setChecklist(_ id: UUID, _ items: [CardState.ChecklistItem]) -> Bool {
     guard let i = index(for: id), cards[i].elementKind == .checklist else { return false }
-    registerUndo(); cards[i].checklist = items; cards[i].whoWrote = nextAuthor; scheduleSave()
+    registerUndo(); cards[i].checklist = items; cards[i].whoWrote = nextAuthor
+    invalidateBoardTextContext(); scheduleSave()
     return true
   }
 
   @discardableResult
   func setTable(_ id: UUID, _ spec: CardState.TableSpec) -> Bool {
     guard let i = index(for: id), cards[i].elementKind == .table else { return false }
-    registerUndo(); cards[i].table = spec; cards[i].whoWrote = nextAuthor; scheduleSave()
+    registerUndo(); cards[i].table = spec; cards[i].whoWrote = nextAuthor
+    invalidateBoardTextContext(); scheduleSave()
     return true
   }
 
@@ -739,6 +831,7 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
+    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -759,6 +852,7 @@ final class BoardViewModel: ObservableObject {
     if cards[i].elementKind == .equation {
       cards[i].latex = text
       cards[i].whoWrote = nextAuthor
+      invalidateBoardTextContext()
       scheduleSave()
       return
     }
@@ -768,6 +862,7 @@ final class BoardViewModel: ObservableObject {
     bundle.text = text
     bundle.cachePlainText(text)
     if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w, fontScale: cards[i].textScale)) }
+    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -992,6 +1087,7 @@ final class BoardViewModel: ObservableObject {
     interactions[cards[i].id] = CardInteraction(cards[i])
     if cards[i].elementKind == .arrow { bindArrowIfPossible(id) }
     select(id)
+    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -1020,6 +1116,7 @@ final class BoardViewModel: ObservableObject {
     cards[i].whoWrote = nextAuthor
     interactions[cards[i].id] = CardInteraction(cards[i])
     select(id)
+    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -1060,9 +1157,11 @@ final class BoardViewModel: ObservableObject {
     }
     cards.removeAll { $0.id == id }
     interactions[id] = nil
+    liveTextFrames[id] = nil
     selectedCardIDs = Set(newIDs)
     primarySelectedCardID = newIDs.last
     editingCardID = nil
+    invalidateBoardTextContext()
     refreshBoundArrows()
     scheduleSave()
   }
@@ -1171,6 +1270,7 @@ final class BoardViewModel: ObservableObject {
     if let index = cards.firstIndex(where: { $0.id == card.id }) { updateBoundArrowGeometry(at: index) }
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
+    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -1265,6 +1365,7 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = Set(keyToID.values)
     primarySelectedCardID = keyToID.values.first
     editingCardID = nil
+    invalidateBoardTextContext()
     return keyToID
   }
 
@@ -1488,6 +1589,19 @@ final class BoardViewModel: ObservableObject {
     scheduleSave()
   }
 
+  /// Publish the editor's latest frame only at the edit boundary. Until then the frame lives in
+  /// `liveTextFrames` and the editing card owns its local visual override, so layout callbacks do
+  /// not replace the published `cards` array or rebuild every visible card.
+  @discardableResult
+  private func commitLiveTextFrame(_ id: UUID) -> Bool {
+    guard let frame = liveTextFrames.removeValue(forKey: id),
+          let i = cards.firstIndex(where: { $0.id == id }) else { return false }
+    guard cards[i].frame != frame else { return true }
+    cards[i].frame = frame
+    scheduleSave()
+    return true
+  }
+
   /// Live-edit hug driven by the EDITOR's own layout (issue #76). While a card is being typed
   /// into, the mounted NSTextView is the only sizing authority: `fittedTextSize`'s NSString twin
   /// wraps ~10pt later than the view (different insets/fragment padding), and sizing from it left
@@ -1496,16 +1610,19 @@ final class BoardViewModel: ObservableObject {
   /// wrap slack) up to the same total cap the static hug uses; height is the editor's laid-out
   /// height + the mount's vertical padding. No undo step (a layout consequence of typing),
   /// top-left anchored, empty text keeps its seed frame.
-  func fitTextEditing(_ id: UUID, naturalEditorWidth: CGFloat, editorContentHeight: CGFloat) {
-    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text else { return }
-    guard !plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+  @discardableResult
+  func fitTextEditing(_ id: UUID, naturalEditorWidth: CGFloat, editorContentHeight: CGFloat) -> CGRect? {
+    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text else { return nil }
+    guard !plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
     let cap = CardState.textDefaultSize.width * cards[i].textScale + 32
     let width = min(max(naturalEditorWidth + 24 + 2, CardState.textMinSize.width), cap)
     let height = max(editorContentHeight + 20, CardState.textMinSize.height)
-    guard abs(cards[i].w - Double(width)) > 0.5 || abs(cards[i].h - Double(height)) > 0.5 else { return }
-    cards[i].w = Double(width)
-    cards[i].h = Double(height)
+    let frame = CGRect(x: cards[i].x, y: cards[i].y, width: width, height: height)
+    let previous = liveTextFrames[id] ?? cards[i].frame
+    guard abs(previous.width - width) > 0.5 || abs(previous.height - height) > 0.5 else { return previous }
+    liveTextFrames[id] = frame
     scheduleSave()
+    return frame
   }
 
   /// Commit a corner-drag font scale on a text card (issue #77). One undo step restores BOTH the
@@ -1549,6 +1666,7 @@ final class BoardViewModel: ObservableObject {
       primarySelectedCardID = fresh.id
     }
     refreshBoundArrows()
+    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -1580,7 +1698,10 @@ final class BoardViewModel: ObservableObject {
     guard !deleting.isEmpty else { return }
     registerUndo()
     cards.removeAll { deleting.contains($0.id) }
-    for id in deleting { interactions[id] = nil }
+    for id in deleting {
+      interactions[id] = nil
+      liveTextFrames[id] = nil
+    }
     if let editingCardID, deleting.contains(editingCardID) { self.editingCardID = nil }
     selectedCardIDs = []
     primarySelectedCardID = nil
@@ -1592,6 +1713,7 @@ final class BoardViewModel: ObservableObject {
       primarySelectedCardID = fresh.id
     }
     refreshBoundArrows()
+    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -1640,6 +1762,7 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = Set(ids)
     primarySelectedCardID = ids.last
     editingCardID = nil
+    invalidateBoardTextContext()
     scheduleSave()
     return ids
   }
@@ -2108,6 +2231,7 @@ final class BoardViewModel: ObservableObject {
       }
       registerUndo(historySnapshot(cards: before))
     }
+    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -2150,9 +2274,8 @@ final class BoardViewModel: ObservableObject {
 
   /// Copy-time variables defined anywhere on the board (`name = …` lines). A board is "one thing",
   /// so a `$name` in one card styles against a definition in any other. Used only for styling.
-  var definedVariableNames: Set<String> {
-    ShellTemplate.definedNames(in: joinedPlainText())
-  }
+  /// The immutable context is derived once per explicit board-text revision.
+  var definedVariableNames: Set<String> { boardTextContext.definedVariableNames }
 
   // MARK: Reading order
 

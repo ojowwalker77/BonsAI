@@ -305,7 +305,7 @@ struct EditingStage: View {
         onFocusChange: { _ in },
         onLayoutChange: { _, _ in },
         boardContext: { board.lintContext(excluding: card.id) },
-        definedVariables: { board.definedVariableNames },
+        definedVariables: { board.boardTextContext.definedVariableNames },
         mentions: interaction.mentions,
         appSearch: interaction.appSearch,
         controller: interaction.controller,
@@ -313,6 +313,10 @@ struct EditingStage: View {
         refine: interaction.refine,
         store: DumpStore.shared
       )
+      .onChange(of: interaction.text) { oldValue, newValue in
+        interaction.cachePlainText(newValue)
+        board.noteEdited(cardID: card.id, previousText: oldValue)
+      }
       .padding(.horizontal, 28)
       .padding(.bottom, 22)
     }

@@ -59,6 +59,7 @@ enum BoardExporter {
     let content = BoardCardLayer(
       cards: cards,
       board: board,
+      boardTextContext: board.boardTextContext,
       selectedCardIDs: [],
       editingCardID: nil,
       primarySelectedCardID: nil,
