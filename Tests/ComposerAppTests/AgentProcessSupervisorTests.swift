@@ -10,14 +10,14 @@ final class AgentProcessSupervisorTests: XCTestCase {
     let stdout = Pipe()
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = ["-c", "exec 1>&-; sleep 0.35"]
+    process.arguments = ["-c", "exec 1>&-; sleep 3"]
     process.standardOutput = stdout
     process.standardError = FileHandle.nullDevice
     process.standardInput = FileHandle.nullDevice
 
     let managed = try supervisor.launch(process)
     let pid = managed.processIdentifier
-    defer { Darwin.kill(pid, SIGKILL) }
+    defer { Darwin.kill(-pid, SIGKILL) }
 
     let stdoutClosed = Task.detached {
       try stdout.fileHandleForReading.readToEnd()
@@ -25,15 +25,16 @@ final class AgentProcessSupervisorTests: XCTestCase {
     _ = try await stdoutClosed.value
     XCTAssertEqual(Darwin.kill(pid, 0), 0, "the child should still be alive after closing stdout")
 
-    let started = ContinuousClock.now
     let waiter = Task { @MainActor in await managed.termination() }
+    let started = ContinuousClock.now
     try await Task.sleep(nanoseconds: 60_000_000)
     let actorDelay = started.duration(to: .now)
 
     XCTAssertLessThan(actorDelay, .milliseconds(200), "an async termination wait must suspend the main actor")
     XCTAssertEqual(Darwin.kill(pid, 0), 0, "the linger interval should still be active at the probe")
+    _ = await supervisor.stop(managed, gracePeriod: 0.08)
     let termination = await waiter.value
-    XCTAssertEqual(termination.status, 0)
+    XCTAssertEqual(termination.reason, .uncaughtSignal)
     XCTAssertEqual(supervisor.activeProcessCount, 0)
   }
 
@@ -99,7 +100,7 @@ final class AgentProcessSupervisorTests: XCTestCase {
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
     process.arguments = [
       "-c",
-      "trap '' TERM; (trap '' TERM; while :; do sleep 1; done) & child=$!; echo $child > \"$1\"; wait $child",
+      "trap '' TERM; (trap '' TERM; while :; do :; done) & child=$!; echo $child > \"$1\"; wait $child",
       "bonsai-agent-test",
       childPIDURL.path,
     ]
@@ -117,6 +118,40 @@ final class AgentProcessSupervisorTests: XCTestCase {
     let termination = await supervisor.stop(managed, gracePeriod: 0.08)
     XCTAssertEqual(termination.reason, .uncaughtSignal)
     XCTAssertEqual(termination.status, SIGKILL)
+    try await waitForProcessToDisappear(childPID)
+    XCTAssertEqual(supervisor.activeProcessCount, 0)
+  }
+
+  func testStopAllRetainsAndTerminatesDescendantsAfterLeaderExits() async throws {
+    let supervisor = AgentProcessSupervisor()
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("BonsAI-Orphaned-Agent-Group-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let childPIDURL = directory.appendingPathComponent("child.pid")
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [
+      "-c",
+      "(trap '' HUP TERM; while :; do :; done) & child=$!; echo $child > \"$1\"; exit 0",
+      "bonsai-agent-orphan-test",
+      childPIDURL.path,
+    ]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    process.standardInput = FileHandle.nullDevice
+
+    let managed = try supervisor.launch(process)
+    defer { Darwin.kill(-managed.processIdentifier, SIGKILL) }
+    let childPID = try await waitForPID(in: childPIDURL)
+    let termination = await managed.termination()
+
+    XCTAssertEqual(termination.status, 0)
+    XCTAssertEqual(Darwin.getpgid(childPID), managed.processIdentifier)
+    XCTAssertEqual(supervisor.activeProcessCount, 1)
+
+    await supervisor.stopAll(gracePeriod: 0.08)
     try await waitForProcessToDisappear(childPID)
     XCTAssertEqual(supervisor.activeProcessCount, 0)
   }
@@ -142,8 +177,7 @@ final class AgentProcessSupervisorTests: XCTestCase {
       }
       try await Task.sleep(nanoseconds: 5_000_000)
     }
-    XCTFail("the child process did not publish its pid")
-    return -1
+    return try XCTUnwrap(nil as Int32?, "the child process did not publish its pid")
   }
 
   private func waitForProcessToDisappear(_ pid: Int32) async throws {

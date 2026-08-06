@@ -135,18 +135,6 @@ final class ConnectorSecretVault {
     migrateLegacyIfNeeded()
     let normalizedValue = normalized(value)
 
-    if normalizedValue == nil {
-      do {
-        // Remove the plaintext source first. If that cleanup fails, keep the verified Keychain
-        // credential active rather than reporting a deletion that a later launch would undo.
-        try removeLegacyToken(for: connectorID)
-        legacyFallbackAccounts.remove(connectorID)
-      } catch {
-        reportLegacyStorageFailure(while: "Saving the connector token".localizedUI)
-        return false
-      }
-    }
-
     do {
       try updateKeychain(to: normalizedValue, for: connectorID)
     } catch {
@@ -156,9 +144,21 @@ final class ConnectorSecretVault {
       return false
     }
 
-    legacyFallbackAccounts.remove(connectorID)
-    guard normalizedValue != nil else { return true }
+    if normalizedValue == nil {
+      do {
+        // A clear succeeds only after both copies are gone. Removing Keychain first means any
+        // cleanup failure leaves the legacy credential available and accurately reports failure.
+        try removeLegacyToken(for: connectorID)
+        legacyFallbackAccounts.remove(connectorID)
+        return true
+      } catch {
+        legacyFallbackAccounts.insert(connectorID)
+        reportLegacyStorageFailure(while: "Saving the connector token".localizedUI)
+        return false
+      }
+    }
 
+    legacyFallbackAccounts.remove(connectorID)
     do {
       // Never leave this account's previous token in plaintext after a verified Keychain mutation.
       try removeLegacyToken(for: connectorID)
@@ -252,9 +252,49 @@ final class ConnectorSecretVault {
       return
     }
 
+    try persistLegacyTokens(legacy)
+  }
+
+  private func persistLegacyTokens(_ legacy: [String: String]) throws {
     let data = try JSONEncoder().encode(legacy)
-    try data.write(to: legacyFileURL, options: .atomic)
-    try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: legacyFileURL.path)
+    let temporaryURL = legacyFileURL.deletingLastPathComponent().appendingPathComponent(
+      ".\(legacyFileURL.lastPathComponent).\(UUID().uuidString).tmp"
+    )
+    guard fileManager.createFile(
+      atPath: temporaryURL.path,
+      contents: nil,
+      attributes: [.posixPermissions: 0o600]
+    ) else {
+      throw CocoaError(.fileWriteUnknown)
+    }
+
+    do {
+      // The empty staging file is already mode 0600 before plaintext is written. Replacing from
+      // the same directory keeps the final update atomic without a world-readable temp window.
+      let handle = try FileHandle(forWritingTo: temporaryURL)
+      do {
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+        try handle.close()
+      } catch {
+        try? handle.close()
+        throw error
+      }
+
+      if fileManager.fileExists(atPath: legacyFileURL.path) {
+        _ = try fileManager.replaceItemAt(
+          legacyFileURL,
+          withItemAt: temporaryURL,
+          backupItemName: nil,
+          options: .usingNewMetadataOnly
+        )
+      } else {
+        try fileManager.moveItem(at: temporaryURL, to: legacyFileURL)
+      }
+    } catch {
+      try? fileManager.removeItem(at: temporaryURL)
+      throw error
+    }
   }
 
   private func normalized(_ value: String?) -> String? {

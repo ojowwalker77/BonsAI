@@ -6,6 +6,38 @@ struct AgentProcessTermination {
   let reason: Process.TerminationReason
 }
 
+private enum AgentProcessGroupPhase {
+  case leaderRunning
+  case leaderExitedWithDescendants
+  case exited
+}
+
+private final class AgentProcessGroupLifecycle: @unchecked Sendable {
+  private let lock = NSLock()
+  private var phase: AgentProcessGroupPhase = .leaderRunning
+
+  var currentPhase: AgentProcessGroupPhase {
+    lock.lock(); defer { lock.unlock() }
+    return phase
+  }
+
+  /// Returns true when this transition released the complete process group.
+  func leaderDidTerminate(descendantsRemain: Bool) -> Bool {
+    lock.lock(); defer { lock.unlock() }
+    guard phase != .exited else { return false }
+    phase = descendantsRemain ? .leaderExitedWithDescendants : .exited
+    return !descendantsRemain
+  }
+
+  /// Returns true only for the caller that first releases the complete process group.
+  func groupDidExit() -> Bool {
+    lock.lock(); defer { lock.unlock() }
+    guard phase != .exited else { return false }
+    phase = .exited
+    return true
+  }
+}
+
 /// A single launched agent process. Its termination handler is installed before launch and resolves
 /// async waiters, so waiting never calls `Process.waitUntilExit()` or occupies the main actor.
 final class ManagedAgentProcess: @unchecked Sendable {
@@ -14,6 +46,8 @@ final class ManagedAgentProcess: @unchecked Sendable {
 
   private let process: Process
   private let terminationLatch: AgentProcessTerminationLatch
+  private let processGroupLifecycle: AgentProcessGroupLifecycle
+  private let didReleaseProcessGroup: (UUID) -> Void
 
   fileprivate init(
     id: UUID,
@@ -23,14 +57,27 @@ final class ManagedAgentProcess: @unchecked Sendable {
     self.id = id
     self.process = process
     let latch = AgentProcessTerminationLatch()
+    let lifecycle = AgentProcessGroupLifecycle()
     terminationLatch = latch
+    processGroupLifecycle = lifecycle
+    didReleaseProcessGroup = didTerminate
 
     process.terminationHandler = { process in
       let termination = AgentProcessTermination(
         status: process.terminationStatus,
         reason: process.terminationReason
       )
-      didTerminate(id)
+      let processGroup = process.processIdentifier
+      let descendantsRemain = agentProcessGroupExists(processGroup)
+      if lifecycle.leaderDidTerminate(descendantsRemain: descendantsRemain) {
+        // Registry removal happens before waiter completion when the whole group is already gone.
+        didTerminate(id)
+      } else if descendantsRemain {
+        Task.detached(priority: .utility) {
+          await waitForAgentProcessGroupExit(processGroup)
+          if lifecycle.groupDidExit() { didTerminate(id) }
+        }
+      }
       latch.resolve(termination)
     }
     try process.run()
@@ -43,35 +90,85 @@ final class ManagedAgentProcess: @unchecked Sendable {
 
   fileprivate func stop(gracePeriod: TimeInterval) async -> AgentProcessTermination {
     let processGroup = processIdentifier
-    if processGroup > 0, processGroupExists(processGroup) {
-      signalProcessGroup(processGroup, signal: SIGTERM)
-      await waitForProcessGroupExit(processGroup, timeout: max(0, gracePeriod))
-      if processGroupExists(processGroup) {
-        signalProcessGroup(processGroup, signal: SIGKILL)
-      }
+    requestTermination(processGroup)
+    await waitForShutdownProgress(processGroup, timeout: max(0, gracePeriod))
+    escalateTerminationIfNeeded(processGroup)
+
+    // SIGKILL is asynchronous. Give descendant-only groups a short, bounded window to disappear
+    // so app termination normally observes an empty registry before replying to AppKit.
+    if processGroupLifecycle.currentPhase == .leaderExitedWithDescendants {
+      await waitForShutdownProgress(processGroup, timeout: 0.25)
     }
     return await terminationLatch.wait()
   }
 
-  private func processGroupExists(_ processGroup: Int32) -> Bool {
-    errno = 0
-    return Darwin.kill(-processGroup, 0) == 0 || errno == EPERM
+  private func requestTermination(_ processGroup: Int32) {
+    switch processGroupLifecycle.currentPhase {
+    case .exited:
+      return
+    case .leaderRunning:
+      if agentProcessGroupExists(processGroup) {
+        signalAgentProcessGroup(processGroup, signal: SIGTERM)
+      } else if terminationLatch.resolvedValue == nil, process.isRunning {
+        // The launcher may not have called setpgid yet. Process owns the still-current child here,
+        // so terminate it directly instead of signaling a possibly stale numeric pid.
+        process.terminate()
+      }
+    case .leaderExitedWithDescendants:
+      if agentProcessGroupExists(processGroup) {
+        // POSIX does not reuse a pid while a process group with that pgid still exists, so this
+        // signal cannot drift to a new group while one of the owned descendants remains.
+        signalAgentProcessGroup(processGroup, signal: SIGTERM)
+      } else {
+        releaseProcessGroup()
+      }
+    }
   }
 
-  private func signalProcessGroup(_ processGroup: Int32, signal: Int32) {
-    _ = Darwin.kill(-processGroup, signal)
+  private func escalateTerminationIfNeeded(_ processGroup: Int32) {
+    switch processGroupLifecycle.currentPhase {
+    case .exited:
+      return
+    case .leaderRunning:
+      if agentProcessGroupExists(processGroup) {
+        signalAgentProcessGroup(processGroup, signal: SIGKILL)
+      } else if terminationLatch.resolvedValue == nil, process.isRunning {
+        _ = Darwin.kill(processIdentifier, SIGKILL)
+      }
+    case .leaderExitedWithDescendants:
+      if agentProcessGroupExists(processGroup) {
+        signalAgentProcessGroup(processGroup, signal: SIGKILL)
+      } else {
+        releaseProcessGroup()
+      }
+    }
   }
 
-  private func waitForProcessGroupExit(_ processGroup: Int32, timeout: TimeInterval) async {
+  private func waitForShutdownProgress(_ processGroup: Int32, timeout: TimeInterval) async {
     let deadline = DispatchTime.now() + timeout
-    while processGroupExists(processGroup), DispatchTime.now() < deadline {
+    while DispatchTime.now() < deadline {
+      switch processGroupLifecycle.currentPhase {
+      case .exited:
+        return
+      case .leaderRunning:
+        break
+      case .leaderExitedWithDescendants:
+        if !agentProcessGroupExists(processGroup) {
+          releaseProcessGroup()
+          return
+        }
+      }
       try? await Task.sleep(nanoseconds: 10_000_000)
     }
   }
+
+  private func releaseProcessGroup() {
+    if processGroupLifecycle.groupDidExit() { didReleaseProcessGroup(id) }
+  }
 }
 
-/// Owns every launched agent until its termination handler fires. This also lets app shutdown stop
-/// an older process that is still inside its grace period while a newer turn is already active.
+/// Owns every launched agent process group until the leader and all descendants exit. This also
+/// lets app shutdown stop an older group while a newer turn is already active.
 final class AgentProcessSupervisor: @unchecked Sendable {
   static let defaultGracePeriod: TimeInterval = 1.0
 
@@ -170,6 +267,23 @@ final class AgentProcessSupervisor: @unchecked Sendable {
   }
 }
 
+private func agentProcessGroupExists(_ processGroup: Int32) -> Bool {
+  guard processGroup > 0 else { return false }
+  errno = 0
+  return Darwin.kill(-processGroup, 0) == 0 || errno == EPERM
+}
+
+private func signalAgentProcessGroup(_ processGroup: Int32, signal: Int32) {
+  guard processGroup > 0 else { return }
+  _ = Darwin.kill(-processGroup, signal)
+}
+
+private func waitForAgentProcessGroupExit(_ processGroup: Int32) async {
+  while agentProcessGroupExists(processGroup) {
+    try? await Task.sleep(nanoseconds: 10_000_000)
+  }
+}
+
 private enum AgentProcessLaunchError: LocalizedError {
   case missingExecutable
   case missingLauncher
@@ -226,6 +340,11 @@ private final class AgentProcessTerminationLatch: @unchecked Sendable {
         lock.unlock()
       }
     }
+  }
+
+  var resolvedValue: AgentProcessTermination? {
+    lock.lock(); defer { lock.unlock() }
+    return value
   }
 
   func resolve(_ result: AgentProcessTermination) {

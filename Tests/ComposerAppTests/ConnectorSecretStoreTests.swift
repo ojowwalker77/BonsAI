@@ -91,7 +91,7 @@ final class ConnectorSecretStoreTests: XCTestCase {
     XCTAssertFalse(fixture.messages.isEmpty)
   }
 
-  func testDeleteDoesNotProceedWhenLegacyCleanupFails() throws {
+  func testFailedLegacyCleanupKeepsTheTokenAvailable() throws {
     let fileManager = FailingRemovalFileManager()
     let fixture = try makeFixture(
       legacy: ["@linear": "legacy-secret"],
@@ -100,9 +100,59 @@ final class ConnectorSecretStoreTests: XCTestCase {
     defer { fixture.cleanup() }
 
     XCTAssertFalse(fixture.vault.setToken(nil, for: "@linear"))
-    XCTAssertEqual(fixture.backing.tokens["@linear"], "legacy-secret")
+    XCTAssertNil(fixture.backing.tokens["@linear"])
     XCTAssertEqual(fixture.vault.token(for: "@linear"), "legacy-secret")
     XCTAssertEqual(try readLegacy(fixture.legacyURL)["@linear"], "legacy-secret")
+  }
+
+  func testFailedKeychainDeletePreservesTheCredential() throws {
+    let fixture = try makeFixture()
+    defer { fixture.cleanup() }
+    fixture.backing.tokens["@linear"] = "keychain-secret"
+    fixture.backing.failingDeletes.insert("@linear")
+
+    XCTAssertFalse(fixture.vault.setToken(nil, for: "@linear"))
+    XCTAssertEqual(fixture.backing.tokens["@linear"], "keychain-secret")
+    XCTAssertEqual(fixture.vault.token(for: "@linear"), "keychain-secret")
+  }
+
+  func testUnverifiedKeychainDeleteRestoresTheCredential() throws {
+    let fixture = try makeFixture()
+    defer { fixture.cleanup() }
+    fixture.backing.tokens["@linear"] = "keychain-secret"
+    fixture.backing.unverifiedDeletes.insert("@linear")
+
+    XCTAssertFalse(fixture.vault.setToken(nil, for: "@linear"))
+    XCTAssertEqual(fixture.backing.tokens["@linear"], "keychain-secret")
+    XCTAssertEqual(fixture.vault.token(for: "@linear"), "keychain-secret")
+  }
+
+  func testKeychainReadFailureLeavesTheOnlyLegacyCredentialUntouched() throws {
+    let fixture = try makeFixture(legacy: ["@linear": "legacy-secret"])
+    defer { fixture.cleanup() }
+    fixture.backing.failingReads.insert("@linear")
+
+    XCTAssertFalse(fixture.vault.setToken(nil, for: "@linear"))
+    XCTAssertEqual(try readLegacy(fixture.legacyURL)["@linear"], "legacy-secret")
+
+    fixture.backing.failingReads.remove("@linear")
+    XCTAssertEqual(fixture.vault.token(for: "@linear"), "legacy-secret")
+  }
+
+  func testLegacyRewriteIsAtomicAndMode0600() throws {
+    let fixture = try makeFixture(legacy: [
+      "@figma": "figma-secret",
+      "@linear": "linear-secret",
+    ])
+    defer { fixture.cleanup() }
+    fixture.backing.failingWrites.insert("@figma")
+
+    XCTAssertEqual(fixture.vault.token(for: "@figma"), "figma-secret")
+    XCTAssertTrue(fixture.vault.setToken("new-linear-secret", for: "@linear"))
+    XCTAssertEqual(try readLegacy(fixture.legacyURL), ["@figma": "figma-secret"])
+
+    let attributes = try FileManager.default.attributesOfItem(atPath: fixture.legacyURL.path)
+    XCTAssertEqual(attributes[.posixPermissions] as? NSNumber, NSNumber(value: 0o600))
   }
 
   func testFailedWriteVerificationRestoresPreviousKeychainValue() throws {
@@ -189,6 +239,7 @@ private final class FakeConnectorSecretBacking: ConnectorSecretBacking {
   var failingReads = Set<String>()
   var failingWrites = Set<String>()
   var failingDeletes = Set<String>()
+  var unverifiedDeletes = Set<String>()
   var unverifiedWrites = Set<String>()
   var unverifiedNextWrites = Set<String>()
   var failureMessage = "injected Keychain failure"
@@ -209,6 +260,7 @@ private final class FakeConnectorSecretBacking: ConnectorSecretBacking {
 
   func delete(account: String) throws {
     if failingDeletes.contains(account) { throw Failure(message: failureMessage) }
+    if unverifiedDeletes.contains(account) { return }
     tokens.removeValue(forKey: account)
   }
 }
