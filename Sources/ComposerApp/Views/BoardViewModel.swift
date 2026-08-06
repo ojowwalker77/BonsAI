@@ -402,10 +402,17 @@ final class BoardViewModel: ObservableObject {
   }
 
   /// Geometry + live plain text, ready to persist.
-  private func snapshot() -> [CardState] {
-    cards.map { card in
+  func renderingSnapshot(for source: [CardState]) -> [CardState] {
+    source.map { card in
       var copy = card
       if let liveFrame = liveTextFrames[card.id] { copy.frame = liveFrame }
+      return copy
+    }
+  }
+
+  private func snapshot() -> [CardState] {
+    renderingSnapshot(for: cards).map { card in
+      var copy = card
       copy.text = persistedText(for: card)
       if card.elementKind == .text {
         let runs = ink(for: card)
@@ -1598,6 +1605,7 @@ final class BoardViewModel: ObservableObject {
           let i = cards.firstIndex(where: { $0.id == id }) else { return false }
     guard cards[i].frame != frame else { return true }
     cards[i].frame = frame
+    refreshBoundArrows()
     scheduleSave()
     return true
   }

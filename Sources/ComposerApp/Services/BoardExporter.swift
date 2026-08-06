@@ -57,7 +57,7 @@ enum BoardExporter {
 
     // The card layer at scale 1, offset so the content-bounds origin maps to (0,0), on the canvas.
     let content = BoardCardLayer(
-      cards: cards,
+      cards: board.renderingSnapshot(for: cards),
       board: board,
       boardTextContext: board.boardTextContext,
       selectedCardIDs: [],

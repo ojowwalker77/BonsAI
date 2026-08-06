@@ -2675,7 +2675,7 @@ struct BoardCardLayer: View, Equatable {
 
   static func == (lhs: BoardCardLayer, rhs: BoardCardLayer) -> Bool {
     lhs.cards == rhs.cards &&
-      lhs.boardTextContext == rhs.boardTextContext &&
+      lhs.boardTextContext.definedVariableNames == rhs.boardTextContext.definedVariableNames &&
       lhs.selectedCardIDs == rhs.selectedCardIDs &&
       lhs.editingCardID == rhs.editingCardID &&
       lhs.primarySelectedCardID == rhs.primarySelectedCardID &&

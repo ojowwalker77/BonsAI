@@ -313,10 +313,6 @@ struct EditingStage: View {
         refine: interaction.refine,
         store: DumpStore.shared
       )
-      .onChange(of: interaction.text) { oldValue, newValue in
-        interaction.cachePlainText(newValue)
-        board.noteEdited(cardID: card.id, previousText: oldValue)
-      }
       .padding(.horizontal, 28)
       .padding(.bottom, 22)
     }

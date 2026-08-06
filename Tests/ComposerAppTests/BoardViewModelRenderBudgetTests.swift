@@ -43,6 +43,20 @@ final class BoardViewModelRenderBudgetTests: XCTestCase {
     XCTAssertGreaterThan(board.boardTextContextDerivationCount, derivationsBeforeEdit)
   }
 
+  func testOneEditorRevisionDerivesTextContextOnce() throws {
+    let store = DumpStore(inMemoryOnly: true, loadInitialContent: false)
+    let board = BoardViewModel(store: store)
+    let card = try XCTUnwrap(board.cards.first)
+    let before = board.boardTextContextDerivationCount
+    let interaction = board.interaction(for: card.id)
+
+    interaction.cachePlainText("name=(value)")
+    board.noteEdited(cardID: card.id, previousText: "")
+
+    XCTAssertEqual(board.boardTextContextDerivationCount, before + 1)
+    XCTAssertEqual(board.boardTextContext.definedVariableNames, Set(["name"]))
+  }
+
   func testInactiveHistoryIsBoundedAndActiveHistoryStaysOutOfCache() throws {
     let store = DumpStore(inMemoryOnly: true, loadInitialContent: false)
     let board = BoardViewModel(store: store)
