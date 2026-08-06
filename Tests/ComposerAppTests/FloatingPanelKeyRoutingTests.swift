@@ -148,6 +148,18 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     XCTAssertFalse(routed, "a handled text-editor Escape must not dismiss the workspace")
   }
 
+  func testAppKitCancelOperationFallsBackWhenTextEditorHasNoEscapeHandler() {
+    let panel = makePanel()
+    let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
+    panel.contentView?.addSubview(field)
+    XCTAssertTrue(panel.makeFirstResponder(field))
+    XCTAssertTrue(panel.firstResponder is NSTextView)
+
+    let routed = escapeFired { panel.cancelOperation(nil) }
+
+    XCTAssertTrue(routed, "an idle text editor must let Escape reach the workspace coordinator")
+  }
+
   func testEscapeCoordinatorClosesAgentOrSettingsBeforeAnActiveEditor() {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(hasAgent: true, hasActiveEditor: true)),

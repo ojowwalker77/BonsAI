@@ -150,8 +150,20 @@ final class FloatingPanel: NSWindow {
   /// Give an active field editor first refusal. Inline text and the Agent composer own their draft
   /// cancellation; only an unhandled Escape should climb to the workspace coordinator.
   private func forwardEscapeToTextResponder(_ sender: Any?) -> Bool {
-    guard firstResponder is NSTextView else { return false }
-    return firstResponder?.tryToPerform(#selector(NSResponder.cancelOperation(_:)), with: sender) ?? false
+    guard let textView = firstResponder as? NSTextView else { return false }
+    let selector = #selector(NSResponder.cancelOperation(_:))
+
+    // A field editor's delegate is normally its owning NSControl; the control's delegate owns
+    // command routing for AppKit and SwiftUI NSTextField values. Calling that hook directly is
+    // important: NSTextView implements cancelOperation even when nobody has a draft to cancel,
+    // so tryToPerform would report success and swallow Escape in an idle field.
+    if let control = textView.delegate as? NSControl,
+       let delegate = control.delegate as? NSTextFieldDelegate {
+      return delegate.control(control, textView: textView, doCommandBy: selector)
+    }
+
+    // FreeWriteEditor is a real NSTextView whose coordinator handles cancellation itself.
+    return textView.delegate?.textView?(textView, doCommandBy: selector) ?? false
   }
 
   /// Losing key status mid-press can swallow the space `keyUp`, which would otherwise leave the

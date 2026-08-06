@@ -279,7 +279,7 @@ final class BoardPersistenceTests: XCTestCase {
     XCTAssertEqual(store.current?.text, "Third board")
   }
 
-  func testDeleteSaveFailureRollsBackAndKeepsBoardAvailable() throws {
+  func testDeleteSaveFailureRollsBackAndKeepsBoardAvailable() async throws {
     var failNextSave = false
     let store = DumpStore(
       inMemoryOnly: true,
@@ -297,17 +297,22 @@ final class BoardPersistenceTests: XCTestCase {
     store.newDump()
     store.flush(cards: [CardState.firstCard(text: "Current board")])
 
+    _ = UserFacingErrorStore.shared.takeLatest()
     failNextSave = true
     XCTAssertFalse(store.delete(id))
     XCTAssertTrue(store.dumps.contains { $0.persistentModelID == id })
     XCTAssertEqual(store.dumps.first { $0.persistentModelID == id }?.text, "Keep this board")
 
     let currentID = try XCTUnwrap(store.currentID)
+    _ = UserFacingErrorStore.shared.takeLatest()
     failNextSave = true
     XCTAssertFalse(store.delete(currentID))
     XCTAssertEqual(store.currentID, currentID)
     XCTAssertEqual(store.current?.text, "Current board")
     XCTAssertTrue(store.dumps.contains { $0.persistentModelID == currentID })
+
+    await Task.yield()
+    XCTAssertEqual(UserFacingErrorStore.shared.takeLatest()?.message, "forced delete save failure")
 
     let verificationContext = ModelContext(store.container)
     let persisted = try verificationContext.fetch(FetchDescriptor<Dump>())
