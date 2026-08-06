@@ -143,7 +143,15 @@ final class FloatingPanel: NSWindow {
   /// AppKit's cancelOperation is the window-level Escape route. Keep dismissal in the canvas
   /// coordinator so transient surfaces (including Agent and Settings) close before the window.
   override func cancelOperation(_ sender: Any?) {
+    if forwardEscapeToTextResponder(sender) { return }
     NotificationCenter.default.post(name: .composerEscapeBoard, object: nil)
+  }
+
+  /// Give an active field editor first refusal. Inline text and the Agent composer own their draft
+  /// cancellation; only an unhandled Escape should climb to the workspace coordinator.
+  private func forwardEscapeToTextResponder(_ sender: Any?) -> Bool {
+    guard firstResponder is NSTextView else { return false }
+    return firstResponder?.tryToPerform(#selector(NSResponder.cancelOperation(_:)), with: sender) ?? false
   }
 
   /// Losing key status mid-press can swallow the space `keyUp`, which would otherwise leave the
@@ -302,6 +310,7 @@ final class FloatingPanel: NSWindow {
       return
     }
     if raw == "\u{1b}" {
+      if textIsEditing, forwardEscapeToTextResponder(event) { return }
       NotificationCenter.default.post(name: .composerEscapeBoard, object: nil)
       return
     }

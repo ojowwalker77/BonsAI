@@ -307,6 +307,29 @@ final class BoardPersistenceTests: XCTestCase {
     XCTAssertTrue(persisted.contains { $0.persistentModelID == id })
   }
 
+  func testAutosaveFailureRollsBackAndCanRetry() throws {
+    var failNextSave = false
+    let store = DumpStore(
+      inMemoryOnly: true,
+      loadInitialContent: false,
+      persistContext: { context in
+        if failNextSave {
+          failNextSave = false
+          throw ForcedAutosaveSaveFailure()
+        }
+        try context.save()
+      }
+    )
+    let id = try XCTUnwrap(store.currentID)
+
+    failNextSave = true
+    XCTAssertFalse(store.flush(cards: [CardState.firstCard(text: "Failed write")]))
+    XCTAssertEqual(store.dumps.first { $0.persistentModelID == id }?.text, "")
+
+    XCTAssertTrue(store.flush(cards: [CardState.firstCard(text: "Retry succeeds")]))
+    XCTAssertEqual(store.dumps.first { $0.persistentModelID == id }?.text, "Retry succeeds")
+  }
+
   func testProtectedFallbackCanBeDuplicatedWithoutChangingSource() throws {
     let store = makeStore()
     let source = try XCTUnwrap(store.current)
@@ -415,4 +438,8 @@ private struct ForcedRenameSaveFailure: LocalizedError {
 
 private struct ForcedDeleteSaveFailure: LocalizedError {
   var errorDescription: String? { "forced delete save failure" }
+}
+
+private struct ForcedAutosaveSaveFailure: LocalizedError {
+  var errorDescription: String? { "forced autosave save failure" }
 }

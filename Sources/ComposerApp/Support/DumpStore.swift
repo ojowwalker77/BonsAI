@@ -266,7 +266,10 @@ final class DumpStore: ObservableObject {
       }
       let dump = Dump(text: mirror, cardsData: data)
       context.insert(dump)
-      guard save("Creating a new board".localizedUI) else { return false }
+      guard save("Creating a new board".localizedUI) else {
+        rollbackFailedWrite()
+        return false
+      }
       reload()
       currentID = dump.persistentModelID
       return true
@@ -286,7 +289,10 @@ final class DumpStore: ObservableObject {
     dump.cardsData = data
     dump.text = mirror
     dump.updatedAt = Date()
-    guard save("Autosaving the board".localizedUI) else { return false }
+    guard save("Autosaving the board".localizedUI) else {
+      rollbackFailedWrite()
+      return false
+    }
     objectWillChange.send()   // the array identity is unchanged; nudge the list
     return true
   }
@@ -337,8 +343,7 @@ final class DumpStore: ObservableObject {
     guard save("Deleting the board".localizedUI) else {
       // A failed context save must leave the board visible and available for another attempt. The
       // delete is intentionally rolled back here instead of letting the UI reload as if it worked.
-      context.rollback()
-      reload()
+      rollbackFailedWrite()
       return false
     }
     reload()
@@ -525,6 +530,11 @@ final class DumpStore: ObservableObject {
       UserFacingError.report(error, while: action)
       return false
     }
+  }
+
+  private func rollbackFailedWrite() {
+    context.rollback()
+    reload()
   }
 
   private func reportUnreadableBoard(_ dump: Dump, message: String) {

@@ -4,6 +4,16 @@ import XCTest
 
 @testable import ComposerApp
 
+private final class EscapeHandlingFieldDelegate: NSObject, NSTextFieldDelegate {
+  var cancelled = false
+
+  func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+    guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+    cancelled = true
+    return true
+  }
+}
+
 /// FloatingPanel.keyDown routes window-level Backspace to `.composerDeleteSelection` unless the
 /// firstResponder is an `NSTextView`. Both kinds of text input in the app satisfy that guard the
 /// same way: AppKit fields (the ⌘K palette's `FocusedSearchField`) and SwiftUI `TextField`s (the
@@ -121,6 +131,21 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
   func testAppKitCancelOperationRoutesToTheCanvasCoordinator() {
     let panel = makePanel()
     XCTAssertTrue(escapeFired { panel.cancelOperation(nil) })
+  }
+
+  func testAppKitCancelOperationGivesActiveTextEditorFirstRefusal() {
+    let panel = makePanel()
+    let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
+    let delegate = EscapeHandlingFieldDelegate()
+    field.delegate = delegate
+    panel.contentView?.addSubview(field)
+    XCTAssertTrue(panel.makeFirstResponder(field))
+    XCTAssertTrue(panel.firstResponder is NSTextView)
+
+    let routed = escapeFired { panel.cancelOperation(nil) }
+
+    XCTAssertTrue(delegate.cancelled, "the active field editor must receive Escape first")
+    XCTAssertFalse(routed, "a handled text-editor Escape must not dismiss the workspace")
   }
 
   func testEscapeCoordinatorClosesAgentOrSettingsBeforeAnActiveEditor() {
