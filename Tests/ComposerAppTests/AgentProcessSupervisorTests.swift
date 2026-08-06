@@ -1,0 +1,79 @@
+import Darwin
+import Foundation
+import XCTest
+@testable import ComposerApp
+
+final class AgentProcessSupervisorTests: XCTestCase {
+  @MainActor
+  func testClosedStdoutCanWaitForExitWithoutBlockingMainActor() async throws {
+    let supervisor = AgentProcessSupervisor()
+    let stdout = Pipe()
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", "exec 1>&-; sleep 0.35"]
+    process.standardOutput = stdout
+    process.standardError = FileHandle.nullDevice
+    process.standardInput = FileHandle.nullDevice
+
+    let managed = try supervisor.launch(process)
+    let pid = managed.processIdentifier
+    defer { Darwin.kill(pid, SIGKILL) }
+
+    let stdoutClosed = Task.detached {
+      try stdout.fileHandleForReading.readToEnd()
+    }
+    _ = try await stdoutClosed.value
+    XCTAssertEqual(Darwin.kill(pid, 0), 0, "the child should still be alive after closing stdout")
+
+    let started = ContinuousClock.now
+    let waiter = Task { @MainActor in await managed.termination() }
+    try await Task.sleep(nanoseconds: 60_000_000)
+    let actorDelay = started.duration(to: .now)
+
+    XCTAssertLessThan(actorDelay, .milliseconds(200), "an async termination wait must suspend the main actor")
+    XCTAssertEqual(Darwin.kill(pid, 0), 0, "the linger interval should still be active at the probe")
+    let termination = await waiter.value
+    XCTAssertEqual(termination.status, 0)
+    XCTAssertEqual(supervisor.activeProcessCount, 0)
+  }
+
+  func testIgnoredSIGTERMEscalatesToSIGKILLAndReapsProcess() async throws {
+    let supervisor = AgentProcessSupervisor()
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", "trap '' TERM; exec 1>&-; while :; do :; done"]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    process.standardInput = FileHandle.nullDevice
+
+    let managed = try supervisor.launch(process)
+    let pid = managed.processIdentifier
+    defer { Darwin.kill(pid, SIGKILL) }
+    try await Task.sleep(nanoseconds: 50_000_000) // let the shell install its TERM trap
+
+    let started = ContinuousClock.now
+    let termination = await supervisor.stop(managed, gracePeriod: 0.08)
+    let elapsed = started.duration(to: .now)
+
+    XCTAssertEqual(termination.reason, .uncaughtSignal)
+    XCTAssertEqual(termination.status, SIGKILL)
+    XCTAssertLessThan(elapsed, .seconds(1))
+    errno = 0
+    XCTAssertEqual(Darwin.kill(pid, 0), -1)
+    XCTAssertEqual(errno, ESRCH)
+    XCTAssertEqual(supervisor.activeProcessCount, 0)
+  }
+
+  func testStoppedAndSupersededTurnGenerationsRejectLateWrites() {
+    var generation = AgentTurnGeneration()
+    let first = generation.begin()
+    XCTAssertTrue(generation.accepts(first))
+
+    generation.invalidate()
+    XCTAssertFalse(generation.accepts(first))
+
+    let second = generation.begin()
+    XCTAssertFalse(generation.accepts(first))
+    XCTAssertTrue(generation.accepts(second))
+  }
+}

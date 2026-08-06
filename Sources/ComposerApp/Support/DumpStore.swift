@@ -91,6 +91,7 @@ final class DumpStore: ObservableObject {
   private var recoveryDataByBoardID: [PersistentIdentifier: Data] = [:]
   private var recoveryURLByBoardID: [PersistentIdentifier: URL] = [:]
   private let recoveryDirectory: URL?
+  private let persistContext: (ModelContext) throws -> Void
   /// The next save asks the board for one fresh snapshot when the debounce fires. Keeping a
   /// closure (rather than an array captured by every queued work item) prevents fast typing from
   /// retaining many whole-board copies until their cancelled timers drain.
@@ -112,9 +113,11 @@ final class DumpStore: ObservableObject {
   /// configuration resolves to the user's REAL `Composer.store` — a test that touched it could
   /// persist junk cards into a real board.
   init(inMemoryOnly: Bool = false, loadInitialContent: Bool = true,
-       recoveryDirectory: URL? = nil) {
+       recoveryDirectory: URL? = nil,
+       persistContext: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
     self.recoveryDirectory = recoveryDirectory
       ?? (inMemoryOnly ? nil : BoardRecoveryStore.defaultDirectory)
+    self.persistContext = persistContext
     let schema = Schema([Dump.self])
     let config = inMemoryOnly
       ? ModelConfiguration(isStoredInMemoryOnly: true)
@@ -336,13 +339,24 @@ final class DumpStore: ObservableObject {
 
   /// Give a board a custom name. An empty/whitespace name clears it back to the auto-derived title.
   /// Doesn't touch the cards, so it's safe to rename the board you're currently editing.
-  func rename(_ id: PersistentIdentifier, to name: String) {
-    guard let dump = dumps.first(where: { $0.persistentModelID == id }) else { return }
+  @discardableResult
+  func rename(_ id: PersistentIdentifier, to name: String) -> Bool {
+    guard let dump = dumps.first(where: { $0.persistentModelID == id }) else { return false }
+    let previousTitle = dump.customTitle
+    let previousUpdatedAt = dump.updatedAt
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
     dump.customTitle = trimmed.isEmpty ? nil : String(trimmed.prefix(80))
     dump.updatedAt = Date()
-    try? context.save()
+    guard save("Renaming the board".localizedUI) else {
+      // Keep the visible model aligned with durable storage. A later successful save must never
+      // accidentally persist a rename that this action already reported as failed.
+      dump.customTitle = previousTitle
+      dump.updatedAt = previousUpdatedAt
+      objectWillChange.send()
+      return false
+    }
     objectWillChange.send()
+    return true
   }
 
   /// Make an editable copy of the visible fallback while leaving unreadable source bytes untouched.
@@ -495,7 +509,7 @@ final class DumpStore: ObservableObject {
 
   private func save(_ action: String) -> Bool {
     do {
-      try context.save()
+      try persistContext(context)
       return true
     } catch {
       UserFacingError.report(error, while: action)

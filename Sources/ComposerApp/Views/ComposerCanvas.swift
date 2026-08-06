@@ -803,8 +803,16 @@ struct ComposerCanvas: View {
   private func commitBoardRename() {
     guard let id = renamingBoardID else { return }
     let name = boardNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-    renamingBoardID = nil
-    if !name.isEmpty { renameBoard(id, to: name) }
+    guard !name.isEmpty else {
+      renamingBoardID = nil
+      return
+    }
+    if renameBoard(id, to: name) {
+      renamingBoardID = nil
+    } else {
+      // Keep the editor and the attempted value visible so the user can retry after fixing storage.
+      DispatchQueue.main.async { boardNameFocused = true }
+    }
   }
 
   private func cancelBoardRename() {
@@ -1481,7 +1489,9 @@ struct ComposerCanvas: View {
   private func pickBoard(_ id: PersistentIdentifier) { board.flushSave(); store.select(id); board.loadFromStore(); resetView() }
   private func deleteBoard(_ id: PersistentIdentifier) { board.flushSave(); store.delete(id); board.loadFromStore(); resetView() }
   // Rename only touches the board's name, never its cards — no flush/reload needed.
-  private func renameBoard(_ id: PersistentIdentifier, to name: String) { store.rename(id, to: name) }
+  private func renameBoard(_ id: PersistentIdentifier, to name: String) -> Bool {
+    store.rename(id, to: name)
+  }
 
   /// A fresh board's first card opens into its editing stage so the caret is ready. Only a text card
   /// has a caret-first stage; a non-text first card is left selected.

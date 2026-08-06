@@ -515,3 +515,8 @@
 "How the board behaves while you draw." = "How the board behaves while you draw.";
 "Snap sketches into shapes" = "Snap sketches into shapes";
 "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip.";
+"Migrating saved connector tokens" = "Migrating saved connector tokens";
+"Renaming the board" = "Renaming the board";
+"%@: macOS Keychain access failed. Check Keychain Access and try again." = "%@: macOS Keychain access failed. Check Keychain Access and try again.";
+"%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again." = "%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again.";
+"Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI." = "Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI.";
