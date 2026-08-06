@@ -302,6 +302,13 @@ final class BoardPersistenceTests: XCTestCase {
     XCTAssertTrue(store.dumps.contains { $0.persistentModelID == id })
     XCTAssertEqual(store.dumps.first { $0.persistentModelID == id }?.text, "Keep this board")
 
+    let currentID = try XCTUnwrap(store.currentID)
+    failNextSave = true
+    XCTAssertFalse(store.delete(currentID))
+    XCTAssertEqual(store.currentID, currentID)
+    XCTAssertEqual(store.current?.text, "Current board")
+    XCTAssertTrue(store.dumps.contains { $0.persistentModelID == currentID })
+
     let verificationContext = ModelContext(store.container)
     let persisted = try verificationContext.fetch(FetchDescriptor<Dump>())
     XCTAssertTrue(persisted.contains { $0.persistentModelID == id })

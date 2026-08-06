@@ -762,7 +762,7 @@ struct ComposerCanvas: View {
                   .multilineTextAlignment(.center)
                   .focused($boardNameFocused)
                   .onSubmit { _ = commitBoardRename() }
-                  .onExitCommand(perform: handleEscapeBoard)
+                  .onExitCommand(perform: cancelBoardRename)
                   .onAppear { DispatchQueue.main.async { boardNameFocused = true } }
                   .onChange(of: boardNameFocused) { _, focused in
                     if !focused { _ = commitBoardRename() }
