@@ -64,6 +64,29 @@ final class AgentProcessSupervisorTests: XCTestCase {
     XCTAssertEqual(supervisor.activeProcessCount, 0)
   }
 
+  func testImmediatelyExitingProcessesAreRemovedFromRegistry() async throws {
+    let supervisor = AgentProcessSupervisor()
+    var managedProcesses: [ManagedAgentProcess] = []
+
+    for _ in 0 ..< 64 {
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+      process.standardOutput = FileHandle.nullDevice
+      process.standardError = FileHandle.nullDevice
+      process.standardInput = FileHandle.nullDevice
+      managedProcesses.append(try supervisor.launch(process))
+    }
+
+    for process in managedProcesses {
+      _ = await process.termination()
+    }
+    for _ in 0 ..< 100 where supervisor.activeProcessCount != 0 {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertEqual(supervisor.activeProcessCount, 0)
+  }
+
   func testStoppedAndSupersededTurnGenerationsRejectLateWrites() {
     var generation = AgentTurnGeneration()
     let first = generation.begin()

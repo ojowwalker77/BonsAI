@@ -75,7 +75,39 @@ final class ConnectorSecretStoreTests: XCTestCase {
     XCTAssertTrue(fixture.messages.allSatisfy { !$0.contains(secret) })
   }
 
-  private func makeFixture(legacy: [String: String]? = nil) throws -> Fixture {
+  func testVerifiedKeychainWriteWinsWhenLegacyCleanupFails() throws {
+    let fileManager = FailingRemovalFileManager()
+    let fixture = try makeFixture(
+      legacy: ["@linear": "legacy-secret"],
+      fileManager: fileManager
+    )
+    defer { fixture.cleanup() }
+
+    XCTAssertTrue(fixture.vault.setToken("new-secret", for: "@linear"))
+    XCTAssertEqual(fixture.backing.tokens["@linear"], "new-secret")
+    XCTAssertEqual(fixture.vault.token(for: "@linear"), "new-secret")
+    XCTAssertEqual(try readLegacy(fixture.legacyURL)["@linear"], "legacy-secret")
+    XCTAssertFalse(fixture.messages.isEmpty)
+  }
+
+  func testDeleteDoesNotProceedWhenLegacyCleanupFails() throws {
+    let fileManager = FailingRemovalFileManager()
+    let fixture = try makeFixture(
+      legacy: ["@linear": "legacy-secret"],
+      fileManager: fileManager
+    )
+    defer { fixture.cleanup() }
+
+    XCTAssertFalse(fixture.vault.setToken(nil, for: "@linear"))
+    XCTAssertEqual(fixture.backing.tokens["@linear"], "legacy-secret")
+    XCTAssertEqual(fixture.vault.token(for: "@linear"), "legacy-secret")
+    XCTAssertEqual(try readLegacy(fixture.legacyURL)["@linear"], "legacy-secret")
+  }
+
+  private func makeFixture(
+    legacy: [String: String]? = nil,
+    fileManager: FileManager = .default
+  ) throws -> Fixture {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("BonsAI-Connector-Secrets-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -89,6 +121,7 @@ final class ConnectorSecretStoreTests: XCTestCase {
     let vault = ConnectorSecretVault(
       backing: backing,
       legacyFileURL: legacyURL,
+      fileManager: fileManager,
       report: { messages.values.append($0) }
     )
     return Fixture(
@@ -102,6 +135,12 @@ final class ConnectorSecretStoreTests: XCTestCase {
 
   private func readLegacy(_ url: URL) throws -> [String: String] {
     try JSONDecoder().decode([String: String].self, from: Data(contentsOf: url))
+  }
+}
+
+private final class FailingRemovalFileManager: FileManager {
+  override func removeItem(at URL: URL) throws {
+    throw CocoaError(.fileWriteNoPermission)
   }
 }
 

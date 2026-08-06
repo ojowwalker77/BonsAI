@@ -122,15 +122,7 @@ final class ConnectorSecretVault {
     } catch {
       reportKeychainFailure(while: "Reading saved connector tokens".localizedUI)
     }
-
-    // A partial migration intentionally leaves the legacy file intact. Keychain wins per account;
-    // this fallback prevents a failed insertion from losing a credential while the next launch retries.
-    do {
-      return normalized(try loadLegacyTokens()?[connectorID])
-    } catch {
-      reportLegacyStorageFailure(while: "Reading saved connector tokens".localizedUI)
-      return nil
-    }
+    return nil
   }
 
   func hasToken(for connectorID: String) -> Bool {
@@ -141,9 +133,22 @@ final class ConnectorSecretVault {
   func setToken(_ value: String?, for connectorID: String) -> Bool {
     lock.lock(); defer { lock.unlock() }
     migrateLegacyIfNeeded()
+    let normalizedValue = normalized(value)
+
+    if normalizedValue == nil {
+      do {
+        // Remove the plaintext source first. If that cleanup fails, keep the verified Keychain
+        // credential active rather than reporting a deletion that a later launch would undo.
+        try removeLegacyToken(for: connectorID)
+        legacyFallbackAccounts.remove(connectorID)
+      } catch {
+        reportLegacyStorageFailure(while: "Saving the connector token".localizedUI)
+        return false
+      }
+    }
 
     do {
-      if let value = normalized(value) {
+      if let value = normalizedValue {
         try backing.write(value, account: connectorID)
         guard try backing.read(account: connectorID) == value else {
           throw ConnectorSecretVerificationError.writeDidNotRoundTrip
@@ -162,15 +167,16 @@ final class ConnectorSecretVault {
       return false
     }
 
+    legacyFallbackAccounts.remove(connectorID)
+    guard normalizedValue != nil else { return true }
+
     do {
       // Never leave this account's previous token in plaintext after a verified Keychain mutation.
       try removeLegacyToken(for: connectorID)
-      legacyFallbackAccounts.remove(connectorID)
-      return true
     } catch {
       reportLegacyStorageFailure(while: "Saving the connector token".localizedUI)
-      return false
     }
+    return true
   }
 
   private func migrateLegacyIfNeeded() {

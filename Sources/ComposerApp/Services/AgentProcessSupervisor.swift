@@ -30,8 +30,8 @@ final class ManagedAgentProcess: @unchecked Sendable {
         status: process.terminationStatus,
         reason: process.terminationReason
       )
-      didTerminate(id)
       latch.resolve(termination)
+      didTerminate(id)
     }
     try process.run()
     processIdentifier = process.processIdentifier

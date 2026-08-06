@@ -519,6 +519,6 @@
 "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "识别出的笔画在抬笔时变为规整图形。关闭时保留建议提示。";
 "Migrating saved connector tokens" = "正在迁移已保存的连接器令牌";
 "Renaming the board" = "正在重命名画板";
-"%@: macOS Keychain access failed. Check Keychain Access and try again." = "%@: 无法访问 macOS 钥匙串。请检查“钥匙串访问”后重试。";
-"%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again." = "%@: BonsAI 无法更新旧版连接器令牌文件。请检查 Application Support 权限后重试。";
+"%@: macOS Keychain access failed. Check Keychain Access and try again." = "%@：无法访问 macOS 钥匙串。请检查“钥匙串访问”后重试。";
+"%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again." = "%@：BonsAI 无法更新旧版连接器令牌文件。请检查 Application Support 权限后重试。";
 "Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI." = "无法验证连接器令牌迁移。旧版文件已保留以避免令牌丢失；请检查“钥匙串访问”，重新打开 BonsAI 后重试。";
