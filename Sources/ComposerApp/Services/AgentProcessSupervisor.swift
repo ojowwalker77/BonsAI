@@ -93,13 +93,15 @@ final class ManagedAgentProcess: @unchecked Sendable {
     requestTermination(processGroup)
     await waitForShutdownProgress(processGroup, timeout: max(0, gracePeriod))
     escalateTerminationIfNeeded(processGroup)
+    let termination = await terminationLatch.wait()
 
     // SIGKILL is asynchronous. Give descendant-only groups a short, bounded window to disappear
-    // so app termination normally observes an empty registry before replying to AppKit.
+    // after the leader's handler has published their presence, so app termination normally
+    // observes an empty registry before replying to AppKit.
     if processGroupLifecycle.currentPhase == .leaderExitedWithDescendants {
       await waitForShutdownProgress(processGroup, timeout: 0.25)
     }
-    return await terminationLatch.wait()
+    return termination
   }
 
   private func requestTermination(_ processGroup: Int32) {
@@ -279,8 +281,15 @@ private func signalAgentProcessGroup(_ processGroup: Int32, signal: Int32) {
 }
 
 private func waitForAgentProcessGroupExit(_ processGroup: Int32) async {
+  var interval: UInt64 = 10_000_000
   while agentProcessGroupExists(processGroup) {
-    try? await Task.sleep(nanoseconds: 10_000_000)
+    if Task.isCancelled { return }
+    do {
+      try await Task.sleep(nanoseconds: interval)
+    } catch {
+      return
+    }
+    interval = min(interval * 2, 1_000_000_000)
   }
 }
 
@@ -302,18 +311,16 @@ private enum AgentProcessLauncherLocator {
   static let name = "BonsAIAgentLauncher"
 
   static func executableURL(fileManager: FileManager = .default) -> URL? {
-    var candidates = [
-      Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/\(name)"),
-      Bundle.main.bundleURL.appendingPathComponent("Helpers/\(name)"),
-    ]
+    var candidates = [Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/\(name)")]
 
+    #if DEBUG
+    candidates.append(Bundle.main.bundleURL.appendingPathComponent("Helpers/\(name)"))
     var directory = Bundle.main.bundleURL
     for _ in 0 ..< 5 {
       candidates.append(directory.appendingPathComponent(name))
       directory.deleteLastPathComponent()
     }
 
-    #if DEBUG
     let buildRoot = URL(fileURLWithPath: fileManager.currentDirectoryPath)
       .appendingPathComponent(".build", isDirectory: true)
     candidates.append(buildRoot.appendingPathComponent("debug/\(name)"))

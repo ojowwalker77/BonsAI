@@ -134,6 +134,18 @@ final class ConnectorSecretVault {
     lock.lock(); defer { lock.unlock() }
     migrateLegacyIfNeeded()
     let normalizedValue = normalized(value)
+    let legacyBeforeClear: [String: String]?
+    if normalizedValue == nil {
+      do {
+        // Do not delete the only usable Keychain copy when legacy storage cannot even be read.
+        legacyBeforeClear = try loadLegacyTokens()
+      } catch {
+        reportLegacyStorageFailure(while: "Saving the connector token".localizedUI)
+        return false
+      }
+    } else {
+      legacyBeforeClear = nil
+    }
 
     do {
       try updateKeychain(to: normalizedValue, for: connectorID)
@@ -148,7 +160,7 @@ final class ConnectorSecretVault {
       do {
         // A clear succeeds only after both copies are gone. Removing Keychain first means any
         // cleanup failure leaves the legacy credential available and accurately reports failure.
-        try removeLegacyToken(for: connectorID)
+        try removeLegacyToken(for: connectorID, from: legacyBeforeClear)
         legacyFallbackAccounts.remove(connectorID)
         return true
       } catch {
@@ -245,7 +257,14 @@ final class ConnectorSecretVault {
   }
 
   private func removeLegacyToken(for connectorID: String) throws {
-    guard var legacy = try loadLegacyTokens() else { return }
+    try removeLegacyToken(for: connectorID, from: try loadLegacyTokens())
+  }
+
+  private func removeLegacyToken(
+    for connectorID: String,
+    from loadedLegacy: [String: String]?
+  ) throws {
+    guard var legacy = loadedLegacy else { return }
     legacy.removeValue(forKey: connectorID)
     if legacy.isEmpty {
       try fileManager.removeItem(at: legacyFileURL)

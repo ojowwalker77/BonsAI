@@ -139,6 +139,16 @@ final class ConnectorSecretStoreTests: XCTestCase {
     XCTAssertEqual(fixture.vault.token(for: "@linear"), "legacy-secret")
   }
 
+  func testUnreadableLegacyStoragePreventsDeletingTheUsableKeychainCredential() throws {
+    let fixture = try makeFixture()
+    defer { fixture.cleanup() }
+    fixture.backing.tokens["@linear"] = "keychain-secret"
+    try Data("not-json".utf8).write(to: fixture.legacyURL)
+
+    XCTAssertFalse(fixture.vault.setToken(nil, for: "@linear"))
+    XCTAssertEqual(fixture.backing.tokens["@linear"], "keychain-secret")
+  }
+
   func testLegacyRewriteIsAtomicAndMode0600() throws {
     let fixture = try makeFixture(legacy: [
       "@figma": "figma-secret",

@@ -25,12 +25,18 @@ final class AgentProcessSupervisorTests: XCTestCase {
     _ = try await stdoutClosed.value
     XCTAssertEqual(Darwin.kill(pid, 0), 0, "the child should still be alive after closing stdout")
 
-    let waiter = Task { @MainActor in await managed.termination() }
-    let started = ContinuousClock.now
-    try await Task.sleep(nanoseconds: 60_000_000)
-    let actorDelay = started.duration(to: .now)
+    var waiterStarted = false
+    var waiterCompleted = false
+    let waiter = Task { @MainActor in
+      waiterStarted = true
+      let termination = await managed.termination()
+      waiterCompleted = true
+      return termination
+    }
+    for _ in 0 ..< 100 where !waiterStarted { await Task.yield() }
 
-    XCTAssertLessThan(actorDelay, .milliseconds(200), "an async termination wait must suspend the main actor")
+    XCTAssertTrue(waiterStarted)
+    XCTAssertFalse(waiterCompleted, "an async termination wait must suspend the main actor")
     XCTAssertEqual(Darwin.kill(pid, 0), 0, "the linger interval should still be active at the probe")
     _ = await supervisor.stop(managed, gracePeriod: 0.08)
     let termination = await waiter.value
@@ -119,6 +125,7 @@ final class AgentProcessSupervisorTests: XCTestCase {
     XCTAssertEqual(termination.reason, .uncaughtSignal)
     XCTAssertEqual(termination.status, SIGKILL)
     try await waitForProcessToDisappear(childPID)
+    try await waitForRegistryToDrain(supervisor)
     XCTAssertEqual(supervisor.activeProcessCount, 0)
   }
 
@@ -153,6 +160,7 @@ final class AgentProcessSupervisorTests: XCTestCase {
 
     await supervisor.stopAll(gracePeriod: 0.08)
     try await waitForProcessToDisappear(childPID)
+    try await waitForRegistryToDrain(supervisor)
     XCTAssertEqual(supervisor.activeProcessCount, 0)
   }
 
@@ -187,5 +195,11 @@ final class AgentProcessSupervisorTests: XCTestCase {
       try await Task.sleep(nanoseconds: 5_000_000)
     }
     XCTFail("the descendant process was still alive after group shutdown")
+  }
+
+  private func waitForRegistryToDrain(_ supervisor: AgentProcessSupervisor) async throws {
+    for _ in 0 ..< 200 where supervisor.activeProcessCount != 0 {
+      try await Task.sleep(nanoseconds: 5_000_000)
+    }
   }
 }
