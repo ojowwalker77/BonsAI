@@ -13,7 +13,8 @@ let package = Package(
     .macOS(.v14)
   ],
   products: [
-    .executable(name: "Composer", targets: ["ComposerApp"])
+    .executable(name: "Composer", targets: ["ComposerApp"]),
+    .executable(name: "BonsAIAgentLauncher", targets: ["BonsAIAgentLauncher"]),
   ],
   dependencies: [
     // Sparkle drives the in-app auto-update (periodic check → download → install → relaunch). It is
@@ -29,6 +30,10 @@ let package = Package(
     .package(path: "Vendor/SwiftMath")
   ],
   targets: [
+    .executableTarget(
+      name: "BonsAIAgentLauncher",
+      path: "Sources/BonsAIAgentLauncher"
+    ),
     .executableTarget(
       name: "ComposerApp",
       dependencies: [

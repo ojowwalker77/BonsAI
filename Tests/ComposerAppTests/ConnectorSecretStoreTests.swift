@@ -59,6 +59,7 @@ final class ConnectorSecretStoreTests: XCTestCase {
     XCTAssertEqual(fixture.vault.token(for: "@sentry"), "sentry-secret")
     XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.legacyURL.path))
     XCTAssertEqual(try readLegacy(fixture.legacyURL)["@sentry"], "sentry-secret")
+    XCTAssertNil(fixture.backing.tokens["@sentry"])
   }
 
   func testFailureMessagesNeverContainCredentialValues() throws {
@@ -102,6 +103,17 @@ final class ConnectorSecretStoreTests: XCTestCase {
     XCTAssertEqual(fixture.backing.tokens["@linear"], "legacy-secret")
     XCTAssertEqual(fixture.vault.token(for: "@linear"), "legacy-secret")
     XCTAssertEqual(try readLegacy(fixture.legacyURL)["@linear"], "legacy-secret")
+  }
+
+  func testFailedWriteVerificationRestoresPreviousKeychainValue() throws {
+    let fixture = try makeFixture()
+    defer { fixture.cleanup() }
+    fixture.backing.tokens["@linear"] = "previous-secret"
+    fixture.backing.unverifiedNextWrites.insert("@linear")
+
+    XCTAssertFalse(fixture.vault.setToken("replacement-secret", for: "@linear"))
+    XCTAssertEqual(fixture.backing.tokens["@linear"], "previous-secret")
+    XCTAssertEqual(fixture.vault.token(for: "@linear"), "previous-secret")
   }
 
   private func makeFixture(
@@ -178,6 +190,7 @@ private final class FakeConnectorSecretBacking: ConnectorSecretBacking {
   var failingWrites = Set<String>()
   var failingDeletes = Set<String>()
   var unverifiedWrites = Set<String>()
+  var unverifiedNextWrites = Set<String>()
   var failureMessage = "injected Keychain failure"
 
   func read(account: String) throws -> String? {
@@ -187,6 +200,10 @@ private final class FakeConnectorSecretBacking: ConnectorSecretBacking {
 
   func write(_ value: String, account: String) throws {
     if failingWrites.contains(account) { throw Failure(message: failureMessage) }
+    if unverifiedNextWrites.remove(account) != nil {
+      tokens[account] = "verification-mismatch"
+      return
+    }
     tokens[account] = unverifiedWrites.contains(account) ? "verification-mismatch" : value
   }
 

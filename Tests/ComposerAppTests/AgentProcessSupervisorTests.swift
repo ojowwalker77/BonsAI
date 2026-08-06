@@ -87,6 +87,40 @@ final class AgentProcessSupervisorTests: XCTestCase {
     XCTAssertEqual(supervisor.activeProcessCount, 0)
   }
 
+  func testStopTerminatesTheEntireAgentProcessGroup() async throws {
+    let supervisor = AgentProcessSupervisor()
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("BonsAI-Agent-Process-Group-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let childPIDURL = directory.appendingPathComponent("child.pid")
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [
+      "-c",
+      "trap '' TERM; (trap '' TERM; while :; do sleep 1; done) & child=$!; echo $child > \"$1\"; wait $child",
+      "bonsai-agent-test",
+      childPIDURL.path,
+    ]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    process.standardInput = FileHandle.nullDevice
+
+    let managed = try supervisor.launch(process)
+    defer { Darwin.kill(-managed.processIdentifier, SIGKILL) }
+    let childPID = try await waitForPID(in: childPIDURL)
+
+    XCTAssertEqual(Darwin.getpgid(managed.processIdentifier), managed.processIdentifier)
+    XCTAssertEqual(Darwin.getpgid(childPID), managed.processIdentifier)
+
+    let termination = await supervisor.stop(managed, gracePeriod: 0.08)
+    XCTAssertEqual(termination.reason, .uncaughtSignal)
+    XCTAssertEqual(termination.status, SIGKILL)
+    try await waitForProcessToDisappear(childPID)
+    XCTAssertEqual(supervisor.activeProcessCount, 0)
+  }
+
   func testStoppedAndSupersededTurnGenerationsRejectLateWrites() {
     var generation = AgentTurnGeneration()
     let first = generation.begin()
@@ -98,5 +132,26 @@ final class AgentProcessSupervisorTests: XCTestCase {
     let second = generation.begin()
     XCTAssertFalse(generation.accepts(first))
     XCTAssertTrue(generation.accepts(second))
+  }
+
+  private func waitForPID(in url: URL) async throws -> Int32 {
+    for _ in 0 ..< 200 {
+      if let contents = try? String(contentsOf: url, encoding: .utf8),
+         let pid = Int32(contents.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        return pid
+      }
+      try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    XCTFail("the child process did not publish its pid")
+    return -1
+  }
+
+  private func waitForProcessToDisappear(_ pid: Int32) async throws {
+    for _ in 0 ..< 200 {
+      errno = 0
+      if Darwin.kill(pid, 0) == -1, errno == ESRCH { return }
+      try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    XCTFail("the descendant process was still alive after group shutdown")
   }
 }

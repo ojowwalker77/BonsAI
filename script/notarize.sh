@@ -48,6 +48,8 @@ if [ -d "$SP" ]; then
   done
   sign "$SP"
 fi
+AGENT_LAUNCHER="$APP/Contents/Helpers/BonsAIAgentLauncher"
+[ -x "$AGENT_LAUNCHER" ] && sign "$AGENT_LAUNCHER"
 sign "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 

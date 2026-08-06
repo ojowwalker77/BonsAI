@@ -148,18 +148,7 @@ final class ConnectorSecretVault {
     }
 
     do {
-      if let value = normalizedValue {
-        try backing.write(value, account: connectorID)
-        guard try backing.read(account: connectorID) == value else {
-          throw ConnectorSecretVerificationError.writeDidNotRoundTrip
-        }
-      } else {
-        try backing.delete(account: connectorID)
-        guard normalized(try backing.read(account: connectorID)) == nil else {
-          throw ConnectorSecretVerificationError.deleteDidNotRoundTrip
-        }
-      }
-
+      try updateKeychain(to: normalizedValue, for: connectorID)
     } catch {
       // Deliberately do not interpolate the underlying error: an injected/system diagnostic must
       // never be able to echo the credential that was being stored.
@@ -177,6 +166,37 @@ final class ConnectorSecretVault {
       reportLegacyStorageFailure(while: "Saving the connector token".localizedUI)
     }
     return true
+  }
+
+  private func updateKeychain(to value: String?, for connectorID: String) throws {
+    let previousValue = normalized(try backing.read(account: connectorID))
+    do {
+      if let value {
+        try backing.write(value, account: connectorID)
+        guard normalized(try backing.read(account: connectorID)) == value else {
+          throw ConnectorSecretVerificationError.writeDidNotRoundTrip
+        }
+      } else {
+        try backing.delete(account: connectorID)
+        guard normalized(try backing.read(account: connectorID)) == nil else {
+          throw ConnectorSecretVerificationError.deleteDidNotRoundTrip
+        }
+      }
+    } catch let mutationError {
+      do {
+        if let previousValue {
+          try backing.write(previousValue, account: connectorID)
+        } else {
+          try backing.delete(account: connectorID)
+        }
+        guard normalized(try backing.read(account: connectorID)) == previousValue else {
+          throw ConnectorSecretVerificationError.writeDidNotRoundTrip
+        }
+      } catch {
+        throw ConnectorSecretVerificationError.writeDidNotRoundTrip
+      }
+      throw mutationError
+    }
   }
 
   private func migrateLegacyIfNeeded() {
@@ -199,10 +219,7 @@ final class ConnectorSecretVault {
         if normalized(try backing.read(account: connectorID)) != nil {
           continue // An existing Keychain item always wins.
         }
-        try backing.write(legacyValue, account: connectorID)
-        guard try backing.read(account: connectorID) == legacyValue else {
-          throw ConnectorSecretVerificationError.writeDidNotRoundTrip
-        }
+        try updateKeychain(to: legacyValue, for: connectorID)
       } catch {
         migrationFailed = true
         legacyFallbackAccounts.insert(connectorID)

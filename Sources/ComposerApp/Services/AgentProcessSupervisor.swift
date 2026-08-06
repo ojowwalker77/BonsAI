@@ -30,8 +30,8 @@ final class ManagedAgentProcess: @unchecked Sendable {
         status: process.terminationStatus,
         reason: process.terminationReason
       )
-      latch.resolve(termination)
       didTerminate(id)
+      latch.resolve(termination)
     }
     try process.run()
     processIdentifier = process.processIdentifier
@@ -42,16 +42,31 @@ final class ManagedAgentProcess: @unchecked Sendable {
   }
 
   fileprivate func stop(gracePeriod: TimeInterval) async -> AgentProcessTermination {
-    if let termination = terminationLatch.resolvedValue { return termination }
-
-    let pid = processIdentifier
-    if pid > 0 { Darwin.kill(pid, SIGTERM) }
-    if let termination = await terminationLatch.wait(timeout: max(0, gracePeriod)) {
-      return termination
+    let processGroup = processIdentifier
+    if processGroup > 0, processGroupExists(processGroup) {
+      signalProcessGroup(processGroup, signal: SIGTERM)
+      await waitForProcessGroupExit(processGroup, timeout: max(0, gracePeriod))
+      if processGroupExists(processGroup) {
+        signalProcessGroup(processGroup, signal: SIGKILL)
+      }
     }
-
-    if pid > 0 { Darwin.kill(pid, SIGKILL) }
     return await terminationLatch.wait()
+  }
+
+  private func processGroupExists(_ processGroup: Int32) -> Bool {
+    errno = 0
+    return Darwin.kill(-processGroup, 0) == 0 || errno == EPERM
+  }
+
+  private func signalProcessGroup(_ processGroup: Int32, signal: Int32) {
+    _ = Darwin.kill(-processGroup, signal)
+  }
+
+  private func waitForProcessGroupExit(_ processGroup: Int32, timeout: TimeInterval) async {
+    let deadline = DispatchTime.now() + timeout
+    while processGroupExists(processGroup), DispatchTime.now() < deadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
   }
 }
 
@@ -61,27 +76,62 @@ final class AgentProcessSupervisor: @unchecked Sendable {
   static let defaultGracePeriod: TimeInterval = 1.0
 
   private let lock = NSLock()
+  private let launcherURL: URL?
+  private var launchingProcessIDs = Set<UUID>()
   private var processes: [UUID: ManagedAgentProcess] = [:]
+
+  init(launcherURL: URL? = AgentProcessLauncherLocator.executableURL()) {
+    self.launcherURL = launcherURL
+  }
 
   func launch(_ process: Process) throws -> ManagedAgentProcess {
     let id = UUID()
+    beginLaunching(id)
     let managed: ManagedAgentProcess
     do {
+      try configureProcessGroupLauncher(for: process)
       managed = try ManagedAgentProcess(id: id, process: process) { [weak self] id in
-        self?.remove(id)
+        self?.processDidTerminate(id)
       }
     } catch {
-      remove(id)
+      cancelLaunching(id)
       throw error
     }
 
-    lock.lock()
-    processes[id] = managed
-    lock.unlock()
-
-    // A very short-lived process can terminate between `run()` and registry insertion.
-    if managedTerminationAlreadyResolved(managed) { remove(id) }
+    finishLaunching(managed)
     return managed
+  }
+
+  private func configureProcessGroupLauncher(for process: Process) throws {
+    guard let executableURL = process.executableURL else {
+      throw AgentProcessLaunchError.missingExecutable
+    }
+    guard let launcherURL else {
+      throw AgentProcessLaunchError.missingLauncher
+    }
+    process.executableURL = launcherURL
+    process.arguments = [executableURL.path] + (process.arguments ?? [])
+  }
+
+  private func beginLaunching(_ id: UUID) {
+    lock.lock()
+    launchingProcessIDs.insert(id)
+    lock.unlock()
+  }
+
+  private func finishLaunching(_ process: ManagedAgentProcess) {
+    lock.lock()
+    // The termination callback removes this marker. If it already ran, never insert a dead process.
+    if launchingProcessIDs.remove(process.id) != nil {
+      processes[process.id] = process
+    }
+    lock.unlock()
+  }
+
+  private func cancelLaunching(_ id: UUID) {
+    lock.lock()
+    launchingProcessIDs.remove(id)
+    lock.unlock()
   }
 
   @discardableResult
@@ -107,91 +157,90 @@ final class AgentProcessSupervisor: @unchecked Sendable {
     return processes.count
   }
 
-  private func managedTerminationAlreadyResolved(_ process: ManagedAgentProcess) -> Bool {
-    process.terminationLatchIsResolved
-  }
-
   private func processSnapshot() -> [ManagedAgentProcess] {
     lock.lock(); defer { lock.unlock() }
     return Array(processes.values)
   }
 
-  private func remove(_ id: UUID) {
+  private func processDidTerminate(_ id: UUID) {
     lock.lock()
+    launchingProcessIDs.remove(id)
     processes.removeValue(forKey: id)
     lock.unlock()
   }
 }
 
-private extension ManagedAgentProcess {
-  var terminationLatchIsResolved: Bool { terminationLatch.resolvedValue != nil }
+private enum AgentProcessLaunchError: LocalizedError {
+  case missingExecutable
+  case missingLauncher
+
+  var errorDescription: String? {
+    switch self {
+    case .missingExecutable:
+      return "The coding-agent executable was not configured."
+    case .missingLauncher:
+      return "BonsAI's agent process-group launcher is missing from the app bundle."
+    }
+  }
+}
+
+private enum AgentProcessLauncherLocator {
+  static let name = "BonsAIAgentLauncher"
+
+  static func executableURL(fileManager: FileManager = .default) -> URL? {
+    var candidates = [
+      Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/\(name)"),
+      Bundle.main.bundleURL.appendingPathComponent("Helpers/\(name)"),
+    ]
+
+    var directory = Bundle.main.bundleURL
+    for _ in 0 ..< 5 {
+      candidates.append(directory.appendingPathComponent(name))
+      directory.deleteLastPathComponent()
+    }
+
+    #if DEBUG
+    let buildRoot = URL(fileURLWithPath: fileManager.currentDirectoryPath)
+      .appendingPathComponent(".build", isDirectory: true)
+    candidates.append(buildRoot.appendingPathComponent("debug/\(name)"))
+    candidates.append(buildRoot.appendingPathComponent("release/\(name)"))
+    #endif
+
+    return candidates.first { fileManager.isExecutableFile(atPath: $0.path) }
+  }
 }
 
 private final class AgentProcessTerminationLatch: @unchecked Sendable {
   private let lock = NSLock()
   private var value: AgentProcessTermination?
-  private var waiters: [UUID: CheckedContinuation<AgentProcessTermination?, Never>] = [:]
-
-  var resolvedValue: AgentProcessTermination? {
-    lock.lock(); defer { lock.unlock() }
-    return value
-  }
+  private var waiters: [CheckedContinuation<AgentProcessTermination, Never>] = []
 
   func wait() async -> AgentProcessTermination {
-    if let value = resolvedValue { return value }
-    return await withCheckedContinuation { continuation in
-      enqueue(continuation, timeout: nil)
-    }!
-  }
-
-  func wait(timeout: TimeInterval) async -> AgentProcessTermination? {
-    if let value = resolvedValue { return value }
-    return await withCheckedContinuation { continuation in
-      enqueue(continuation, timeout: timeout)
+    await withCheckedContinuation { continuation in
+      lock.lock()
+      if let value {
+        lock.unlock()
+        continuation.resume(returning: value)
+      } else {
+        waiters.append(continuation)
+        lock.unlock()
+      }
     }
   }
 
   func resolve(_ result: AgentProcessTermination) {
-    let continuations: [CheckedContinuation<AgentProcessTermination?, Never>]
+    let continuations: [CheckedContinuation<AgentProcessTermination, Never>]
     lock.lock()
     guard value == nil else {
       lock.unlock()
       return
     }
     value = result
-    continuations = Array(waiters.values)
+    continuations = waiters
     waiters.removeAll()
     lock.unlock()
 
     for continuation in continuations { continuation.resume(returning: result) }
-  }
-
-  private func enqueue(
-    _ continuation: CheckedContinuation<AgentProcessTermination?, Never>,
-    timeout: TimeInterval?
-  ) {
-    let id = UUID()
-    lock.lock()
-    if let value {
-      lock.unlock()
-      continuation.resume(returning: value)
-      return
-    }
-    waiters[id] = continuation
-    lock.unlock()
-
-    guard let timeout else { return }
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { [weak self] in
-      self?.timeOut(id)
-    }
-  }
-
-  private func timeOut(_ id: UUID) {
-    let continuation: CheckedContinuation<AgentProcessTermination?, Never>?
-    lock.lock()
-    continuation = waiters.removeValue(forKey: id)
-    lock.unlock()
-    continuation?.resume(returning: nil)
   }
 }
 
