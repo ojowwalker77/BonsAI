@@ -26,10 +26,28 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
       characters: del, charactersIgnoringModifiers: del, isARepeat: false, keyCode: 51)!
   }
 
+  private func escapeKeyDown(in panel: NSWindow) -> NSEvent {
+    let escape = "\u{1b}"
+    return NSEvent.keyEvent(
+      with: .keyDown, location: .zero, modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: panel.windowNumber, context: nil,
+      characters: escape, charactersIgnoringModifiers: escape, isARepeat: false, keyCode: 53)!
+  }
+
   private func deleteSelectionFired(during body: () -> Void) -> Bool {
     var fired = false
     let observer = NotificationCenter.default.addObserver(
       forName: .composerDeleteSelection, object: nil, queue: nil) { _ in fired = true }
+    body()
+    NotificationCenter.default.removeObserver(observer)
+    return fired
+  }
+
+  private func escapeFired(during body: () -> Void) -> Bool {
+    var fired = false
+    let observer = NotificationCenter.default.addObserver(
+      forName: .composerEscapeBoard, object: nil, queue: nil) { _ in fired = true }
     body()
     NotificationCenter.default.removeObserver(observer)
     return fired
@@ -93,5 +111,42 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     let fired = deleteSelectionFired { panel.sendEvent(backspaceKeyDown(in: panel)) }
 
     XCTAssertFalse(fired, "Backspace in the board-rename field must not delete cards")
+  }
+
+  func testEscapeOnBareCanvasRoutesToTheCanvasCoordinator() {
+    let panel = makePanel()
+    XCTAssertTrue(escapeFired { panel.sendEvent(escapeKeyDown(in: panel)) })
+  }
+
+  func testAppKitCancelOperationRoutesToTheCanvasCoordinator() {
+    let panel = makePanel()
+    XCTAssertTrue(escapeFired { panel.cancelOperation(nil) })
+  }
+
+  func testEscapeCoordinatorClosesAgentOrSettingsBeforeAnActiveEditor() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(hasAgent: true, hasActiveEditor: true)),
+      .auxiliaryPanel
+    )
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(hasSettings: true, hasActiveEditor: true)),
+      .auxiliaryPanel
+    )
+  }
+
+  func testEscapeCoordinatorKeepsTextEditingAboveDrawingAndWindowDismissal() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasActiveEditor: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true,
+        hasSelection: true
+      )),
+      .activeEditor
+    )
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState()),
+      .windowDismissal
+    )
   }
 }

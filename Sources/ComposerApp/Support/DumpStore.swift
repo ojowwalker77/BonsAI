@@ -240,20 +240,21 @@ final class DumpStore: ObservableObject {
       let snapshot = self.pendingSnapshot
       self.pendingSnapshot = nil
       guard let cards = snapshot?() else { return }
-      self.commit(cards: cards)
+      _ = self.commit(cards: cards)
     }
     saveWork = work
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
   }
 
   /// Force a pending save now — call before navigating away so nothing is lost.
-  func flush(cards: [CardState]) {
+  @discardableResult
+  func flush(cards: [CardState]) -> Bool {
     saveWork?.cancel()
     pendingSnapshot = nil
     commit(cards: cards)
   }
 
-  private func commit(cards: [CardState]) {
+  private func commit(cards: [CardState]) -> Bool {
     let mirror = Self.titleMirror(for: cards)
     guard let dump = current else {
       let data: Data
@@ -261,16 +262,16 @@ final class DumpStore: ObservableObject {
         data = try BoardPayload.encode(cards: cards)
       } catch {
         UserFacingError.report(error, while: "Encoding the board before autosave".localizedUI)
-        return
+        return false
       }
       let dump = Dump(text: mirror, cardsData: data)
       context.insert(dump)
-      guard save("Creating a new board".localizedUI) else { return }
+      guard save("Creating a new board".localizedUI) else { return false }
       reload()
       currentID = dump.persistentModelID
-      return
+      return true
     }
-    guard prepareForWrite(dump) else { return }
+    guard prepareForWrite(dump) else { return false }
     let data: Data
     do {
       data = try BoardPayload.encode(
@@ -279,14 +280,15 @@ final class DumpStore: ObservableObject {
       )
     } catch {
       UserFacingError.report(error, while: "Encoding the board before autosave".localizedUI)
-      return
+      return false
     }
-    guard dump.cardsData != data || dump.text != mirror else { return }
+    guard dump.cardsData != data || dump.text != mirror else { return true }
     dump.cardsData = data
     dump.text = mirror
     dump.updatedAt = Date()
-    guard save("Autosaving the board".localizedUI) else { return }
+    guard save("Autosaving the board".localizedUI) else { return false }
     objectWillChange.send()   // the array identity is unchanged; nudge the list
+    return true
   }
 
   /// The mirror text whose first non-empty line becomes the history title.
@@ -327,14 +329,22 @@ final class DumpStore: ObservableObject {
     isHistoryOpen = false
   }
 
-  func delete(_ id: PersistentIdentifier) {
-    guard let dump = dumps.first(where: { $0.persistentModelID == id }) else { return }
+  @discardableResult
+  func delete(_ id: PersistentIdentifier) -> Bool {
+    guard let dump = dumps.first(where: { $0.persistentModelID == id }) else { return false }
     let wasCurrent = id == currentID
     context.delete(dump)
-    guard save("Deleting the board".localizedUI) else { return }
+    guard save("Deleting the board".localizedUI) else {
+      // A failed context save must leave the board visible and available for another attempt. The
+      // delete is intentionally rolled back here instead of letting the UI reload as if it worked.
+      context.rollback()
+      reload()
+      return false
+    }
     reload()
     if wasCurrent { currentID = dumps.first?.persistentModelID }
     ensureCurrent()
+    return true
   }
 
   /// Give a board a custom name. An empty/whitespace name clears it back to the auto-derived title.

@@ -75,3 +75,49 @@ extension Notification.Name {
   /// Quick capture from the menu bar, Services menu, URL scheme, or loopback API.
   static let composerQuickCapture = Notification.Name("composerQuickCapture")
 }
+
+/// The single Escape priority order for the board workspace. Keeping the decision independent from
+/// SwiftUI state mutations makes key routing deterministic and testable at the surface boundary.
+enum ComposerEscapeTarget: Equatable {
+  case boardDeletionConfirmation
+  case commandPalette
+  case focusedEditor
+  case compiledOverlay
+  case promotion
+  case auxiliaryPanel
+  case activeEditor
+  case drawingDraft
+  case activeTool
+  case selection
+  case windowDismissal
+}
+
+struct ComposerEscapeState: Equatable {
+  var hasBoardDeletionConfirmation = false
+  var hasCommandPalette = false
+  var hasFocusedEditor = false
+  var hasCompiledOverlay = false
+  var hasPromotion = false
+  var hasAgent = false
+  var hasSettings = false
+  var hasActiveEditor = false
+  var hasDrawingDraft = false
+  var hasActiveTool = false
+  var hasSelection = false
+}
+
+enum ComposerEscapeCoordinator {
+  static func target(for state: ComposerEscapeState) -> ComposerEscapeTarget {
+    if state.hasBoardDeletionConfirmation { return .boardDeletionConfirmation }
+    if state.hasCommandPalette { return .commandPalette }
+    if state.hasFocusedEditor { return .focusedEditor }
+    if state.hasCompiledOverlay { return .compiledOverlay }
+    if state.hasPromotion { return .promotion }
+    if state.hasAgent || state.hasSettings { return .auxiliaryPanel }
+    if state.hasActiveEditor { return .activeEditor }
+    if state.hasDrawingDraft { return .drawingDraft }
+    if state.hasActiveTool { return .activeTool }
+    if state.hasSelection { return .selection }
+    return .windowDismissal
+  }
+}

@@ -140,9 +140,10 @@ final class FloatingPanel: NSWindow {
     trafficLightHost.isHidden = true
   }
 
-  /// Escape hides the window when it is itself first responder.
+  /// AppKit's cancelOperation is the window-level Escape route. Keep dismissal in the canvas
+  /// coordinator so transient surfaces (including Agent and Settings) close before the window.
   override func cancelOperation(_ sender: Any?) {
-    (delegate as? PanelController)?.hide()
+    NotificationCenter.default.post(name: .composerEscapeBoard, object: nil)
   }
 
   /// Losing key status mid-press can swallow the space `keyUp`, which would otherwise leave the
@@ -300,7 +301,7 @@ final class FloatingPanel: NSWindow {
       )
       return
     }
-    if !textIsEditing, raw == "\u{1b}" {
+    if raw == "\u{1b}" {
       NotificationCenter.default.post(name: .composerEscapeBoard, object: nil)
       return
     }

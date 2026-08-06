@@ -257,6 +257,56 @@ final class BoardPersistenceTests: XCTestCase {
     XCTAssertEqual(UserFacingErrorStore.shared.takeLatest()?.message, "forced rename save failure")
   }
 
+  func testDeleteRemovesNonCurrentAndCurrentBoardsSafely() throws {
+    let store = makeStore()
+    store.flush(cards: [CardState.firstCard(text: "First board")])
+    let firstID = try XCTUnwrap(store.currentID)
+    store.newDump()
+    store.flush(cards: [CardState.firstCard(text: "Second board")])
+    let secondID = try XCTUnwrap(store.currentID)
+    store.newDump()
+    store.flush(cards: [CardState.firstCard(text: "Third board")])
+    let thirdID = try XCTUnwrap(store.currentID)
+
+    XCTAssertTrue(store.delete(firstID))
+    XCTAssertFalse(store.dumps.contains { $0.persistentModelID == firstID })
+    XCTAssertEqual(store.currentID, thirdID)
+
+    store.select(secondID)
+    XCTAssertTrue(store.delete(secondID))
+    XCTAssertFalse(store.dumps.contains { $0.persistentModelID == secondID })
+    XCTAssertEqual(store.currentID, thirdID)
+    XCTAssertEqual(store.current?.text, "Third board")
+  }
+
+  func testDeleteSaveFailureRollsBackAndKeepsBoardAvailable() throws {
+    var failNextSave = false
+    let store = DumpStore(
+      inMemoryOnly: true,
+      loadInitialContent: false,
+      persistContext: { context in
+        if failNextSave {
+          failNextSave = false
+          throw ForcedDeleteSaveFailure()
+        }
+        try context.save()
+      }
+    )
+    store.flush(cards: [CardState.firstCard(text: "Keep this board")])
+    let id = try XCTUnwrap(store.currentID)
+    store.newDump()
+    store.flush(cards: [CardState.firstCard(text: "Current board")])
+
+    failNextSave = true
+    XCTAssertFalse(store.delete(id))
+    XCTAssertTrue(store.dumps.contains { $0.persistentModelID == id })
+    XCTAssertEqual(store.dumps.first { $0.persistentModelID == id }?.text, "Keep this board")
+
+    let verificationContext = ModelContext(store.container)
+    let persisted = try verificationContext.fetch(FetchDescriptor<Dump>())
+    XCTAssertTrue(persisted.contains { $0.persistentModelID == id })
+  }
+
   func testProtectedFallbackCanBeDuplicatedWithoutChangingSource() throws {
     let store = makeStore()
     let source = try XCTUnwrap(store.current)
@@ -361,4 +411,8 @@ final class BoardPersistenceTests: XCTestCase {
 
 private struct ForcedRenameSaveFailure: LocalizedError {
   var errorDescription: String? { "forced rename save failure" }
+}
+
+private struct ForcedDeleteSaveFailure: LocalizedError {
+  var errorDescription: String? { "forced delete save failure" }
 }
