@@ -1496,10 +1496,12 @@ struct ComposerCanvas: View {
       hasFocusedEditor: focusedCardID != nil,
       hasCompiledOverlay: store.compiledDraft != nil,
       hasPromotion: promotion != nil,
+      hasHistory: store.isHistoryOpen,
       hasAgent: showAgent,
       hasSettings: store.isSettingsOpen,
       hasActiveEditor: board.editingInteraction != nil,
       hasDrawingDraft: elementDraft != nil || freehandDraft != nil,
+      hasTintPicker: tintPickerOpen,
       hasActiveTool: tool != .select,
       hasSelection: !board.selectedCardIDs.isEmpty
     ))
@@ -1517,6 +1519,8 @@ struct ComposerCanvas: View {
       store.compiledDraft = nil
     case .promotion:
       dismissPromotion()
+    case .history:
+      store.isHistoryOpen = false
     case .auxiliaryPanel:
       closeAuxiliaryPanel()
     case .activeEditor:
@@ -1529,6 +1533,8 @@ struct ComposerCanvas: View {
       elementDraft = nil
       freehandDraft = nil
       bindTargetID = nil
+    case .tintPicker:
+      withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
     case .activeTool:
       tool = .select
     case .selection:

@@ -317,6 +317,9 @@ final class BoardPersistenceTests: XCTestCase {
     let verificationContext = ModelContext(store.container)
     let persisted = try verificationContext.fetch(FetchDescriptor<Dump>())
     XCTAssertTrue(persisted.contains { $0.persistentModelID == id })
+    XCTAssertTrue(persisted.contains {
+      $0.persistentModelID == currentID && $0.text == "Current board"
+    })
   }
 
   func testAutosaveFailureRollsBackAndCanRetry() throws {

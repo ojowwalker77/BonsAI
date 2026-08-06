@@ -47,6 +47,8 @@ private final class TrafficLightHostView: NSView {
 /// callbacks and the menu-bar traffic-light reveal misbehave). Everything panel-specific was
 /// already being switched off.
 final class FloatingPanel: NSWindow {
+  private var escapePostedThisTurn = false
+
   /// MANDATORY: full-size-content windows can decline key status in some configurations,
   /// so without this the text canvas never gets an insertion point.
   override var canBecomeKey: Bool { true }
@@ -144,6 +146,13 @@ final class FloatingPanel: NSWindow {
   /// coordinator so transient surfaces (including Agent and Settings) close before the window.
   override func cancelOperation(_ sender: Any?) {
     if forwardEscapeToTextResponder(sender) { return }
+    postEscapeToCanvas()
+  }
+
+  private func postEscapeToCanvas() {
+    guard !escapePostedThisTurn else { return }
+    escapePostedThisTurn = true
+    DispatchQueue.main.async { [weak self] in self?.escapePostedThisTurn = false }
     NotificationCenter.default.post(name: .composerEscapeBoard, object: nil)
   }
 
@@ -323,7 +332,7 @@ final class FloatingPanel: NSWindow {
     }
     if raw == "\u{1b}" {
       if textIsEditing, forwardEscapeToTextResponder(event) { return }
-      NotificationCenter.default.post(name: .composerEscapeBoard, object: nil)
+      postEscapeToCanvas()
       return
     }
     if !textIsEditing, raw == "\u{7f}" || raw == "\u{08}" {

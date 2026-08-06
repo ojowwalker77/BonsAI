@@ -55,12 +55,16 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
   }
 
   private func escapeFired(during body: () -> Void) -> Bool {
-    var fired = false
+    escapeCount(during: body) > 0
+  }
+
+  private func escapeCount(during body: () -> Void) -> Int {
+    var count = 0
     let observer = NotificationCenter.default.addObserver(
-      forName: .composerEscapeBoard, object: nil, queue: nil) { _ in fired = true }
+      forName: .composerEscapeBoard, object: nil, queue: nil) { _ in count += 1 }
     body()
     NotificationCenter.default.removeObserver(observer)
-    return fired
+    return count
   }
 
   func testBackspaceOnBareCanvasDeletesSelection() {
@@ -133,6 +137,16 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     XCTAssertTrue(escapeFired { panel.cancelOperation(nil) })
   }
 
+  func testEscapeKeyDownAndCancelOperationPostOnlyOneCanvasCommandPerTurn() {
+    let panel = makePanel()
+    let count = escapeCount {
+      panel.sendEvent(escapeKeyDown(in: panel))
+      panel.cancelOperation(nil)
+    }
+
+    XCTAssertEqual(count, 1)
+  }
+
   func testAppKitCancelOperationGivesActiveTextEditorFirstRefusal() {
     let panel = makePanel()
     let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
@@ -188,6 +202,26 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
         hasBoardRename: true
       )),
       .boardDeletionConfirmation
+    )
+  }
+
+  func testEscapeCoordinatorClosesHistoryAndTintPickerBeforeLowerPriorityActions() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasHistory: true,
+        hasTintPicker: true,
+        hasActiveTool: true,
+        hasSelection: true
+      )),
+      .history
+    )
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasTintPicker: true,
+        hasActiveTool: true,
+        hasSelection: true
+      )),
+      .tintPicker
     )
   }
 

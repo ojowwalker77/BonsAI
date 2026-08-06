@@ -85,9 +85,11 @@ enum ComposerEscapeTarget: Equatable {
   case focusedEditor
   case compiledOverlay
   case promotion
+  case history
   case auxiliaryPanel
   case activeEditor
   case drawingDraft
+  case tintPicker
   case activeTool
   case selection
   case windowDismissal
@@ -100,10 +102,12 @@ struct ComposerEscapeState: Equatable {
   var hasFocusedEditor = false
   var hasCompiledOverlay = false
   var hasPromotion = false
+  var hasHistory = false
   var hasAgent = false
   var hasSettings = false
   var hasActiveEditor = false
   var hasDrawingDraft = false
+  var hasTintPicker = false
   var hasActiveTool = false
   var hasSelection = false
 }
@@ -116,9 +120,11 @@ enum ComposerEscapeCoordinator {
     if state.hasFocusedEditor { return .focusedEditor }
     if state.hasCompiledOverlay { return .compiledOverlay }
     if state.hasPromotion { return .promotion }
+    if state.hasHistory { return .history }
     if state.hasAgent || state.hasSettings { return .auxiliaryPanel }
     if state.hasActiveEditor { return .activeEditor }
     if state.hasDrawingDraft { return .drawingDraft }
+    if state.hasTintPicker { return .tintPicker }
     if state.hasActiveTool { return .activeTool }
     if state.hasSelection { return .selection }
     return .windowDismissal
