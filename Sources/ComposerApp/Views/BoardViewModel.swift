@@ -405,7 +405,9 @@ final class BoardViewModel: ObservableObject {
   func renderingSnapshot(for source: [CardState]) -> [CardState] {
     source.map { card in
       var copy = card
-      if let liveFrame = liveTextFrames[card.id] { copy.frame = liveFrame }
+      if let liveFrame = liveTextFrames[card.id] {
+        copy.frame = CGRect(origin: copy.frame.origin, size: liveFrame.size)
+      }
       return copy
     }
   }
@@ -1603,8 +1605,9 @@ final class BoardViewModel: ObservableObject {
   private func commitLiveTextFrame(_ id: UUID) -> Bool {
     guard let frame = liveTextFrames.removeValue(forKey: id),
           let i = cards.firstIndex(where: { $0.id == id }) else { return false }
-    guard cards[i].frame != frame else { return true }
-    cards[i].frame = frame
+    let committedFrame = CGRect(origin: cards[i].frame.origin, size: frame.size)
+    guard cards[i].frame != committedFrame else { return true }
+    cards[i].frame = committedFrame
     refreshBoundArrows()
     scheduleSave()
     return true

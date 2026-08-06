@@ -45,11 +45,12 @@ enum BoardExporter {
   /// background is painted with the resolved canvas color so nothing composites down to black.
   @MainActor
   static func renderBoardImage(cards: [CardState], board: BoardViewModel) -> NSImage? {
-    guard let bounds = exportBounds(of: cards) else { return nil }
+    let renderCards = board.renderingSnapshot(for: cards)
+    guard let bounds = exportBounds(of: renderCards) else { return nil }
 
     // Pre-decode every image card so the provider is a synchronous lookup during the render.
     var images: [String: NSImage] = [:]
-    for card in cards where card.elementKind == .image {
+    for card in renderCards where card.elementKind == .image {
       if let path = card.imagePath, images[path] == nil, let image = loadImage(storedPath: path) {
         images[path] = image
       }
@@ -57,7 +58,7 @@ enum BoardExporter {
 
     // The card layer at scale 1, offset so the content-bounds origin maps to (0,0), on the canvas.
     let content = BoardCardLayer(
-      cards: board.renderingSnapshot(for: cards),
+      cards: renderCards,
       board: board,
       boardTextContext: board.boardTextContext,
       selectedCardIDs: [],
