@@ -1586,7 +1586,7 @@ struct ComposerCanvas: View {
       show(Toast(
         text: "The board was not deleted because its latest changes could not be saved.".localizedUI,
         symbol: "exclamationmark.triangle.fill",
-        tint: .orange
+        tint: Theme.Palette.warning
       ))
       return
     }
@@ -1594,7 +1594,7 @@ struct ComposerCanvas: View {
       show(Toast(
         text: "The board was not deleted. Your saved board is still available.".localizedUI,
         symbol: "exclamationmark.triangle.fill",
-        tint: .orange
+        tint: Theme.Palette.warning
       ))
       return
     }
