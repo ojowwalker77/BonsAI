@@ -12,6 +12,12 @@ under the new version heading.
 ## [Unreleased]
 
 ### Fixed
+- **Board names and connector credentials now persist reliably.** A failed rename stays editable
+  instead of appearing saved, while connector API tokens live in the macOS Keychain and migrate
+  from the legacy private JSON file only after every credential round-trips successfully.
+- **Stopping an Agent turn or quitting BonsAI can no longer freeze the board or abandon the CLI.**
+  Agent processes are reaped asynchronously, escalate from SIGTERM to SIGKILL after a bounded
+  grace period, and cannot append stale output after a stop or replacement turn.
 - **Changing appearance or language no longer resets an in-progress board.** BonsAI now retains
   the working board, undo/redo history, and pan/zoom across canvas remounts, flushing pending text
   and geometry before the view is replaced.

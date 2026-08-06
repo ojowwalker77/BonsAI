@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let menuBarController = MenuBarController()
   /// Held strongly so it keeps firing — a `DispatchSourceSignal` is cancelled on dealloc.
   private var sigtermSource: DispatchSourceSignal?
+  /// AppKit keeps the app alive while the active agent receives TERM/KILL and is reaped.
+  private var terminationTask: Task<Void, Never>?
   /// Watches macOS Light/Dark for the "match macOS appearance" setting. NSApp's own appearance is
   /// never pinned, so `effectiveAppearance` tracks the system even while our windows are themed.
   private var appearanceObservation: NSKeyValueObservation?
@@ -70,9 +72,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  /// The board autosaves on a ~400ms debounce; without this, an edit made just before quit
-  /// (e.g. a `delete`/`add_text` op from an external agent over the canvas API) is silently
-  /// lost because the pending save's timer never gets to fire.
+  /// Flush pending board edits immediately, then defer termination until every supervised agent
+  /// process has exited. The supervisor's TERM-to-KILL grace period keeps this wait bounded.
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    CanvasBridge.shared.flush()
+    guard terminationTask == nil else { return .terminateLater }
+
+    let supervisor = CanvasAgent.shared.beginShutdown()
+    terminationTask = Task.detached {
+      await supervisor.stopAll()
+      // `.terminateLater` runs AppKit in NSModalPanelRunLoopMode. A MainActor Task queued from the
+      // SIGTERM dispatch callback cannot start until that callback returns, so schedule the reply
+      // explicitly in the modal run-loop mode that AppKit is currently servicing.
+      RunLoop.main.perform(inModes: [.modalPanel, .default]) {
+        sender.reply(toApplicationShouldTerminate: true)
+      }
+    }
+    return .terminateLater
+  }
+
+  /// A final idempotent flush covers termination routes that do not consult the delegate first.
   func applicationWillTerminate(_ notification: Notification) {
     CanvasBridge.shared.flush()
   }

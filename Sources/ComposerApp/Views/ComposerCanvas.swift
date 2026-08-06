@@ -735,15 +735,15 @@ struct ComposerCanvas: View {
                   .foregroundStyle(Theme.Palette.body)
                   .multilineTextAlignment(.center)
                   .focused($boardNameFocused)
-                  .onSubmit(commitBoardRename)
+                  .onSubmit { _ = commitBoardRename() }
                   .onExitCommand(perform: cancelBoardRename)
                   .onAppear { DispatchQueue.main.async { boardNameFocused = true } }
                   .onChange(of: boardNameFocused) { _, focused in
-                    if !focused { commitBoardRename() }
+                    if !focused { _ = commitBoardRename() }
                   }
               } else {
                 Button {
-                  commitBoardRename()
+                  guard commitBoardRename() else { return }
                   if !current { pickBoard(id) }
                 } label: {
                   Text(displayTitle)
@@ -756,7 +756,10 @@ struct ComposerCanvas: View {
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
-                  Button("Rename Board".localizedUI) { beginBoardRename(id, title: dump.title) }
+                  Button("Rename Board".localizedUI) {
+                    guard commitBoardRename() else { return }
+                    beginBoardRename(id, title: dump.title)
+                  }
                   if store.dumps.count > 1 {
                     Button("Delete Board".localizedUI, role: .destructive) { deleteBoard(id) }
                   }
@@ -800,11 +803,22 @@ struct ComposerCanvas: View {
     renamingBoardID = id
   }
 
-  private func commitBoardRename() {
-    guard let id = renamingBoardID else { return }
+  @discardableResult
+  private func commitBoardRename() -> Bool {
+    guard let id = renamingBoardID else { return true }
     let name = boardNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-    renamingBoardID = nil
-    if !name.isEmpty { renameBoard(id, to: name) }
+    guard !name.isEmpty else {
+      renamingBoardID = nil
+      return true
+    }
+    if renameBoard(id, to: name) {
+      renamingBoardID = nil
+      return true
+    } else {
+      // Keep the editor and the attempted value visible so the user can retry after fixing storage.
+      DispatchQueue.main.async { boardNameFocused = true }
+      return false
+    }
   }
 
   private func cancelBoardRename() {
@@ -1475,13 +1489,30 @@ struct ComposerCanvas: View {
     CanvasKeyState.shared.isSpaceDown = down
   }
 
-  private func gotoOlder() { board.flushSave(); store.goOlder(); board.loadFromStore(); resetView() }
-  private func gotoNewer() { board.flushSave(); store.goNewer(); board.loadFromStore(); resetView() }
-  private func newBoard() { board.flushSave(); store.newDump(); board.loadFromStore(); resetView(); focusFirstCard() }
-  private func pickBoard(_ id: PersistentIdentifier) { board.flushSave(); store.select(id); board.loadFromStore(); resetView() }
-  private func deleteBoard(_ id: PersistentIdentifier) { board.flushSave(); store.delete(id); board.loadFromStore(); resetView() }
+  private func gotoOlder() {
+    guard commitBoardRename() else { return }
+    board.flushSave(); store.goOlder(); board.loadFromStore(); resetView()
+  }
+  private func gotoNewer() {
+    guard commitBoardRename() else { return }
+    board.flushSave(); store.goNewer(); board.loadFromStore(); resetView()
+  }
+  private func newBoard() {
+    guard commitBoardRename() else { return }
+    board.flushSave(); store.newDump(); board.loadFromStore(); resetView(); focusFirstCard()
+  }
+  private func pickBoard(_ id: PersistentIdentifier) {
+    guard commitBoardRename() else { return }
+    board.flushSave(); store.select(id); board.loadFromStore(); resetView()
+  }
+  private func deleteBoard(_ id: PersistentIdentifier) {
+    guard commitBoardRename() else { return }
+    board.flushSave(); store.delete(id); board.loadFromStore(); resetView()
+  }
   // Rename only touches the board's name, never its cards — no flush/reload needed.
-  private func renameBoard(_ id: PersistentIdentifier, to name: String) { store.rename(id, to: name) }
+  private func renameBoard(_ id: PersistentIdentifier, to name: String) -> Bool {
+    store.rename(id, to: name)
+  }
 
   /// A fresh board's first card opens into its editing stage so the caret is ready. Only a text card
   /// has a caret-first stage; a non-text first card is left selected.

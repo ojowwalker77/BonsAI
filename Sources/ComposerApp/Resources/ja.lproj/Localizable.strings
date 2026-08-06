@@ -517,3 +517,8 @@
 "How the board behaves while you draw." = "描画中のボードの動作を設定します。";
 "Snap sketches into shapes" = "スケッチを図形にスナップ";
 "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "認識されたストロークはペンを離すと整った図形になります。オフの場合は提案チップを表示します。";
+"Migrating saved connector tokens" = "保存済みコネクタトークンを移行中";
+"Renaming the board" = "ボード名を変更中";
+"%@: macOS Keychain access failed. Check Keychain Access and try again." = "%@: macOSキーチェーンへのアクセスに失敗しました。キーチェーンアクセスを確認して、もう一度お試しください。";
+"%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again." = "%@: BonsAIは従来のコネクタトークンファイルを更新できませんでした。Application Supportのアクセス権を確認して、もう一度お試しください。";
+"Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI." = "コネクタトークンの移行を検証できませんでした。トークンが失われないよう従来のファイルは保持されています。キーチェーンアクセスを確認し、BonsAIを再起動してから再試行してください。";

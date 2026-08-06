@@ -48,6 +48,12 @@ if [ -d "$SP" ]; then
   done
   sign "$SP"
 fi
+AGENT_LAUNCHER="$APP/Contents/Helpers/BonsAIAgentLauncher"
+if [ ! -x "$AGENT_LAUNCHER" ]; then
+  echo "error: staged agent process-group launcher is missing or not executable: $AGENT_LAUNCHER" >&2
+  exit 1
+fi
+sign "$AGENT_LAUNCHER"
 sign "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 

@@ -39,15 +39,16 @@ final class CanvasAgent: ObservableObject {
   @Published private(set) var groundingDirectory: URL?
 
   private var sessionID: String?
-  private var process: Process?
+  private let processSupervisor: AgentProcessSupervisor
+  private var activeProcess: ManagedAgentProcess?
+  private var runTask: Task<Void, Never>?
   private var didRequestStop = false
-  /// Bumped on every `send` and `stop`. A `run` only writes back coarse state / appends a failure
-  /// while its captured token is still current, so a stopped-or-superseded turn that's still
-  /// draining can't clobber the next turn's `isRunning`/`process` or inject a late error message.
-  private var runToken = 0
+  private var isShuttingDown = false
+  private var turnGeneration = AgentTurnGeneration()
   private static let groundingKey = "agent.groundingDirectory"
 
-  init() {
+  init(processSupervisor: AgentProcessSupervisor = AgentProcessSupervisor()) {
+    self.processSupervisor = processSupervisor
     if let path = UserDefaults.standard.string(forKey: Self.groundingKey) {
       var isDir: ObjCBool = false
       if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
@@ -85,7 +86,7 @@ final class CanvasAgent: ObservableObject {
 
   func send(_ text: String) {
     let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !prompt.isEmpty, !isRunning else { return }
+    guard !prompt.isEmpty, !isRunning, !isShuttingDown else { return }
     transcript.append(AgentMessage(role: .user, text: prompt))
     guard let engine = Self.resolvedEngine() else {
       transcript.append(AgentMessage(
@@ -95,11 +96,10 @@ final class CanvasAgent: ObservableObject {
     }
     didRequestStop = false
     isRunning = true
-    runToken &+= 1
-    let token = runToken
+    let token = turnGeneration.begin()
     let resume = sessionID
     let model = ModelPreferences.chatModel
-    Task { await run(engine: engine, prompt: prompt, resume: resume, token: token, model: model) }
+    runTask = Task { await run(engine: engine, prompt: prompt, resume: resume, token: token, model: model) }
   }
 
   /// The engine this chat will run on: the user's explicit pick (Agent dock / Settings) when it's
@@ -109,12 +109,18 @@ final class CanvasAgent: ObservableObject {
   }
 
   func stop() {
-    didRequestStop = true
-    process?.terminate()
-    process = nil
-    isRunning = false
-    // Invalidate the in-flight turn so its still-draining tail can't write back over a later one.
-    runToken &+= 1
+    let process = invalidateCurrentTurn()
+    guard let process else { return }
+    let supervisor = processSupervisor
+    Task { _ = await supervisor.stop(process) }
+  }
+
+  /// Invalidate the UI-owned turn synchronously on the main actor, then hand the thread-safe
+  /// supervisor to AppDelegate so it can wait outside AppKit's modal termination run loop.
+  func beginShutdown() -> AgentProcessSupervisor {
+    isShuttingDown = true
+    _ = invalidateCurrentTurn()
+    return processSupervisor
   }
 
   func reset() {
@@ -123,16 +129,28 @@ final class CanvasAgent: ObservableObject {
     transcript.removeAll()
   }
 
+  private func invalidateCurrentTurn() -> ManagedAgentProcess? {
+    didRequestStop = true
+    turnGeneration.invalidate()
+    runTask?.cancel()
+    runTask = nil
+    isRunning = false
+    let process = activeProcess
+    activeProcess = nil
+    return process
+  }
+
   // MARK: Run one turn
 
   private func run(engine: HeadlessEngine, prompt: String, resume: String?, token: Int, model: ClaudeModel) async {
     // Write back coarse state only while this turn is still the current one — a stop() or a newer
-    // send() bumps `runToken`, after which this (now superseded) turn must leave shared state alone.
+    // send() bumps the generation, after which this turn must leave shared state alone.
     func finish(_ work: () -> Void) {
-      guard token == runToken else { return }
+      guard turnGeneration.accepts(token) else { return }
       work()
       isRunning = false
-      self.process = nil
+      activeProcess = nil
+      runTask = nil
     }
 
     let adapter = CanvasChatEngines.adapter(for: engine)
@@ -198,18 +216,18 @@ final class CanvasAgent: ObservableObject {
     // stdin…" — doesn't block waiting for input that never comes.
     process.standardInput = FileHandle.nullDevice
 
-    // A stop() between this turn being queued and reaching here already invalidated the token —
-    // don't launch a process that nobody can see in `self.process` (and so nobody could stop).
-    guard token == runToken else { return }
-    self.process = process
+    // A stop() between this turn being queued and reaching here already invalidated the generation.
+    guard turnGeneration.accepts(token) else { return }
 
+    let managedProcess: ManagedAgentProcess
     do {
-      try process.run()
+      managedProcess = try processSupervisor.launch(process)
     } catch {
       transcript.append(AgentMessage(role: .error, text: UserFacingError.message(for: error, while: "Starting %@".localizedUI(engine.title))))
       finish {}
       return
     }
+    activeProcess = managedProcess
 
     // The CLI may put diagnostics on either stream. Drain stderr while the JSON stream is consumed
     // from stdout so an unusually verbose failure cannot block the process, and retain non-protocol
@@ -227,13 +245,14 @@ final class CanvasAgent: ObservableObject {
     do {
       for try await line in stdout.fileHandleForReading.bytes.lines {
         // Stop consuming (and appending) a superseded turn's stream the moment it's invalidated.
-        if Task.isCancelled || token != runToken { break }
+        if Task.isCancelled || !turnGeneration.accepts(token) { break }
         let events = adapter.parse(line)
         if events.isEmpty {
           nonProtocolOutput.append(line)
           continue
         }
         for event in events {
+          guard turnGeneration.accepts(token) else { break }
           switch event {
           case let .session(id): if !id.isEmpty { sessionID = id }
           case let .assistantText(text):
@@ -245,7 +264,7 @@ final class CanvasAgent: ObservableObject {
       }
     } catch { /* stream closed */ }
 
-    process.waitUntilExit()
+    let termination = await managedProcess.termination()
     let stderrText: String
     switch await stderrReader.value {
     case let .success(text):
@@ -254,12 +273,12 @@ final class CanvasAgent: ObservableObject {
       stderrText = UserFacingError.message(for: error, while: "Reading %@'s error output".localizedUI(engine.title))
     }
     finish {
-      if process.terminationStatus != 0, !didRequestStop {
+      if termination.status != 0, !didRequestStop {
         transcript.append(AgentMessage(
           role: .error,
           text: UserFacingError.commandFailure(
             command: engine.title,
-            status: process.terminationStatus,
+            status: termination.status,
             stdout: nonProtocolOutput.joined(separator: "\n"),
             stderr: stderrText)))
       } else if !sawOutput {

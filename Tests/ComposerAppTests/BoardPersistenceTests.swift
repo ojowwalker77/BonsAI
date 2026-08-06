@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import ComposerApp
 
 @MainActor
@@ -227,6 +228,35 @@ final class BoardPersistenceTests: XCTestCase {
     XCTAssertTrue(store.dumps.contains { $0.persistentModelID == namedID })
   }
 
+  func testRenameFailureRollsBackVisibleAndPersistedTitle() async throws {
+    var failNextSave = false
+    let store = DumpStore(
+      inMemoryOnly: true,
+      loadInitialContent: false,
+      persistContext: { context in
+        if failNextSave {
+          failNextSave = false
+          throw ForcedRenameSaveFailure()
+        }
+        try context.save()
+      }
+    )
+    let id = try XCTUnwrap(store.currentID)
+    XCTAssertTrue(store.rename(id, to: "Durable title"))
+
+    _ = UserFacingErrorStore.shared.takeLatest()
+    failNextSave = true
+    XCTAssertFalse(store.rename(id, to: "Title that must not stick"))
+    XCTAssertEqual(store.current?.customTitle, "Durable title")
+
+    let verificationContext = ModelContext(store.container)
+    let persisted = try XCTUnwrap(try verificationContext.fetch(FetchDescriptor<Dump>()).first)
+    XCTAssertEqual(persisted.customTitle, "Durable title")
+
+    await Task.yield()
+    XCTAssertEqual(UserFacingErrorStore.shared.takeLatest()?.message, "forced rename save failure")
+  }
+
   func testProtectedFallbackCanBeDuplicatedWithoutChangingSource() throws {
     let store = makeStore()
     let source = try XCTUnwrap(store.current)
@@ -327,4 +357,8 @@ final class BoardPersistenceTests: XCTestCase {
     let cards = try XCTUnwrap(root["cards"] as? [[String: Any]])
     return try XCTUnwrap(cards.first { $0["kind"] as? String == "futureWidget" })
   }
+}
+
+private struct ForcedRenameSaveFailure: LocalizedError {
+  var errorDescription: String? { "forced rename save failure" }
 }

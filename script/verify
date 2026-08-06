@@ -17,6 +17,11 @@ ICON="icon/BonsAI.png"
   exit 1
 }
 
+[[ -x "$APP/Contents/Helpers/BonsAIAgentLauncher" ]] || {
+  echo "error: staged agent process-group launcher is missing." >&2
+  exit 1
+}
+
 [[ -f "$PLIST" ]] || {
   echo "error: staged BonsAI Info.plist is missing." >&2
   exit 1
