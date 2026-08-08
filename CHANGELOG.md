@@ -11,6 +11,12 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Fixed
+- **Blank text cards no longer pile up on the board.** A card placed by clicking empty canvas is
+  discarded when you leave it without typing — including when you click away before the editor
+  takes focus, or switch boards mid-edit. Empty shapes and stickies are still kept, and the
+  discard is undoable.
+
 ## [1.4.9] - 2026-08-06
 
 ### Fixed

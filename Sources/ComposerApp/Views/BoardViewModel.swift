@@ -266,12 +266,19 @@ final class BoardViewModel: ObservableObject {
     fitTextSize(id)   // final hug on the settled text (the cache was just refreshed)
     textEditBaselines[id] = nil
     if editingCardID == id { editingCardID = nil }
-    // `captureEditorState()` above refreshed the plain-text cache, so this reads what the user
-    // actually left in the editor — not the stale seed snapshot in `cards[i].text`.
-    if let i = index(for: id), cards[i].elementKind == .text,
-       plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      delete(id)
-    }
+    discardIfAbandoned(id)
+  }
+
+  /// A text card whose edit ends with no meaningful text was abandoned — delete it (undoably,
+  /// through the shared delete path so bound arrows refresh) instead of leaving a ghost writing
+  /// spot on the board. `captureEditorState()` runs before every call, so this reads what the
+  /// user actually left in the editor — not the stale seed snapshot in `cards[i].text`.
+  /// Non-text elements are kept: an empty shape or sticky is an intentional placement.
+  private func discardIfAbandoned(_ id: UUID) {
+    guard let i = index(for: id), cards[i].elementKind == .text,
+          plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else { return }
+    delete(id)
   }
 
   /// Click on empty board: drop selection and leave text edit (resigning the editor).
@@ -289,6 +296,10 @@ final class BoardViewModel: ObservableObject {
     textEditBaselines[id] = nil
     interactions[id]?.controller.resignFocus()
     editingCardID = nil
+    // `resignFocus()` is a no-op when the editor never actually took first responder (a click-away
+    // during the mount/focus delay of a freshly placed card), so the editor's own focus-loss
+    // callback never fires `endEditing` — the abandoned-card discard must also happen here.
+    discardIfAbandoned(id)
   }
 
   // MARK: Load / save
@@ -351,8 +362,10 @@ final class BoardViewModel: ObservableObject {
   /// Build the persistence snapshot only when the debounce actually fires. This avoids cloning
   /// the entire board on every keystroke and keeps cancelled saves from retaining stale snapshots.
   func scheduleSave() { store.scheduleUpdate { [weak self] in self?.snapshot() } }
+  /// Ends any in-flight edit first so an abandoned empty text card is discarded — not persisted —
+  /// when the board is switched or the workspace tears down mid-edit.
   @discardableResult
-  func flushSave() -> Bool { store.flush(cards: snapshot()) }
+  func flushSave() -> Bool { stopEditing(); return store.flush(cards: snapshot()) }
 
   @discardableResult
   func duplicateProtectedBoardForEditing() -> Bool {
