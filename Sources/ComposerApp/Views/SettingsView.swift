@@ -9,6 +9,9 @@ struct SettingsOverlay: View {
   /// The canvas size, so the sheet can size itself against the window.
   var canvasSize: CGSize
   var onClose: () -> Void
+  /// Routes Escape through the canvas coordinator so Settings is only one step in the shared
+  /// transient-surface priority order.
+  var onEscape: () -> Void
 
   /// Stored, not `@State`: theme/font switches rebuild the whole canvas (PanelController.applyTheme),
   /// which would reset transient state and bounce the sheet back to Runtime mid-click. Persisting the
@@ -36,7 +39,7 @@ struct SettingsOverlay: View {
     }
     .frame(width: sheetWidth, height: sheetHeight)
     .dockPanelSurface()
-    .onExitCommand(perform: onClose)
+    .onExitCommand(perform: onEscape)
   }
 
   private var sheetWidth: CGFloat {

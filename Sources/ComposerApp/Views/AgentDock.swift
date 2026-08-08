@@ -9,8 +9,10 @@ struct AgentDock: View {
   @ObservedObject var agent: CanvasAgent
   /// Sized by the canvas relative to the window so the dock adapts to the display.
   var width: CGFloat
+  /// Owned by the canvas so closing and reopening the dock never discards an unsent prompt.
+  @Binding var draft: String
   var onClose: () -> Void
-  @State private var draft = ""
+  var onEscape: () -> Void
   @FocusState private var inputFocused: Bool
   /// The Claude model the agent runs on when the chat is on Claude. Shares its key with the Settings ▸
   /// Runtime picker, so the two always read back the same value (see [[ModelPreferences]]); Codex and
@@ -73,6 +75,7 @@ struct AgentDock: View {
         .font(.callout)
         .foregroundStyle(Theme.Palette.body)
         .focused($inputFocused)
+        .onExitCommand(perform: onEscape)
         // Enter sends; Shift+Enter inserts a newline at the caret — the standard chat convention
         // (Slack, Discord, Linear). We must handle BOTH keys ourselves. Returning `.ignored` for
         // Shift+Return (the previous fix) let the event fall through to the field editor, which on a
