@@ -136,8 +136,12 @@ struct ComposerCanvas: View {
     }
     .confirmationDialog(
       "Delete board".localizedUI,
-      item: $pendingBoardDeletion,
-      titleVisibility: .visible
+      isPresented: Binding(
+        get: { pendingBoardDeletion != nil },
+        set: { if !$0 { pendingBoardDeletion = nil } }
+      ),
+      titleVisibility: .visible,
+      presenting: pendingBoardDeletion
     ) { pending in
       Button("Delete Board".localizedUI, role: .destructive) {
         confirmBoardDeletion(pending)
@@ -760,7 +764,12 @@ struct ComposerCanvas: View {
                   .multilineTextAlignment(.center)
                   .focused($boardNameFocused)
                   .onSubmit { _ = commitBoardRename() }
-                  .onExitCommand(perform: cancelBoardRename)
+                  // Escape in the rename field goes through the guarded coordinator like every
+                  // other surface (Agent, Settings, ⌘K): with the rename active the coordinator
+                  // resolves to `.boardRename` → cancel, and `escapeHandledThisTurn` guarantees a
+                  // press that AppKit delivers through more than one route still performs exactly
+                  // one dismissal instead of also firing a lower-priority action.
+                  .onExitCommand(perform: handleEscapeBoard)
                   .onAppear { DispatchQueue.main.async { boardNameFocused = true } }
                   .onChange(of: boardNameFocused) { _, focused in
                     if !focused { _ = commitBoardRename() }
@@ -1496,7 +1505,6 @@ struct ComposerCanvas: View {
       hasFocusedEditor: focusedCardID != nil,
       hasCompiledOverlay: store.compiledDraft != nil,
       hasPromotion: promotion != nil,
-      hasHistory: store.isHistoryOpen,
       hasAgent: showAgent,
       hasSettings: store.isSettingsOpen,
       hasActiveEditor: board.editingInteraction != nil,
@@ -1519,8 +1527,6 @@ struct ComposerCanvas: View {
       store.compiledDraft = nil
     case .promotion:
       dismissPromotion()
-    case .history:
-      store.isHistoryOpen = false
     case .auxiliaryPanel:
       closeAuxiliaryPanel()
     case .activeEditor:
@@ -1586,7 +1592,10 @@ struct ComposerCanvas: View {
   private func confirmBoardDeletion(_ pending: PendingBoardDeletion) {
     pendingBoardDeletion = nil
     guard commitBoardRename() else { return }
-    if pending.boardID == store.currentID {
+    let deletingCurrent = pending.boardID == store.currentID
+    if deletingCurrent {
+      // Deleting the open board swaps the canvas onto the next one, so checkpoint first: if
+      // storage is failing, abort rather than tear down a board whose edits can't be saved.
       guard board.flushSave() else {
         show(Toast(
           text: "The board was not deleted because its latest changes could not be saved.".localizedUI,
@@ -1604,8 +1613,13 @@ struct ComposerCanvas: View {
       ))
       return
     }
-    board.loadFromStore()
-    resetView()
+    // Only a current-board delete moves the canvas to another board. Deleting a background board
+    // must leave the working set alone — reloading here would clobber in-flight debounced edits
+    // (loadFromStore replaces `cards` with the last persisted payload) and reset the viewport.
+    if deletingCurrent {
+      board.loadFromStore()
+      resetView()
+    }
   }
   // Rename only touches the board's name, never its cards — no flush/reload needed.
   private func renameBoard(_ id: PersistentIdentifier, to name: String) -> Bool {

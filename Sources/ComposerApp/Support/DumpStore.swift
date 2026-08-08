@@ -251,7 +251,7 @@ final class DumpStore: ObservableObject {
   func flush(cards: [CardState]) -> Bool {
     saveWork?.cancel()
     pendingSnapshot = nil
-    commit(cards: cards)
+    return commit(cards: cards)
   }
 
   private func commit(cards: [CardState]) -> Bool {

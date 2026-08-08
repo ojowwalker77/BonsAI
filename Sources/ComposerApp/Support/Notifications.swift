@@ -85,7 +85,6 @@ enum ComposerEscapeTarget: Equatable {
   case focusedEditor
   case compiledOverlay
   case promotion
-  case history
   case auxiliaryPanel
   case activeEditor
   case drawingDraft
@@ -102,7 +101,6 @@ struct ComposerEscapeState: Equatable {
   var hasFocusedEditor = false
   var hasCompiledOverlay = false
   var hasPromotion = false
-  var hasHistory = false
   var hasAgent = false
   var hasSettings = false
   var hasActiveEditor = false
@@ -120,7 +118,9 @@ enum ComposerEscapeCoordinator {
     if state.hasFocusedEditor { return .focusedEditor }
     if state.hasCompiledOverlay { return .compiledOverlay }
     if state.hasPromotion { return .promotion }
-    if state.hasHistory { return .history }
+    // NOTE: `DumpStore.isHistoryOpen` has no route here on purpose — nothing in the app can set
+    // it to true anymore (the history overlay went with the old floating-panel mode), so an
+    // Escape priority for it would be unreachable dead state.
     if state.hasAgent || state.hasSettings { return .auxiliaryPanel }
     if state.hasActiveEditor { return .activeEditor }
     if state.hasDrawingDraft { return .drawingDraft }

@@ -149,6 +149,18 @@ final class FloatingPanel: NSWindow {
     postEscapeToCanvas()
   }
 
+  /// One physical Escape press must post exactly one canvas command, even when AppKit routes it
+  /// into this window twice (`keyDown` with the raw event AND `cancelOperation` bubbled up as a
+  /// command). Both of those deliveries happen synchronously inside the one `sendEvent` call for
+  /// the press — the command path climbs the responder chain via `doCommandBy(_:)` and the event
+  /// path via `keyDown` forwarding, neither of which spins the run loop — so a flag that resets on
+  /// the next main-queue drain covers every double-delivery this window can see. Deliveries can't
+  /// span run-loop turns here: while a nested/modal run loop is up (context menu, the delete
+  /// confirmation) the modal session consumes Escape itself and this window's routing never runs.
+  /// Keying the guard off the `NSEvent` instead is NOT more robust: `cancelOperation` receives the
+  /// responder as sender, not the originating event, and `NSApp.currentEvent` is nil or stale for
+  /// synthetic deliveries (tests, accessibility), which would either break the dedup or swallow
+  /// real presses. Key repeat still works — each repeat is its own turn.
   private func postEscapeToCanvas() {
     guard !escapePostedThisTurn else { return }
     escapePostedThisTurn = true
@@ -162,13 +174,13 @@ final class FloatingPanel: NSWindow {
     guard let textView = firstResponder as? NSTextView else { return false }
     let selector = #selector(NSResponder.cancelOperation(_:))
 
-    // A field editor's delegate is normally its owning NSControl; the control's delegate owns
+    // A field editor's delegate is normally its owning NSTextField; the field's delegate owns
     // command routing for AppKit and SwiftUI NSTextField values. Calling that hook directly is
     // important: NSTextView implements cancelOperation even when nobody has a draft to cancel,
     // so tryToPerform would report success and swallow Escape in an idle field.
-    if let control = textView.delegate as? NSControl,
-       let delegate = control.delegate as? NSTextFieldDelegate {
-      return delegate.control(control, textView: textView, doCommandBy: selector)
+    if let field = textView.delegate as? NSTextField,
+       let delegate = field.delegate {
+      return delegate.control?(field, textView: textView, doCommandBy: selector) ?? false
     }
 
     // FreeWriteEditor is a real NSTextView whose coordinator handles cancellation itself.

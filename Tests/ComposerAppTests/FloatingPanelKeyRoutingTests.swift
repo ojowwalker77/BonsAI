@@ -205,16 +205,7 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     )
   }
 
-  func testEscapeCoordinatorClosesHistoryAndTintPickerBeforeLowerPriorityActions() {
-    XCTAssertEqual(
-      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
-        hasHistory: true,
-        hasTintPicker: true,
-        hasActiveTool: true,
-        hasSelection: true
-      )),
-      .history
-    )
+  func testEscapeCoordinatorClosesTintPickerBeforeLowerPriorityActions() {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(
         hasTintPicker: true,

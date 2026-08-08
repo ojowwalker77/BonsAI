@@ -280,14 +280,14 @@ final class BoardPersistenceTests: XCTestCase {
   }
 
   func testDeleteSaveFailureRollsBackAndKeepsBoardAvailable() async throws {
-    var failNextSave = false
+    var nextFailureLabel: String?
     let store = DumpStore(
       inMemoryOnly: true,
       loadInitialContent: false,
       persistContext: { context in
-        if failNextSave {
-          failNextSave = false
-          throw ForcedDeleteSaveFailure()
+        if let label = nextFailureLabel {
+          nextFailureLabel = nil
+          throw ForcedDeleteSaveFailure(label: label)
         }
         try context.save()
       }
@@ -297,22 +297,31 @@ final class BoardPersistenceTests: XCTestCase {
     store.newDump()
     store.flush(cards: [CardState.firstCard(text: "Current board")])
 
-    _ = UserFacingErrorStore.shared.takeLatest()
-    failNextSave = true
+    // `UserFacingError.report` publishes on a deferred MainActor task, so each failure's toast
+    // must be drained (yield, then take) before the next delete — and the two failures carry
+    // distinct labels so a stale pending toast can never satisfy a later assertion.
+    nextFailureLabel = "forced delete save failure (non-current board)"
     XCTAssertFalse(store.delete(id))
     XCTAssertTrue(store.dumps.contains { $0.persistentModelID == id })
     XCTAssertEqual(store.dumps.first { $0.persistentModelID == id }?.text, "Keep this board")
+    await Task.yield()
+    XCTAssertEqual(
+      UserFacingErrorStore.shared.takeLatest()?.message,
+      "forced delete save failure (non-current board)"
+    )
 
     let currentID = try XCTUnwrap(store.currentID)
-    _ = UserFacingErrorStore.shared.takeLatest()
-    failNextSave = true
+    nextFailureLabel = "forced delete save failure (current board)"
     XCTAssertFalse(store.delete(currentID))
     XCTAssertEqual(store.currentID, currentID)
     XCTAssertEqual(store.current?.text, "Current board")
     XCTAssertTrue(store.dumps.contains { $0.persistentModelID == currentID })
 
     await Task.yield()
-    XCTAssertEqual(UserFacingErrorStore.shared.takeLatest()?.message, "forced delete save failure")
+    XCTAssertEqual(
+      UserFacingErrorStore.shared.takeLatest()?.message,
+      "forced delete save failure (current board)"
+    )
 
     let verificationContext = ModelContext(store.container)
     let persisted = try verificationContext.fetch(FetchDescriptor<Dump>())
@@ -452,7 +461,8 @@ private struct ForcedRenameSaveFailure: LocalizedError {
 }
 
 private struct ForcedDeleteSaveFailure: LocalizedError {
-  var errorDescription: String? { "forced delete save failure" }
+  let label: String
+  var errorDescription: String? { label }
 }
 
 private struct ForcedAutosaveSaveFailure: LocalizedError {
