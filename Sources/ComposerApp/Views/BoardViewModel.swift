@@ -90,8 +90,13 @@ final class CardInteraction: ObservableObject, Identifiable {
 
 /// Immutable board-wide text state shared by every card renderer for one text revision.
 ///
-/// The revision is deliberately separate from the set of names: changing a definition's value can
-/// leave the names unchanged, but it still needs to invalidate the rendered chips that depend on it.
+/// Rendering consumes ONLY `definedVariableNames` — chips style the card's literal source text and
+/// use the set purely for membership (is `$name` a defined reference?) via
+/// `ShellTemplate.expressions(in:definedNames:)`. Definition VALUES are never rendered; they are
+/// expanded exclusively at copy time (`ShellTemplate.expand`). That's why `BoardCardLayer.==`
+/// compares only the name set: `revision` bumps on nearly every mutation, and including it would
+/// rebuild every card per keystroke — the exact cost this type exists to avoid. `revision` stays
+/// here as the derivation counter proving the context is rebuilt once per text change.
 struct BoardTextContext: Equatable {
   let revision: UInt64
   let definedVariableNames: Set<String>
@@ -403,13 +408,21 @@ final class BoardViewModel: ObservableObject {
 
   /// Geometry + live plain text, ready to persist.
   func renderingSnapshot(for source: [CardState]) -> [CardState] {
-    source.map { card in
+    var appliedLiveFrame = false
+    var snapshot = source.map { card -> CardState in
       var copy = card
       if let liveFrame = liveTextFrames[card.id] {
         copy.frame = CGRect(origin: copy.frame.origin, size: liveFrame.size)
+        appliedLiveFrame = true
       }
       return copy
     }
+    // The live hug resized a card the committed arrow geometry was anchored against, so re-derive
+    // bound arrows ON THE COPY — a mid-edit save/export must not persist the new frame with arrows
+    // still aimed at the old one. Done on the snapshot (never the published `cards`) because this
+    // runs from the save debounce and the exporter, which must stay side-effect-free.
+    if appliedLiveFrame { Self.refreshBoundArrows(in: &snapshot) }
+    return snapshot
   }
 
   private func snapshot() -> [CardState] {
@@ -1277,7 +1290,7 @@ final class BoardViewModel: ObservableObject {
     nextZ += 1
     cards.append(card)
     interactions[card.id] = CardInteraction(card)
-    if let index = cards.firstIndex(where: { $0.id == card.id }) { updateBoundArrowGeometry(at: index) }
+    if let index = cards.firstIndex(where: { $0.id == card.id }) { Self.updateBoundArrowGeometry(at: index, in: &cards) }
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     invalidateBoardTextContext()
@@ -1624,7 +1637,12 @@ final class BoardViewModel: ObservableObject {
   /// top-left anchored, empty text keeps its seed frame.
   @discardableResult
   func fitTextEditing(_ id: UUID, naturalEditorWidth: CGFloat, editorContentHeight: CGFloat) -> CGRect? {
-    guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text else { return nil }
+    // Only the ACTIVE edit session may write a live frame. The editor reports layout through
+    // `DispatchQueue.main.async` (FreeWriteEditor.reportHeight), so a callback queued before the
+    // edit ended can land after `commitLiveTextFrame` retired the override — accepting it would
+    // resurrect stale geometry that the next save/export then persists.
+    guard editingCardID == id,
+          let i = cards.firstIndex(where: { $0.id == id }), cards[i].elementKind == .text else { return nil }
     guard !plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
     let cap = CardState.textDefaultSize.width * cards[i].textScale + 32
     let width = min(max(naturalEditorWidth + 24 + 2, CardState.textMinSize.width), cap)
@@ -1730,7 +1748,9 @@ final class BoardViewModel: ObservableObject {
   }
 
   func selectedCardsForClipboard() -> [CardState] {
-    let selected = cards.filter { selectedCardIDs.contains($0.id) }
+    // Through `renderingSnapshot` so a card copied mid-edit carries its live auto-fit frame, not
+    // the last committed one — what you see when you hit ⌘C is what pastes.
+    let selected = renderingSnapshot(for: cards.filter { selectedCardIDs.contains($0.id) })
     return selected.map { card in
       var copy = card
       copy.text = persistedText(for: card)
@@ -2019,7 +2039,7 @@ final class BoardViewModel: ObservableObject {
 
   private func bindArrowIfPossible(_ id: UUID) {
     guard let i = index(for: id), cards[i].elementKind == .arrow else { return }
-    let endpoints = lineEndpoints(for: cards[i])
+    let endpoints = Self.lineEndpoints(for: cards[i])
     var excluded: Set<UUID> = [id]
     if let start = nearestConnectable(to: endpoints.start, excluding: excluded) {
       cards[i].startBindingID = start.id
@@ -2031,7 +2051,7 @@ final class BoardViewModel: ObservableObject {
       cards[i].endBindingAnchor = Self.bindingAnchor(on: end.frame, drawn: endpoints.end, otherEnd: endpoints.start)
     }
     if cards[i].startBindingID != nil || cards[i].endBindingID != nil {
-      updateBoundArrowGeometry(at: i)
+      Self.updateBoundArrowGeometry(at: i, in: &cards)
     }
   }
 
@@ -2079,6 +2099,17 @@ final class BoardViewModel: ObservableObject {
   }
 
   private func refreshBoundArrows() {
+    var refreshed = cards
+    Self.refreshBoundArrows(in: &refreshed)
+    // Publish only on a real geometry change, so a no-op refresh doesn't rebuild the card layer.
+    if refreshed != cards { cards = refreshed }
+  }
+
+  /// The pure form of the refresh, shared by the live board (above) and `renderingSnapshot`:
+  /// drops bindings to cards missing from `cards` and re-derives every bound arrow's geometry
+  /// from the frames IN THIS ARRAY. Static on purpose — the snapshot path must never touch the
+  /// published `cards`.
+  private static func refreshBoundArrows(in cards: inout [CardState]) {
     let existing = Set(cards.map(\.id))
     for i in cards.indices where cards[i].elementKind == .arrow {
       if let start = cards[i].startBindingID, !existing.contains(start) {
@@ -2090,7 +2121,7 @@ final class BoardViewModel: ObservableObject {
         cards[i].endBindingAnchor = nil
       }
       if cards[i].startBindingID != nil || cards[i].endBindingID != nil {
-        updateBoundArrowGeometry(at: i)
+        updateBoundArrowGeometry(at: i, in: &cards)
       }
     }
   }
@@ -2125,7 +2156,7 @@ final class BoardViewModel: ObservableObject {
         let dy = max(rect.minY - point.y, point.y - rect.maxY, 0)
         let rectDistance = hypot(dx, dy)
         guard rectDistance <= edgeSlop else { return nil }
-        let center = center(of: card)
+        let center = Self.center(of: card)
         return (card, rectDistance, hypot(center.x - point.x, center.y - point.y))
       }
       .min(by: { lhs, rhs in
@@ -2136,11 +2167,11 @@ final class BoardViewModel: ObservableObject {
       .card
   }
 
-  private func updateBoundArrowGeometry(at index: Int) {
+  private static func updateBoundArrowGeometry(at index: Int, in cards: inout [CardState]) {
     guard cards.indices.contains(index), cards[index].elementKind == .arrow else { return }
     let current = lineEndpoints(for: cards[index])
-    let startCard = cards[index].startBindingID.flatMap { card(id: $0) }
-    let endCard = cards[index].endBindingID.flatMap { card(id: $0) }
+    let startCard = cards[index].startBindingID.flatMap { id in cards.first { $0.id == id } }
+    let endCard = cards[index].endBindingID.flatMap { id in cards.first { $0.id == id } }
     let rawStart = startCard.map(center(of:)) ?? current.start
     let rawEnd = endCard.map(center(of:)) ?? current.end
     // An anchored binding lands exactly where the user attached (tracking the card's current
@@ -2154,10 +2185,10 @@ final class BoardViewModel: ObservableObject {
       cards[index].endBindingAnchor.map { Self.anchoredPoint($0, in: card.frame) }
         ?? Self.boundaryPoint(of: card.frame, toward: rawStart, margin: 7)
     } ?? rawEnd
-    applyLineGeometry(to: index, start: start, end: end)
+    applyLineGeometry(to: index, in: &cards, start: start, end: end)
   }
 
-  private func applyLineGeometry(to index: Int, start: CGPoint, end: CGPoint) {
+  private static func applyLineGeometry(to index: Int, in cards: inout [CardState], start: CGPoint, end: CGPoint) {
     let padding: CGFloat = 18
     var minX = min(start.x, end.x) - padding
     var minY = min(start.y, end.y) - padding
@@ -2188,7 +2219,7 @@ final class BoardViewModel: ObservableObject {
     ]
   }
 
-  private func lineEndpoints(for card: CardState) -> (start: CGPoint, end: CGPoint) {
+  private static func lineEndpoints(for card: CardState) -> (start: CGPoint, end: CGPoint) {
     let points = card.points ?? CardState.defaultLinePoints()
     let start = points.first?.cgPoint ?? CGPoint(x: 0.06, y: 0.88)
     let end = points.dropFirst().first?.cgPoint ?? CGPoint(x: 0.94, y: 0.12)
@@ -2199,7 +2230,7 @@ final class BoardViewModel: ObservableObject {
   }
 
   private func lineSegment(for card: CardState) -> (endpoints: (start: CGPoint, end: CGPoint), vector: CGVector, length: CGFloat)? {
-    let endpoints = lineEndpoints(for: card)
+    let endpoints = Self.lineEndpoints(for: card)
     let vector = CGVector(dx: endpoints.end.x - endpoints.start.x, dy: endpoints.end.y - endpoints.start.y)
     let length = hypot(vector.dx, vector.dy)
     guard length > 0 else { return nil }
@@ -2220,7 +2251,7 @@ final class BoardViewModel: ObservableObject {
     cards.first { $0.id == id }
   }
 
-  private func center(of card: CardState) -> CGPoint {
+  private static func center(of card: CardState) -> CGPoint {
     CGPoint(x: card.x + card.w / 2, y: card.y + card.h / 2)
   }
 
