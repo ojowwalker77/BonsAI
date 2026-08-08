@@ -137,6 +137,10 @@ struct ComposerCanvas: View {
       .frame(width: inner.width, height: inner.height, alignment: .topLeading)
       .id(typographyRevision)
 
+      // Content panned under the top pills fades toward the canvas surface before it reaches
+      // them (issue #123). Above the board, below every piece of chrome and overlay.
+      CanvasTopFade()
+
       // Active-card overlays resolve through screen → window space, so they live in
       // full-window coordinates and keep working while the board itself is transformed.
       if let editing = board.editingInteraction {

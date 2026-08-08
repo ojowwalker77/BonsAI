@@ -337,3 +337,35 @@ struct ComposerPanelBackground: View {
     }
   }
 }
+
+/// Soft wash under the top chrome row: board content panned behind the pills fades toward the
+/// canvas surface instead of colliding with the controls at full contrast. Painted with the same
+/// flavor `base` as `ComposerPanelBackground` — scaled by the same transparency response — so it
+/// reads as the canvas continuing upward, not as a separate layer. Purely visual; it must never
+/// intercept events (cards and marquee drags keep working through it).
+struct CanvasTopFade: View {
+  @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
+
+  /// The chrome row plus a tail below it, so the ramp finishes well clear of the pills.
+  static let height: CGFloat = WindowChrome.edgeInset + WindowChrome.controlHeight + 44
+
+  var body: some View {
+    let glass = ComposerPreferences.clampedCanvasTransparency(canvasTransparency)
+      / ComposerPreferences.maxCanvasTransparency
+    // Matches the backdrop's surface opacity so a glassy canvas gets an equally glassy fade;
+    // the top stop stays below 1 so content is dimmed, never hidden.
+    let surface = 1.0 - 0.65 * glass
+    LinearGradient(
+      stops: [
+        .init(color: Theme.Palette.windowCanvas.opacity(0.88 * surface), location: 0.0),
+        .init(color: Theme.Palette.windowCanvas.opacity(0.55 * surface), location: 0.45),
+        .init(color: Theme.Palette.windowCanvas.opacity(0.0), location: 1.0),
+      ],
+      startPoint: .top,
+      endPoint: .bottom
+    )
+    .frame(height: Self.height)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    .allowsHitTesting(false)
+  }
+}
