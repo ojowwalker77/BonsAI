@@ -3,6 +3,13 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+private struct PendingBoardDeletion: Identifiable {
+  let boardID: PersistentIdentifier
+  let title: String
+
+  var id: String { String(describing: boardID) }
+}
+
 /// The entire app surface: a pan/zoom board of text cards on a chromeless glass card, with a
 /// top tool toolbar and a left action rail floating in the gutters. Per-card editor chrome
 /// (mentions, connector search, the semantic linter) is routed to the active card; board-level
@@ -42,6 +49,11 @@ struct ComposerCanvas: View {
   @ObservedObject private var agent = CanvasAgent.shared
   @ObservedObject private var updater = UpdaterController.shared
   @State private var showAgent = false
+  /// A board delete is only executed by the destructive action in this confirmation surface.
+  @State private var pendingBoardDeletion: PendingBoardDeletion?
+  /// AppKit may deliver Escape through both keyDown and cancelOperation for one physical press.
+  /// Resetting on the next run-loop turn keeps the command one-shot without swallowing the next key.
+  @State private var escapeHandledThisTurn = false
   /// The ⌘K command palette (board switcher + buried board-level actions) is showing.
   @State private var showPalette = false
   /// The tint swatch row in the bottom bar is expanded.
@@ -121,6 +133,22 @@ struct ComposerCanvas: View {
     }
     .onReceive(NotificationCenter.default.publisher(for: .composerFontFamilyChanged)) { _ in
       typographyRevision += 1
+    }
+    .confirmationDialog(
+      "Delete board".localizedUI,
+      isPresented: Binding(
+        get: { pendingBoardDeletion != nil },
+        set: { if !$0 { pendingBoardDeletion = nil } }
+      ),
+      titleVisibility: .visible,
+      presenting: pendingBoardDeletion
+    ) { pending in
+      Button("Delete Board".localizedUI, role: .destructive) {
+        confirmBoardDeletion(pending)
+      }
+      Button("Cancel".localizedUI, role: .cancel) {}
+    } message: { pending in
+      Text("Delete \"%@\" permanently? This cannot be undone.".localizedUI(pending.title))
     }
   }
 
@@ -737,7 +765,12 @@ struct ComposerCanvas: View {
                   .multilineTextAlignment(.center)
                   .focused($boardNameFocused)
                   .onSubmit { _ = commitBoardRename() }
-                  .onExitCommand(perform: cancelBoardRename)
+                  // Escape in the rename field goes through the guarded coordinator like every
+                  // other surface (Agent, Settings, ⌘K): with the rename active the coordinator
+                  // resolves to `.boardRename` → cancel, and `escapeHandledThisTurn` guarantees a
+                  // press that AppKit delivers through more than one route still performs exactly
+                  // one dismissal instead of also firing a lower-priority action.
+                  .onExitCommand(perform: handleEscapeBoard)
                   .onAppear { DispatchQueue.main.async { boardNameFocused = true } }
                   .onChange(of: boardNameFocused) { _, focused in
                     if !focused { _ = commitBoardRename() }
@@ -762,7 +795,9 @@ struct ComposerCanvas: View {
                     beginBoardRename(id, title: dump.title)
                   }
                   if store.dumps.count > 1 {
-                    Button("Delete Board".localizedUI, role: .destructive) { deleteBoard(id) }
+                    Button("Delete Board".localizedUI, role: .destructive) {
+                      requestBoardDeletion(id, title: dump.title)
+                    }
                   }
                 }
                 .help(current ? displayTitle : "Open %@".localizedUI(displayTitle))
@@ -1225,7 +1260,13 @@ struct ComposerCanvas: View {
   private func dockOverlay(in size: CGSize) -> some View {
     if showAgent {
       let width = min(360, max(300, size.width * 0.32))
-      AgentDock(agent: agent, width: width, onClose: { toggleAgent() })
+      AgentDock(
+        agent: agent,
+        width: width,
+        draft: $workspace.agentDraft,
+        onClose: { toggleAgent() },
+        onEscape: { handleEscapeBoard() }
+      )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(.top, size.height * 0.10)
         .padding(.trailing, WindowChrome.edgeInset)
@@ -1235,7 +1276,11 @@ struct ComposerCanvas: View {
         .transition(.move(edge: .trailing).combined(with: .opacity))
         .zIndex(40)
     } else if store.isSettingsOpen {
-      SettingsOverlay(canvasSize: size, onClose: { toggleSettings() })
+      SettingsOverlay(
+        canvasSize: size,
+        onClose: { toggleSettings() },
+        onEscape: { handleEscapeBoard() }
+      )
         .transition(.opacity)
         .zIndex(40)
     }
@@ -1450,28 +1495,58 @@ struct ComposerCanvas: View {
   private func handlePasteSelection() { if canEditBoard { pasteSelectedCards() } }
   private func handleSelectAllCards() { if canEditBoard { board.selectAll() } }
   private func handleEscapeBoard() {
-    // The ⇧⌘F writing sheet closes first — it owns the screen while it's up.
-    if focusedCardID != nil { closeFocus(); return }
-    // A live promotion chip is the shallowest board-level thing Esc can dismiss — retract it and
-    // swallow the keystroke so it doesn't also revert the tool or drop the selection underneath.
-    if promotion != nil { dismissPromotion(); return }
-    // While a card is being edited its editor owns Esc (inline text resigns focus; stage editors
-    // cancel per-kind), so the board Esc cascade must not also fire.
-    if board.editingInteraction != nil { return }
-    // Esc mid-draw abandons the in-flight shape/freehand: clear the preview state here (the
-    // InputView, listening for the same escape, drops its own drag so the pending mouse-up can't
-    // commit) and swallow the keystroke so it doesn't also revert the tool underneath the cancel.
-    if elementDraft != nil || freehandDraft != nil {
+    guard !escapeHandledThisTurn else { return }
+    escapeHandledThisTurn = true
+    DispatchQueue.main.async { escapeHandledThisTurn = false }
+
+    let target = ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+      hasBoardDeletionConfirmation: pendingBoardDeletion != nil,
+      hasBoardRename: renamingBoardID != nil,
+      hasCommandPalette: showPalette,
+      hasFocusedEditor: focusedCardID != nil,
+      hasCompiledOverlay: store.compiledDraft != nil,
+      hasPromotion: promotion != nil,
+      hasAgent: showAgent,
+      hasSettings: store.isSettingsOpen,
+      hasActiveEditor: board.editingInteraction != nil,
+      hasDrawingDraft: elementDraft != nil || freehandDraft != nil,
+      hasTintPicker: tintPickerOpen,
+      hasActiveTool: tool != .select,
+      hasSelection: !board.selectedCardIDs.isEmpty
+    ))
+
+    switch target {
+    case .boardDeletionConfirmation:
+      pendingBoardDeletion = nil
+    case .boardRename:
+      cancelBoardRename()
+    case .commandPalette:
+      dismissPalette()
+    case .focusedEditor:
+      closeFocus()
+    case .compiledOverlay:
+      store.compiledDraft = nil
+    case .promotion:
+      dismissPromotion()
+    case .auxiliaryPanel:
+      closeAuxiliaryPanel()
+    case .activeEditor:
+      // Inline text and structured stages own their draft cancellation. The window-level command
+      // must stop here rather than dismissing the workspace behind an active editor.
+      return
+    case .drawingDraft:
+      // The InputView listens for the same escape and drops its drag, so a pending mouse-up cannot
+      // commit after this preview state is cleared.
       elementDraft = nil
       freehandDraft = nil
       bindTargetID = nil
-      return
-    }
-    if tool != .select {
+    case .tintPicker:
+      withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
+    case .activeTool:
       tool = .select
-    } else if !board.selectedCardIDs.isEmpty {
+    case .selection:
       board.deselectAll()
-    } else {
+    case .windowDismissal:
       dismiss()
     }
   }
@@ -1506,9 +1581,46 @@ struct ComposerCanvas: View {
     guard commitBoardRename() else { return }
     board.flushSave(); store.select(id); board.loadFromStore(); resetView()
   }
-  private func deleteBoard(_ id: PersistentIdentifier) {
+  private func requestBoardDeletion(_ id: PersistentIdentifier, title: String) {
+    guard store.dumps.count > 1,
+          store.dumps.contains(where: { $0.persistentModelID == id }) else { return }
+    pendingBoardDeletion = PendingBoardDeletion(
+      boardID: id,
+      title: title.isEmpty ? "Untitled".localizedUI : title
+    )
+  }
+
+  private func confirmBoardDeletion(_ pending: PendingBoardDeletion) {
+    pendingBoardDeletion = nil
     guard commitBoardRename() else { return }
-    board.flushSave(); store.delete(id); board.loadFromStore(); resetView()
+    let deletingCurrent = pending.boardID == store.currentID
+    if deletingCurrent {
+      // Deleting the open board swaps the canvas onto the next one, so checkpoint first: if
+      // storage is failing, abort rather than tear down a board whose edits can't be saved.
+      guard board.flushSave() else {
+        show(Toast(
+          text: "The board was not deleted because its latest changes could not be saved.".localizedUI,
+          symbol: "exclamationmark.triangle.fill",
+          tint: Theme.Palette.warning
+        ))
+        return
+      }
+    }
+    guard store.delete(pending.boardID) else {
+      show(Toast(
+        text: "The board was not deleted. Your saved board is still available.".localizedUI,
+        symbol: "exclamationmark.triangle.fill",
+        tint: Theme.Palette.warning
+      ))
+      return
+    }
+    // Only a current-board delete moves the canvas to another board. Deleting a background board
+    // must leave the working set alone — reloading here would clobber in-flight debounced edits
+    // (loadFromStore replaces `cards` with the last persisted payload) and reset the viewport.
+    if deletingCurrent {
+      board.loadFromStore()
+      resetView()
+    }
   }
   // Rename only touches the board's name, never its cards — no flush/reload needed.
   private func renameBoard(_ id: PersistentIdentifier, to name: String) -> Bool {
@@ -1578,7 +1690,7 @@ struct ComposerCanvas: View {
           commands: paletteCommands,
           onPickBoard: { id in closePalette(); pickBoard(id) },
           onRunCommand: { command in closePalette(); command.run() },
-          onDismiss: { dismissPalette() }
+          onDismiss: { handleEscapeBoard() }
         )
         .padding(.top, max(48, size.height * 0.12))
       }

@@ -13,6 +13,8 @@ final class CanvasWorkspaceSession: ObservableObject {
 
   @Published var scale: CGFloat = 1
   @Published var pan: CGSize = .zero
+  /// Unsaved Agent input survives replacing the SwiftUI canvas root for theme/language changes.
+  @Published var agentDraft = ""
 
   private(set) var lastRemountTrigger: CanvasRemountTrigger?
 

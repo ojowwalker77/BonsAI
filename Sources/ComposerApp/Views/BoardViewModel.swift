@@ -438,7 +438,8 @@ final class BoardViewModel: ObservableObject {
   /// Build the persistence snapshot only when the debounce actually fires. This avoids cloning
   /// the entire board on every keystroke and keeps cancelled saves from retaining stale snapshots.
   func scheduleSave() { store.scheduleUpdate { [weak self] in self?.snapshot() } }
-  func flushSave() { store.flush(cards: snapshot()) }
+  @discardableResult
+  func flushSave() -> Bool { store.flush(cards: snapshot()) }
 
   @discardableResult
   func duplicateProtectedBoardForEditing() -> Bool {
