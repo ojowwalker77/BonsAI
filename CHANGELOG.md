@@ -11,6 +11,11 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Changed
+- **Board content stays readable under the top chrome.** Elements panned beneath the top-left and
+  top-right pills now fade toward the canvas surface instead of colliding with them at full
+  contrast. The fade follows the canvas transparency slider and never intercepts clicks.
+
 ## [1.4.9] - 2026-08-06
 
 ### Fixed
