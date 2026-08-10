@@ -51,6 +51,10 @@ final class BoardPersistenceTests: XCTestCase {
   func testTeardownFlushDiscardsAnUncommittedBlankEquation() throws {
     let store = makeStore()
     let board = BoardViewModel(store: store)
+    let starterID = try XCTUnwrap(board.cards.first?.id)
+    board.beginEditing(starterID)
+    board.endEditing(starterID)
+    XCTAssertTrue(board.cards.isEmpty)
     let equationID = board.addElement(.equation, at: CGPoint(x: 200, y: 200))
     board.beginEditing(equationID)
 
