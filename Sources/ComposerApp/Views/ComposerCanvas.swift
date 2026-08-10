@@ -1608,7 +1608,8 @@ struct ComposerCanvas: View {
     if deletingCurrent {
       // Deleting the open board swaps the canvas onto the next one, so checkpoint first: if
       // storage is failing, abort rather than tear down a board whose edits can't be saved.
-      guard checkpointBeforeLeavingCurrentBoard() else {
+      // Deletion is destructive, so unlike navigation it never bypasses protected recovery data.
+      guard board.flushSave() else {
         show(Toast(
           text: "The board was not deleted because its latest changes could not be saved.".localizedUI,
           symbol: "exclamationmark.triangle.fill",
