@@ -56,8 +56,10 @@ final class BoardPersistenceTests: XCTestCase {
 
     XCTAssertTrue(board.flushSave(abandoningActiveEdit: true))
 
-    XCTAssertFalse(board.cards.contains(where: { $0.id == equationID }))
+    XCTAssertTrue(board.cards.isEmpty)
     XCTAssertNil(board.editingCardID)
+    let payload = try BoardPayload.decode(try XCTUnwrap(store.current?.cardsData))
+    XCTAssertTrue(payload.cards.isEmpty)
   }
 
   func testNewPayloadHasExplicitVersionAndLegacyArraysStillDecode() throws {
