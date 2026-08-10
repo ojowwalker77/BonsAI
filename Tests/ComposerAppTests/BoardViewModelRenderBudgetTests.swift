@@ -121,4 +121,34 @@ final class BoardViewModelRenderBudgetTests: XCTestCase {
     board.undo()
     XCTAssertNotEqual(board.plainText(for: activeCard), "active")
   }
+
+  func testInactiveHistorySnapshotCardBudgetEvictsLeastRecentlyUsedBoard() throws {
+    let store = DumpStore(inMemoryOnly: true, loadInitialContent: false)
+    let board = BoardViewModel(store: store)
+    let cardsPerLargeHistory = BoardViewModel.maxCachedHistorySnapshotCards / 2 + 1
+
+    func fillCurrentBoardAndMoveOn(label: String) throws -> PersistentIdentifier {
+      let boardID = try XCTUnwrap(store.currentID)
+      let seed = try XCTUnwrap(board.cards.first)
+      _ = board.insertCopies(
+        Array(repeating: seed, count: cardsPerLargeHistory - 1),
+        offset: .zero)
+      // The second undo checkpoint captures the large card array in this board's history.
+      board.setText(seed.id, label)
+      XCTAssertTrue(board.flushSave())
+      store.newDump()
+      board.loadFromStore()
+      return boardID
+    }
+
+    let leastRecentlyUsed = try fillCurrentBoardAndMoveOn(label: "first")
+    XCTAssertTrue(board.cachedHistoryBoardIDs.contains(leastRecentlyUsed))
+    let retained = try fillCurrentBoardAndMoveOn(label: "second")
+
+    XCTAssertFalse(board.cachedHistoryBoardIDs.contains(leastRecentlyUsed))
+    XCTAssertTrue(board.cachedHistoryBoardIDs.contains(retained))
+    XCTAssertLessThanOrEqual(board.cachedHistoryBoardCount, BoardViewModel.maxCachedHistoryBoards)
+    XCTAssertLessThanOrEqual(board.cachedHistorySnapshotCardCount,
+                             BoardViewModel.maxCachedHistorySnapshotCards)
+  }
 }
