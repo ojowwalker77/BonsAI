@@ -81,6 +81,7 @@ final class ArrowBindingTests: XCTestCase {
       .arrow, from: CGPoint(x: target.frame.minX - 200, y: target.frame.minY - 150), to: drawnEnd),
       let anchor = board.cards.first(where: { $0.id == arrowID })?.endBindingAnchor
     else { return XCTFail("no bound arrow") }
+    let committedTextFrame = target.frame
     let committedArrowTip = endpoints(of: board.cards.first { $0.id == arrowID }!).end
 
     // Live-hug the text card to a new size mid-edit (no commit).
@@ -102,7 +103,8 @@ final class ArrowBindingTests: XCTestCase {
     let snapTip = endpoints(of: snapArrow).end
     XCTAssertLessThan(hypot(snapTip.x - expected.x, snapTip.y - expected.y), 1)
 
-    // The live board's committed arrow is untouched by taking the snapshot.
+    // The live board's committed text frame and arrow are untouched by taking the snapshot.
+    XCTAssertEqual(board.cards.first(where: { $0.id == textID })?.frame, committedTextFrame)
     let boardTip = endpoints(of: board.cards.first { $0.id == arrowID }!).end
     XCTAssertLessThan(hypot(boardTip.x - committedArrowTip.x, boardTip.y - committedArrowTip.y), 0.001)
   }
