@@ -47,6 +47,8 @@ private final class TrafficLightHostView: NSView {
 /// callbacks and the menu-bar traffic-light reveal misbehave). Everything panel-specific was
 /// already being switched off.
 final class FloatingPanel: NSWindow {
+  private var escapePostedThisTurn = false
+
   /// MANDATORY: full-size-content windows can decline key status in some configurations,
   /// so without this the text canvas never gets an insertion point.
   override var canBecomeKey: Bool { true }
@@ -140,9 +142,49 @@ final class FloatingPanel: NSWindow {
     trafficLightHost.isHidden = true
   }
 
-  /// Escape hides the window when it is itself first responder.
+  /// AppKit's cancelOperation is the window-level Escape route. Keep dismissal in the canvas
+  /// coordinator so transient surfaces (including Agent and Settings) close before the window.
   override func cancelOperation(_ sender: Any?) {
-    (delegate as? PanelController)?.hide()
+    if forwardEscapeToTextResponder(sender) { return }
+    postEscapeToCanvas()
+  }
+
+  /// One physical Escape press must post exactly one canvas command, even when AppKit routes it
+  /// into this window twice (`keyDown` with the raw event AND `cancelOperation` bubbled up as a
+  /// command). Both of those deliveries happen synchronously inside the one `sendEvent` call for
+  /// the press — the command path climbs the responder chain via `doCommandBy(_:)` and the event
+  /// path via `keyDown` forwarding, neither of which spins the run loop — so a flag that resets on
+  /// the next main-queue drain covers every double-delivery this window can see. Deliveries can't
+  /// span run-loop turns here: while a nested/modal run loop is up (context menu, the delete
+  /// confirmation) the modal session consumes Escape itself and this window's routing never runs.
+  /// Keying the guard off the `NSEvent` instead is NOT more robust: `cancelOperation` receives the
+  /// responder as sender, not the originating event, and `NSApp.currentEvent` is nil or stale for
+  /// synthetic deliveries (tests, accessibility), which would either break the dedup or swallow
+  /// real presses. Key repeat still works — each repeat is its own turn.
+  private func postEscapeToCanvas() {
+    guard !escapePostedThisTurn else { return }
+    escapePostedThisTurn = true
+    DispatchQueue.main.async { [weak self] in self?.escapePostedThisTurn = false }
+    NotificationCenter.default.post(name: .composerEscapeBoard, object: nil)
+  }
+
+  /// Give an active field editor first refusal. Inline text and the Agent composer own their draft
+  /// cancellation; only an unhandled Escape should climb to the workspace coordinator.
+  private func forwardEscapeToTextResponder(_ sender: Any?) -> Bool {
+    guard let textView = firstResponder as? NSTextView else { return false }
+    let selector = #selector(NSResponder.cancelOperation(_:))
+
+    // A field editor's delegate is normally its owning NSTextField; the field's delegate owns
+    // command routing for AppKit and SwiftUI NSTextField values. Calling that hook directly is
+    // important: NSTextView implements cancelOperation even when nobody has a draft to cancel,
+    // so tryToPerform would report success and swallow Escape in an idle field.
+    if let field = textView.delegate as? NSTextField,
+       let delegate = field.delegate {
+      return delegate.control?(field, textView: textView, doCommandBy: selector) ?? false
+    }
+
+    // FreeWriteEditor is a real NSTextView whose coordinator handles cancellation itself.
+    return textView.delegate?.textView?(textView, doCommandBy: selector) ?? false
   }
 
   /// Losing key status mid-press can swallow the space `keyUp`, which would otherwise leave the
@@ -300,8 +342,9 @@ final class FloatingPanel: NSWindow {
       )
       return
     }
-    if !textIsEditing, raw == "\u{1b}" {
-      NotificationCenter.default.post(name: .composerEscapeBoard, object: nil)
+    if raw == "\u{1b}" {
+      if textIsEditing, forwardEscapeToTextResponder(event) { return }
+      postEscapeToCanvas()
       return
     }
     if !textIsEditing, raw == "\u{7f}" || raw == "\u{08}" {

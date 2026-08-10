@@ -4,6 +4,48 @@ import SwiftData
 
 @MainActor
 final class BoardPersistenceTests: XCTestCase {
+  func testAbandoningOnlyTextCardPersistsAnActuallyEmptyBoard() throws {
+    let store = makeStore()
+    let board = BoardViewModel(store: store)
+    let id = try XCTUnwrap(board.cards.first?.id)
+
+    board.beginEditing(id)
+    board.endEditing(id)
+
+    XCTAssertTrue(board.cards.isEmpty)
+    XCTAssertTrue(board.flushSave())
+    XCTAssertTrue(store.currentCards.isEmpty)
+  }
+
+  func testRemountFlushKeepsTransientlyEmptyActiveEdit() throws {
+    let store = makeStore()
+    let board = BoardViewModel(store: store)
+    let card = try XCTUnwrap(board.cards.first)
+    board.setText(card.id, "draft")
+    board.beginEditing(card.id)
+    board.interaction(for: card.id).cachePlainText("")
+
+    XCTAssertTrue(board.flushSave())
+
+    XCTAssertTrue(board.cards.contains(where: { $0.id == card.id }))
+    XCTAssertEqual(board.editingCardID, card.id)
+  }
+
+  func testTeardownFlushDiscardsBlankAndDelayedFocusCannotResurrectIt() throws {
+    let store = makeStore()
+    let board = BoardViewModel(store: store)
+    let id = try XCTUnwrap(board.cards.first?.id)
+    board.beginEditing(id)
+
+    XCTAssertTrue(board.flushSave(abandoningActiveEdit: true))
+    board.beginEditing(id)
+
+    XCTAssertTrue(board.cards.isEmpty)
+    XCTAssertNil(board.editingCardID)
+    XCTAssertFalse(board.selectedCardIDs.contains(id))
+    XCTAssertTrue(store.currentCards.isEmpty)
+  }
+
   func testNewPayloadHasExplicitVersionAndLegacyArraysStillDecode() throws {
     let cards = [CardState.firstCard(text: "Versioned")]
 
@@ -257,6 +299,103 @@ final class BoardPersistenceTests: XCTestCase {
     XCTAssertEqual(UserFacingErrorStore.shared.takeLatest()?.message, "forced rename save failure")
   }
 
+  func testDeleteRemovesNonCurrentAndCurrentBoardsSafely() throws {
+    let store = makeStore()
+    store.flush(cards: [CardState.firstCard(text: "First board")])
+    let firstID = try XCTUnwrap(store.currentID)
+    store.newDump()
+    store.flush(cards: [CardState.firstCard(text: "Second board")])
+    let secondID = try XCTUnwrap(store.currentID)
+    store.newDump()
+    store.flush(cards: [CardState.firstCard(text: "Third board")])
+    let thirdID = try XCTUnwrap(store.currentID)
+
+    XCTAssertTrue(store.delete(firstID))
+    XCTAssertFalse(store.dumps.contains { $0.persistentModelID == firstID })
+    XCTAssertEqual(store.currentID, thirdID)
+
+    store.select(secondID)
+    XCTAssertTrue(store.delete(secondID))
+    XCTAssertFalse(store.dumps.contains { $0.persistentModelID == secondID })
+    XCTAssertEqual(store.currentID, thirdID)
+    XCTAssertEqual(store.current?.text, "Third board")
+  }
+
+  func testDeleteSaveFailureRollsBackAndKeepsBoardAvailable() async throws {
+    var nextFailureLabel: String?
+    let store = DumpStore(
+      inMemoryOnly: true,
+      loadInitialContent: false,
+      persistContext: { context in
+        if let label = nextFailureLabel {
+          nextFailureLabel = nil
+          throw ForcedDeleteSaveFailure(label: label)
+        }
+        try context.save()
+      }
+    )
+    store.flush(cards: [CardState.firstCard(text: "Keep this board")])
+    let id = try XCTUnwrap(store.currentID)
+    store.newDump()
+    store.flush(cards: [CardState.firstCard(text: "Current board")])
+
+    // `UserFacingError.report` publishes on a deferred MainActor task, so each failure's toast
+    // must be drained (yield, then take) before the next delete — and the two failures carry
+    // distinct labels so a stale pending toast can never satisfy a later assertion.
+    nextFailureLabel = "forced delete save failure (non-current board)"
+    XCTAssertFalse(store.delete(id))
+    XCTAssertTrue(store.dumps.contains { $0.persistentModelID == id })
+    XCTAssertEqual(store.dumps.first { $0.persistentModelID == id }?.text, "Keep this board")
+    await Task.yield()
+    XCTAssertEqual(
+      UserFacingErrorStore.shared.takeLatest()?.message,
+      "forced delete save failure (non-current board)"
+    )
+
+    let currentID = try XCTUnwrap(store.currentID)
+    nextFailureLabel = "forced delete save failure (current board)"
+    XCTAssertFalse(store.delete(currentID))
+    XCTAssertEqual(store.currentID, currentID)
+    XCTAssertEqual(store.current?.text, "Current board")
+    XCTAssertTrue(store.dumps.contains { $0.persistentModelID == currentID })
+
+    await Task.yield()
+    XCTAssertEqual(
+      UserFacingErrorStore.shared.takeLatest()?.message,
+      "forced delete save failure (current board)"
+    )
+
+    let verificationContext = ModelContext(store.container)
+    let persisted = try verificationContext.fetch(FetchDescriptor<Dump>())
+    XCTAssertTrue(persisted.contains { $0.persistentModelID == id })
+    XCTAssertTrue(persisted.contains {
+      $0.persistentModelID == currentID && $0.text == "Current board"
+    })
+  }
+
+  func testAutosaveFailureRollsBackAndCanRetry() throws {
+    var failNextSave = false
+    let store = DumpStore(
+      inMemoryOnly: true,
+      loadInitialContent: false,
+      persistContext: { context in
+        if failNextSave {
+          failNextSave = false
+          throw ForcedAutosaveSaveFailure()
+        }
+        try context.save()
+      }
+    )
+    let id = try XCTUnwrap(store.currentID)
+
+    failNextSave = true
+    XCTAssertFalse(store.flush(cards: [CardState.firstCard(text: "Failed write")]))
+    XCTAssertEqual(store.dumps.first { $0.persistentModelID == id }?.text, "")
+
+    XCTAssertTrue(store.flush(cards: [CardState.firstCard(text: "Retry succeeds")]))
+    XCTAssertEqual(store.dumps.first { $0.persistentModelID == id }?.text, "Retry succeeds")
+  }
+
   func testProtectedFallbackCanBeDuplicatedWithoutChangingSource() throws {
     let store = makeStore()
     let source = try XCTUnwrap(store.current)
@@ -361,4 +500,13 @@ final class BoardPersistenceTests: XCTestCase {
 
 private struct ForcedRenameSaveFailure: LocalizedError {
   var errorDescription: String? { "forced rename save failure" }
+}
+
+private struct ForcedDeleteSaveFailure: LocalizedError {
+  let label: String
+  var errorDescription: String? { label }
+}
+
+private struct ForcedAutosaveSaveFailure: LocalizedError {
+  var errorDescription: String? { "forced autosave save failure" }
 }

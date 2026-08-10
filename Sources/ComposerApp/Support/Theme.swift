@@ -85,6 +85,8 @@ enum Theme {
     static var accentFill: Color { c(Theme.flavor.accent, 0.20) }
     static var rowFill: Color { c(Theme.flavor.surface0, 0.45) }
     static var selectedRowFill: Color { c(Theme.flavor.accent, 0.24) }
+    /// Warning/error affordances use the stable orange element slot across every theme.
+    static var warning: Color { c(Theme.flavor.tints[1]) }
 
     static var panelHairline: Color { c(Theme.flavor.overlay0, 0.35) }
     static var panelInnerLine: Color { c(Theme.flavor.surface2, 0.30) }

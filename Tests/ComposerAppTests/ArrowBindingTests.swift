@@ -67,4 +67,43 @@ final class ArrowBindingTests: XCTestCase {
     let committed = endpoints(of: arrow)
     XCTAssertLessThan(hypot(committed.end.x - expected.x, committed.end.y - expected.y), 1)
   }
+
+  /// A save/export taken MID-EDIT applies the text card's live auto-fit frame; the bound arrows in
+  /// that same snapshot must be re-anchored against it (not left aimed at the committed frame) —
+  /// and the published board must stay untouched (snapshotting is side-effect-free).
+  func testRenderingSnapshotReanchorsBoundArrowsToLiveEditFrame() {
+    let board = makeBoard()
+    let textID = board.insertText("target", at: CGPoint(x: 300, y: 300))
+    guard let target = board.cards.first(where: { $0.id == textID }) else { return XCTFail("no card") }
+
+    let drawnEnd = CGPoint(x: target.frame.minX + 4, y: target.frame.minY + 4)
+    guard let arrowID = board.addDrawnElement(
+      .arrow, from: CGPoint(x: target.frame.minX - 200, y: target.frame.minY - 150), to: drawnEnd),
+      let anchor = board.cards.first(where: { $0.id == arrowID })?.endBindingAnchor
+    else { return XCTFail("no bound arrow") }
+    let committedArrowTip = endpoints(of: board.cards.first { $0.id == arrowID }!).end
+
+    // Live-hug the text card to a new size mid-edit (no commit).
+    board.beginEditing(textID)
+    guard let live = board.fitTextEditing(textID, naturalEditorWidth: 500, editorContentHeight: 320) else {
+      return XCTFail("no live frame")
+    }
+
+    let snapshot = board.renderingSnapshot(for: board.cards)
+    guard let snapText = snapshot.first(where: { $0.id == textID }),
+          let snapArrow = snapshot.first(where: { $0.id == arrowID })
+    else { return XCTFail("snapshot missing cards") }
+    XCTAssertEqual(snapText.frame.size, live.size)
+
+    // The snapshot's tip sits at the stored anchor resolved against the LIVE frame.
+    let expected = CGPoint(
+      x: snapText.frame.minX + CGFloat(anchor.x) * snapText.frame.width,
+      y: snapText.frame.minY + CGFloat(anchor.y) * snapText.frame.height)
+    let snapTip = endpoints(of: snapArrow).end
+    XCTAssertLessThan(hypot(snapTip.x - expected.x, snapTip.y - expected.y), 1)
+
+    // The live board's committed arrow is untouched by taking the snapshot.
+    let boardTip = endpoints(of: board.cards.first { $0.id == arrowID }!).end
+    XCTAssertLessThan(hypot(boardTip.x - committedArrowTip.x, boardTip.y - committedArrowTip.y), 0.001)
+  }
 }

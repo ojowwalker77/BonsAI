@@ -75,3 +75,58 @@ extension Notification.Name {
   /// Quick capture from the menu bar, Services menu, URL scheme, or loopback API.
   static let composerQuickCapture = Notification.Name("composerQuickCapture")
 }
+
+/// The single Escape priority order for the board workspace. Keeping the decision independent from
+/// SwiftUI state mutations makes key routing deterministic and testable at the surface boundary.
+enum ComposerEscapeTarget: Equatable {
+  case boardDeletionConfirmation
+  case boardRename
+  case commandPalette
+  case focusedEditor
+  case compiledOverlay
+  case promotion
+  case auxiliaryPanel
+  case activeEditor
+  case drawingDraft
+  case tintPicker
+  case activeTool
+  case selection
+  case windowDismissal
+}
+
+struct ComposerEscapeState: Equatable {
+  var hasBoardDeletionConfirmation = false
+  var hasBoardRename = false
+  var hasCommandPalette = false
+  var hasFocusedEditor = false
+  var hasCompiledOverlay = false
+  var hasPromotion = false
+  var hasAgent = false
+  var hasSettings = false
+  var hasActiveEditor = false
+  var hasDrawingDraft = false
+  var hasTintPicker = false
+  var hasActiveTool = false
+  var hasSelection = false
+}
+
+enum ComposerEscapeCoordinator {
+  static func target(for state: ComposerEscapeState) -> ComposerEscapeTarget {
+    if state.hasBoardDeletionConfirmation { return .boardDeletionConfirmation }
+    if state.hasBoardRename { return .boardRename }
+    if state.hasCommandPalette { return .commandPalette }
+    if state.hasFocusedEditor { return .focusedEditor }
+    if state.hasCompiledOverlay { return .compiledOverlay }
+    if state.hasPromotion { return .promotion }
+    // NOTE: `DumpStore.isHistoryOpen` has no route here on purpose — nothing in the app can set
+    // it to true anymore (the history overlay went with the old floating-panel mode), so an
+    // Escape priority for it would be unreachable dead state.
+    if state.hasAgent || state.hasSettings { return .auxiliaryPanel }
+    if state.hasActiveEditor { return .activeEditor }
+    if state.hasDrawingDraft { return .drawingDraft }
+    if state.hasTintPicker { return .tintPicker }
+    if state.hasActiveTool { return .activeTool }
+    if state.hasSelection { return .selection }
+    return .windowDismissal
+  }
+}
