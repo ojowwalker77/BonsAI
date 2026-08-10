@@ -300,6 +300,50 @@ extension View {
 
 // MARK: - Panel backdrop
 
+private enum CanvasSurfaceStyle {
+  static func glassFraction(transparency: Double, isFullScreen: Bool) -> Double {
+    isFullScreen
+      ? 0
+      : ComposerPreferences.clampedCanvasTransparency(transparency)
+        / ComposerPreferences.maxCanvasTransparency
+  }
+
+  static func opacity(transparency: Double, isFullScreen: Bool) -> Double {
+    1.0 - 0.65 * glassFraction(transparency: transparency, isFullScreen: isFullScreen)
+  }
+}
+
+private struct CanvasFullScreenTracking: ViewModifier {
+  @Binding var isFullScreen: Bool
+
+  func body(content: Content) -> some View {
+    content
+      // The canvas can remount while already full screen, so read the actual board window first.
+      .onAppear {
+        isFullScreen = NSApp.windows.contains {
+          $0 is FloatingPanel && $0.styleMask.contains(.fullScreen)
+        }
+      }
+      .onReceive(NotificationCenter.default.publisher(
+        for: NSWindow.willEnterFullScreenNotification
+      )) { note in
+        if note.object is FloatingPanel { isFullScreen = true }
+      }
+      // Keep the surface solid through the exit animation; the window backing changes on did-exit.
+      .onReceive(NotificationCenter.default.publisher(
+        for: NSWindow.didExitFullScreenNotification
+      )) { note in
+        if note.object is FloatingPanel { isFullScreen = false }
+      }
+  }
+}
+
+private extension View {
+  func tracksCanvasFullScreen(_ isFullScreen: Binding<Bool>) -> some View {
+    modifier(CanvasFullScreenTracking(isFullScreen: isFullScreen))
+  }
+}
+
 /// The canvas backdrop: the solid board surface (black in dark, paper white in light) over a
 /// behind-window desktop blur. At the default 0 transparency the surface is fully opaque —
 /// indistinguishable from solid; sliding up recedes it so the frosted desktop shows through.
@@ -312,30 +356,54 @@ struct ComposerPanelBackground: View {
   @State private var isFullScreen = false
 
   var body: some View {
-    let glass = isFullScreen
-      ? 0.0
-      : ComposerPreferences.clampedCanvasTransparency(canvasTransparency)
-        / ComposerPreferences.maxCanvasTransparency
+    let glass = CanvasSurfaceStyle.glassFraction(
+      transparency: canvasTransparency,
+      isFullScreen: isFullScreen)
+    let surface = CanvasSurfaceStyle.opacity(
+      transparency: canvasTransparency,
+      isFullScreen: isFullScreen)
     ZStack {
       if glass > 0 {
         VisualEffectBackground(material: .hudWindow, blending: .behindWindow, state: .active)
       }
-      Theme.Palette.windowCanvas.opacity(1.0 - 0.65 * glass)
+      Theme.Palette.windowCanvas.opacity(surface)
     }
     .ignoresSafeArea()
-    // The canvas can (re)mount while already full screen — a theme switch rebuilds it — so the
-    // initial state is read from the board window, not assumed false.
-    .onAppear {
-      isFullScreen = NSApp.windows.contains { $0 is FloatingPanel && $0.styleMask.contains(.fullScreen) }
-    }
-    .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { note in
-      if note.object is FloatingPanel { isFullScreen = true }
-    }
-    // `didExit`, not `willExit`: the surface must stay solid until the exit animation has
-    // actually finished — flipping on `willExit` reinstated the gray HUD wash mid-transition,
-    // while the window itself is still deliberately opaque (PanelController restores on did).
-    .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
-      if note.object is FloatingPanel { isFullScreen = false }
-    }
+    .tracksCanvasFullScreen($isFullScreen)
+  }
+}
+
+/// Soft wash under the top chrome row: board content panned behind the pills fades toward the
+/// canvas surface instead of colliding with the controls at full contrast. Painted with the same
+/// flavor `base` as `ComposerPanelBackground` — scaled by the same transparency response — so it
+/// reads as the canvas continuing upward, not as a separate layer. Purely visual; it must never
+/// intercept events (cards and marquee drags keep working through it).
+struct CanvasTopFade: View {
+  @AppStorage(ComposerPreferences.canvasTransparencyKey) private var canvasTransparency = 0.0
+  @State private var isFullScreen = false
+
+  /// The chrome row plus a tail below it, so the ramp finishes well clear of the pills.
+  static let height: CGFloat = WindowChrome.edgeInset + WindowChrome.controlHeight + 44
+
+  var body: some View {
+    // Matches the backdrop's surface opacity so a glassy canvas gets an equally glassy fade;
+    // full screen pins both surfaces solid, and the top stop stays below 1 so content is dimmed,
+    // never hidden.
+    let surface = CanvasSurfaceStyle.opacity(
+      transparency: canvasTransparency,
+      isFullScreen: isFullScreen)
+    LinearGradient(
+      stops: [
+        .init(color: Theme.Palette.windowCanvas.opacity(0.88 * surface), location: 0.0),
+        .init(color: Theme.Palette.windowCanvas.opacity(0.55 * surface), location: 0.45),
+        .init(color: Theme.Palette.windowCanvas.opacity(0.0), location: 1.0),
+      ],
+      startPoint: .top,
+      endPoint: .bottom
+    )
+    .frame(height: Self.height)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    .allowsHitTesting(false)
+    .tracksCanvasFullScreen($isFullScreen)
   }
 }

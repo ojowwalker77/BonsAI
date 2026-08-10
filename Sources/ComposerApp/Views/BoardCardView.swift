@@ -16,6 +16,7 @@ struct BoardCardView: View {
   /// Board zoom — gesture translations are divided by it so moves/resizes track the cursor.
   let scale: CGFloat
   let board: BoardViewModel
+  let boardTextContext: BoardTextContext
   /// True only in the select tool. When false (any drawing tool) the card is pointer-transparent,
   /// so a drag starting over it falls through to the canvas and draws a new element instead of
   /// grabbing this card — selection/move/resize belong to the select tool alone.
@@ -27,6 +28,9 @@ struct BoardCardView: View {
   /// remains proportional type scaling; the two gestures intentionally solve different jobs.
   @GestureState private var textWidthResize: TextWidthResizeSession?
   @State private var hovering = false
+  /// The editor's live hug is local until editing ends. Publishing it through the board's cards
+  /// array would rebuild every visible card for each NSTextView layout callback.
+  @State private var liveTextFrame: CGRect?
   /// The ⌥-click Point Composer: prefilled X/Y (from the click's data coords), a label, and a tint
   /// swatch. Non-nil while the strip is up.
   @State private var pointComposer: PointComposerDraft?
@@ -71,6 +75,7 @@ struct BoardCardView: View {
 
   /// The frame to draw right now — base frame plus any in-flight move or resize.
   private var liveFrame: CGRect {
+    if isEditing, let liveTextFrame { return liveTextFrame }
     if let resize { return applyResize(resize.corner, translation: resize.translation, to: card.frame) }
     if let textWidthResize {
       return textWidthFrame(textWidthResize.edge, translation: textWidthResize.translation, in: card.frame)
@@ -108,7 +113,11 @@ struct BoardCardView: View {
       .onChange(of: card.tint) { _, _ in applyEditorTint() }
       .onChange(of: isEditing) { _, editing in
         // The inline text editor mounts a beat after editing flips on; recolor once it exists.
-        if editing { DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { applyEditorTint() } }
+        if editing {
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { applyEditorTint() }
+        } else {
+          liveTextFrame = nil
+        }
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerAddGraphPoint)) { note in
         // The ⌘K "Add point to graph…" command targets a graph card by id; only that card responds,
@@ -157,11 +166,14 @@ struct BoardCardView: View {
             // from its laid-out text, both in board units (the editor lays out at board size and
             // is scaled by zoom). Sizing from a parallel NSString measurement clipped the top line
             // (the twin wraps ~10pt before the view); see `fitTextEditing`.
-            board.fitTextEditing(card.id, naturalEditorWidth: naturalWidth, editorContentHeight: contentHeight)
+            liveTextFrame = board.fitTextEditing(
+              card.id,
+              naturalEditorWidth: naturalWidth,
+              editorContentHeight: contentHeight)
           },
           fontScale: card.textScale,
           boardContext: { board.lintContext(excluding: card.id) },
-          definedVariables: { board.definedVariableNames },
+          definedVariables: { boardTextContext.definedVariableNames },
           cardTint: { card.tint },
           mentions: interaction.mentions,
           appSearch: interaction.appSearch,
@@ -182,7 +194,7 @@ struct BoardCardView: View {
         // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
         // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
         // zoom so the text is laid out at screen size (crisp), not stretched.
-        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: board.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: boardTextContext.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
           .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)

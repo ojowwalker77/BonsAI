@@ -159,6 +159,9 @@ struct ComposerCanvas: View {
       ZStack(alignment: .topLeading) {
         ComposerPanelBackground()
         boardContent(viewportSize: inner)
+        // Wash only board content. Drafts, toasts, and active-card overlays stay above the fade so
+        // their own surfaces keep their intended contrast.
+        CanvasTopFade()
         compiledOverlay
         toastView
       }
@@ -373,6 +376,7 @@ struct ComposerCanvas: View {
       BoardCardLayer(
         cards: visibleCards(in: viewportSize),
         board: board,
+        boardTextContext: board.boardTextContext,
         selectedCardIDs: board.selectedCardIDs,
         editingCardID: board.editingCardID,
         primarySelectedCardID: board.primarySelectedCardID,
@@ -568,13 +572,10 @@ struct ComposerCanvas: View {
                              y: (point.y - pan.height) / effectiveScale)
     let id = board.addElement(kind, at: boardPoint)
     tool = .select
-    // Text and equation both drop straight into edit mode — an empty card is useless until you
-    // type. The editor now lives in the centered `EditingStage` (keyed off `editingCardID`), which
-    // owns its own focus delay, so both kinds just arm edit mode after the card mounts.
+    // Editing state is established synchronously so navigation cannot race the stage's own focus
+    // delay and persist an abandoned structured card before its editor mounts.
     if kind == .text || kind == .equation || kind == .sticky || kind == .checklist || kind == .table {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-        board.beginEditing(id)
-      }
+      board.beginEditing(id)
     }
   }
 
@@ -1565,20 +1566,38 @@ struct ComposerCanvas: View {
   }
 
   private func gotoOlder() {
+    guard store.canGoOlder else { return }
     guard commitBoardRename() else { return }
-    board.flushSave(); store.goOlder(); board.loadFromStore(); resetView()
+    guard checkpointBeforeLeavingCurrentBoard() else { return }
+    store.goOlder(); board.loadFromStore(); resetView()
   }
   private func gotoNewer() {
+    guard store.canGoNewer else { return }
     guard commitBoardRename() else { return }
-    board.flushSave(); store.goNewer(); board.loadFromStore(); resetView()
+    guard checkpointBeforeLeavingCurrentBoard() else { return }
+    store.goNewer(); board.loadFromStore(); resetView()
   }
   private func newBoard() {
+    // DumpStore intentionally refuses to stack blank boards. Match that no-op before ending the
+    // active edit, including live text that has not reached the persisted dump yet.
+    guard board.hasMeaningfulContent || store.current?.isBlank == false else { return }
     guard commitBoardRename() else { return }
-    board.flushSave(); store.newDump(); board.loadFromStore(); resetView(); focusFirstCard()
+    guard checkpointBeforeLeavingCurrentBoard() else { return }
+    store.newDump(); board.loadFromStore(); resetView(); focusFirstCard()
   }
   private func pickBoard(_ id: PersistentIdentifier) {
+    guard id != store.currentID,
+          store.dumps.contains(where: { $0.persistentModelID == id }) else { return }
     guard commitBoardRename() else { return }
-    board.flushSave(); store.select(id); board.loadFromStore(); resetView()
+    guard checkpointBeforeLeavingCurrentBoard() else { return }
+    store.select(id); board.loadFromStore(); resetView()
+  }
+
+  /// Protected recovery boards are deliberately read-only: their fallback edits are never saved,
+  /// but that must not trap the user on the board. Editable boards still require a successful
+  /// checkpoint before any action that replaces the working card array.
+  private func checkpointBeforeLeavingCurrentBoard() -> Bool {
+    store.currentBoardProtection != nil || board.flushSave(abandoningActiveEdit: true)
   }
   private func requestBoardDeletion(_ id: PersistentIdentifier, title: String) {
     guard store.dumps.count > 1,
@@ -1596,6 +1615,7 @@ struct ComposerCanvas: View {
     if deletingCurrent {
       // Deleting the open board swaps the canvas onto the next one, so checkpoint first: if
       // storage is failing, abort rather than tear down a board whose edits can't be saved.
+      // Deletion is destructive, so unlike navigation it never bypasses protected recovery data.
       guard board.flushSave() else {
         show(Toast(
           text: "The board was not deleted because its latest changes could not be saved.".localizedUI,
@@ -2764,9 +2784,8 @@ private struct ActiveCardOverlays: View {
 /// the selection/editing/primary ids, the zoom, the select-tool gate, and the shell-failure marks.
 ///
 /// `board` and `onEscape` are excluded from `==` on purpose — the board is one stable instance and
-/// the closure is stable, so comparing them would be meaningless. `definedVariableNames` is also left
-/// out deliberately: it's an O(n) string rebuild to read and only changes when card text is committed
-/// (which already changes `cards`), so including it would cost per frame for no behavior gain.
+/// the closure is stable, so comparing them would be meaningless. The immutable text context is
+/// included so a cross-card definition edit refreshes every card exactly once for that revision.
 ///
 /// Each `BoardCardView` still observes its own `CardInteraction`, so editing/typing a card re-renders
 /// just that card even while this whole layer is skipped — the same way the capture overlay stays
@@ -2774,6 +2793,7 @@ private struct ActiveCardOverlays: View {
 struct BoardCardLayer: View, Equatable {
   let cards: [CardState]
   let board: BoardViewModel
+  let boardTextContext: BoardTextContext
   let selectedCardIDs: Set<UUID>
   let editingCardID: UUID?
   let primarySelectedCardID: UUID?
@@ -2786,6 +2806,7 @@ struct BoardCardLayer: View, Equatable {
 
   static func == (lhs: BoardCardLayer, rhs: BoardCardLayer) -> Bool {
     lhs.cards == rhs.cards &&
+      lhs.boardTextContext.definedVariableNames == rhs.boardTextContext.definedVariableNames &&
       lhs.selectedCardIDs == rhs.selectedCardIDs &&
       lhs.editingCardID == rhs.editingCardID &&
       lhs.primarySelectedCardID == rhs.primarySelectedCardID &&
@@ -2805,6 +2826,7 @@ struct BoardCardLayer: View, Equatable {
           isEditing: editingCardID == card.id,
           scale: scale,
           board: board,
+          boardTextContext: boardTextContext,
           selectable: selectable
         )
         .zIndex(Double(card.z) + (primarySelectedCardID == card.id ? 10_000 : 0))
