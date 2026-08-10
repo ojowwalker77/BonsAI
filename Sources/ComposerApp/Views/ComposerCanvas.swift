@@ -373,6 +373,7 @@ struct ComposerCanvas: View {
       BoardCardLayer(
         cards: visibleCards(in: viewportSize),
         board: board,
+        boardTextContext: board.boardTextContext,
         selectedCardIDs: board.selectedCardIDs,
         editingCardID: board.editingCardID,
         primarySelectedCardID: board.primarySelectedCardID,
@@ -1566,19 +1567,23 @@ struct ComposerCanvas: View {
 
   private func gotoOlder() {
     guard commitBoardRename() else { return }
-    board.flushSave(); store.goOlder(); board.loadFromStore(); resetView()
+    guard board.flushSave() else { return }
+    store.goOlder(); board.loadFromStore(); resetView()
   }
   private func gotoNewer() {
     guard commitBoardRename() else { return }
-    board.flushSave(); store.goNewer(); board.loadFromStore(); resetView()
+    guard board.flushSave() else { return }
+    store.goNewer(); board.loadFromStore(); resetView()
   }
   private func newBoard() {
     guard commitBoardRename() else { return }
-    board.flushSave(); store.newDump(); board.loadFromStore(); resetView(); focusFirstCard()
+    guard board.flushSave() else { return }
+    store.newDump(); board.loadFromStore(); resetView(); focusFirstCard()
   }
   private func pickBoard(_ id: PersistentIdentifier) {
     guard commitBoardRename() else { return }
-    board.flushSave(); store.select(id); board.loadFromStore(); resetView()
+    guard board.flushSave() else { return }
+    store.select(id); board.loadFromStore(); resetView()
   }
   private func requestBoardDeletion(_ id: PersistentIdentifier, title: String) {
     guard store.dumps.count > 1,
@@ -2764,9 +2769,8 @@ private struct ActiveCardOverlays: View {
 /// the selection/editing/primary ids, the zoom, the select-tool gate, and the shell-failure marks.
 ///
 /// `board` and `onEscape` are excluded from `==` on purpose — the board is one stable instance and
-/// the closure is stable, so comparing them would be meaningless. `definedVariableNames` is also left
-/// out deliberately: it's an O(n) string rebuild to read and only changes when card text is committed
-/// (which already changes `cards`), so including it would cost per frame for no behavior gain.
+/// the closure is stable, so comparing them would be meaningless. The immutable text context is
+/// included so a cross-card definition edit refreshes every card exactly once for that revision.
 ///
 /// Each `BoardCardView` still observes its own `CardInteraction`, so editing/typing a card re-renders
 /// just that card even while this whole layer is skipped — the same way the capture overlay stays
@@ -2774,6 +2778,7 @@ private struct ActiveCardOverlays: View {
 struct BoardCardLayer: View, Equatable {
   let cards: [CardState]
   let board: BoardViewModel
+  let boardTextContext: BoardTextContext
   let selectedCardIDs: Set<UUID>
   let editingCardID: UUID?
   let primarySelectedCardID: UUID?
@@ -2786,6 +2791,7 @@ struct BoardCardLayer: View, Equatable {
 
   static func == (lhs: BoardCardLayer, rhs: BoardCardLayer) -> Bool {
     lhs.cards == rhs.cards &&
+      lhs.boardTextContext.definedVariableNames == rhs.boardTextContext.definedVariableNames &&
       lhs.selectedCardIDs == rhs.selectedCardIDs &&
       lhs.editingCardID == rhs.editingCardID &&
       lhs.primarySelectedCardID == rhs.primarySelectedCardID &&
@@ -2805,6 +2811,7 @@ struct BoardCardLayer: View, Equatable {
           isEditing: editingCardID == card.id,
           scale: scale,
           board: board,
+          boardTextContext: boardTextContext,
           selectable: selectable
         )
         .zIndex(Double(card.z) + (primarySelectedCardID == card.id ? 10_000 : 0))

@@ -68,4 +68,41 @@ final class TextHugTests: XCTestCase {
     // fontScale == 1 is stored as nil so the card decodes like a board that never had the feature.
     XCTAssertNil(board.cards.first { $0.id == id }!.fontScale)
   }
+
+  // MARK: - Live edit frames (fitTextEditing)
+
+  func testStaleLayoutCallbackAfterEditEndCannotResurrectOldFrame() {
+    let board = makeBoard()
+    let id = board.insertText("live hug", at: CGPoint(x: 40, y: 40))
+    board.beginEditing(id)
+    XCTAssertNotNil(board.fitTextEditing(id, naturalEditorWidth: 300, editorContentHeight: 200))
+    board.endEditing(id)
+    let committed = board.cards.first { $0.id == id }!.frame
+
+    // The editor reports layout through an async main-queue hop, so a callback queued during the
+    // edit can land after it ended. It must be rejected — accepting it would park a stale live
+    // frame that every later save/export silently persists.
+    XCTAssertNil(board.fitTextEditing(id, naturalEditorWidth: 800, editorContentHeight: 600))
+    let snapshot = board.renderingSnapshot(for: board.cards)
+    XCTAssertEqual(snapshot.first { $0.id == id }?.frame, committed)
+  }
+
+  func testFitTextEditingRequiresActiveEditSession() {
+    let board = makeBoard()
+    let id = board.insertText("not editing", at: CGPoint(x: 40, y: 40))
+    // No edit session at all → the callback is a stray and writes nothing.
+    XCTAssertNil(board.fitTextEditing(id, naturalEditorWidth: 300, editorContentHeight: 200))
+  }
+
+  func testClipboardCarriesLiveAutoFitFrameWhileEditing() {
+    let board = makeBoard()
+    let id = board.insertText("copy me", at: CGPoint(x: 40, y: 40))
+    board.beginEditing(id)
+    guard let live = board.fitTextEditing(id, naturalEditorWidth: 300, editorContentHeight: 240) else {
+      return XCTFail("no live frame")
+    }
+    // ⌘C while the editor is open must carry the frame you SEE, not the last committed one.
+    let clip = board.selectedCardsForClipboard()
+    XCTAssertEqual(clip.first { $0.id == id }?.frame.size, live.size)
+  }
 }
