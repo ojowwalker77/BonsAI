@@ -1567,19 +1567,23 @@ struct ComposerCanvas: View {
 
   private func gotoOlder() {
     guard commitBoardRename() else { return }
-    board.flushSave(); store.goOlder(); board.loadFromStore(); resetView()
+    guard board.flushSave() else { return }
+    store.goOlder(); board.loadFromStore(); resetView()
   }
   private func gotoNewer() {
     guard commitBoardRename() else { return }
-    board.flushSave(); store.goNewer(); board.loadFromStore(); resetView()
+    guard board.flushSave() else { return }
+    store.goNewer(); board.loadFromStore(); resetView()
   }
   private func newBoard() {
     guard commitBoardRename() else { return }
-    board.flushSave(); store.newDump(); board.loadFromStore(); resetView(); focusFirstCard()
+    guard board.flushSave() else { return }
+    store.newDump(); board.loadFromStore(); resetView(); focusFirstCard()
   }
   private func pickBoard(_ id: PersistentIdentifier) {
     guard commitBoardRename() else { return }
-    board.flushSave(); store.select(id); board.loadFromStore(); resetView()
+    guard board.flushSave() else { return }
+    store.select(id); board.loadFromStore(); resetView()
   }
   private func requestBoardDeletion(_ id: PersistentIdentifier, title: String) {
     guard store.dumps.count > 1,

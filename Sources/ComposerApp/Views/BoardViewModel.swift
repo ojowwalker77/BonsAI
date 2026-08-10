@@ -157,6 +157,11 @@ final class BoardViewModel: ObservableObject {
   /// `insertText`/`connectCards` calls don't each push their own undo step — the batch registers
   /// exactly one at the top.
   private var suppressUndo = false
+  /// Compound operations can touch many text-bearing cards. Delay the expensive board-wide
+  /// definition scan until the outermost operation finishes while keeping independent mutations
+  /// immediately observable.
+  private var boardTextContextBatchDepth = 0
+  private var boardTextContextInvalidationPending = false
   /// Who authored the next mutation: `Author.human` by default; the canvas bridge flips it to
   /// `Author.agent` while applying an agent's edits, so every card records who last wrote it.
   var nextAuthor = Author.human
@@ -193,6 +198,7 @@ final class BoardViewModel: ObservableObject {
   var cachedHistorySnapshotCardCount: Int {
     undoCache.values.reduce(0) { $0 + $1.snapshotCardCount }
   }
+  var cachedHistoryBoardIDs: Set<PersistentIdentifier> { Set(undoCache.keys) }
 
   /// The injectable store exists for tests (an in-memory `DumpStore`); the app always uses shared.
   /// (`nil` default rather than `= .shared`: a default-argument expression is nonisolated, so it
@@ -399,11 +405,27 @@ final class BoardViewModel: ObservableObject {
   }
 
   private func invalidateBoardTextContext() {
+    if boardTextContextBatchDepth > 0 {
+      boardTextContextInvalidationPending = true
+      return
+    }
     boardTextRevision &+= 1
     boardTextContextDerivationCount += 1
     boardTextContext = BoardTextContext(
       revision: boardTextRevision,
       definedVariableNames: ShellTemplate.definedNames(in: joinedPlainText()))
+  }
+
+  private func beginBoardTextContextBatch() {
+    boardTextContextBatchDepth += 1
+  }
+
+  private func endBoardTextContextBatch() {
+    precondition(boardTextContextBatchDepth > 0)
+    boardTextContextBatchDepth -= 1
+    guard boardTextContextBatchDepth == 0, boardTextContextInvalidationPending else { return }
+    boardTextContextInvalidationPending = false
+    invalidateBoardTextContext()
   }
 
   /// Geometry + live plain text, ready to persist.
@@ -1337,7 +1359,13 @@ final class BoardViewModel: ObservableObject {
     guard !specs.isEmpty else { return [:] }
     registerUndo()
     suppressUndo = true
-    defer { suppressUndo = false; refreshBoundArrows(); scheduleSave() }
+    beginBoardTextContextBatch()
+    defer {
+      suppressUndo = false
+      endBoardTextContextBatch()
+      refreshBoundArrows()
+      scheduleSave()
+    }
 
     // Where the diagram starts: a fresh, empty board gets a clean margin (and we drop the lone
     // blank starter card); otherwise it drops below whatever's already there.
@@ -1609,6 +1637,7 @@ final class BoardViewModel: ObservableObject {
     guard abs(cards[i].w - Double(fitted.width)) > 0.5 || abs(cards[i].h - Double(fitted.height)) > 0.5 else { return }
     cards[i].w = Double(fitted.width)
     cards[i].h = Double(fitted.height)
+    refreshBoundArrows()
     scheduleSave()
   }
 
@@ -1685,6 +1714,7 @@ final class BoardViewModel: ObservableObject {
     registerUndo()
     cards.removeAll { $0.id == id }
     interactions[id] = nil
+    liveTextFrames[id] = nil
     if editingCardID == id { editingCardID = nil }
     selectedCardIDs.remove(id)
     if primarySelectedCardID == id { primarySelectedCardID = selectedCardIDs.first }

@@ -57,18 +57,60 @@ final class BoardViewModelRenderBudgetTests: XCTestCase {
     XCTAssertEqual(board.boardTextContext.definedVariableNames, Set(["name"]))
   }
 
+  func testDiagramBatchesBoardTextContextDerivation() {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true, loadInitialContent: false))
+    let before = board.boardTextContextDerivationCount
+
+    _ = board.createDiagram(
+      nodes: [
+        .init(key: "source", text: "source=(value)"),
+        .init(key: "target", text: "$source"),
+      ],
+      edges: [
+        .init(from: "source", to: "target", reason: "first"),
+        .init(from: "source", to: "target", reason: "second"),
+      ],
+      direction: .right)
+
+    XCTAssertEqual(board.boardTextContextDerivationCount, before + 1)
+    XCTAssertEqual(board.boardTextContext.definedVariableNames, Set(["source"]))
+  }
+
   func testInactiveHistoryIsBoundedAndActiveHistoryStaysOutOfCache() throws {
     let store = DumpStore(inMemoryOnly: true, loadInitialContent: false)
     let board = BoardViewModel(store: store)
+    let firstBoardID = try XCTUnwrap(store.currentID)
+    let firstCard = try XCTUnwrap(board.cards.first)
 
-    for index in 0..<(BoardViewModel.maxCachedHistoryBoards + 3) {
+    board.setText(firstCard.id, "retained")
+    XCTAssertTrue(board.flushSave())
+    store.newDump()
+    board.loadFromStore()
+
+    // Switching away retains history, and switching back restores behavior rather than merely
+    // keeping a cache entry that cannot be used.
+    XCTAssertTrue(board.cachedHistoryBoardIDs.contains(firstBoardID))
+    store.select(firstBoardID)
+    board.loadFromStore()
+    board.undo()
+    XCTAssertEqual(board.plainText(for: try XCTUnwrap(board.cards.first)), "")
+    board.redo()
+    XCTAssertEqual(board.plainText(for: try XCTUnwrap(board.cards.first)), "retained")
+
+    // Move away again so the restored board becomes the least-recently-used inactive entry.
+    XCTAssertTrue(board.flushSave())
+    store.newDump()
+    board.loadFromStore()
+
+    for index in 0...BoardViewModel.maxCachedHistoryBoards {
       let card = try XCTUnwrap(board.cards.first)
-      board.setText(card.id, "board (index)")
-      board.flushSave()
+      board.setText(card.id, "board \(index)")
+      XCTAssertTrue(board.flushSave())
       store.newDump()
       board.loadFromStore()
     }
 
+    XCTAssertFalse(board.cachedHistoryBoardIDs.contains(firstBoardID))
     XCTAssertLessThanOrEqual(board.cachedHistoryBoardCount, BoardViewModel.maxCachedHistoryBoards)
     XCTAssertLessThanOrEqual(board.cachedHistorySnapshotCardCount,
                              BoardViewModel.maxCachedHistorySnapshotCards)

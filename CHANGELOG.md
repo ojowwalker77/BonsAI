@@ -12,6 +12,7 @@ under the new version heading.
 ## [Unreleased]
 
 ### Fixed
+
 - **Large boards stay responsive and no longer grow memory without bound.** Board-wide variable
   names are cached and invalidated only when edits, card lifecycle changes, undo/redo, or board
   loads require it; live text-editor sizing is held out of the published board until the edit
