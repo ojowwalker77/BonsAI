@@ -48,6 +48,18 @@ final class BoardPersistenceTests: XCTestCase {
     XCTAssertTrue(payload.cards.isEmpty)
   }
 
+  func testTeardownFlushDiscardsAnUncommittedBlankEquation() throws {
+    let store = makeStore()
+    let board = BoardViewModel(store: store)
+    let equationID = board.addElement(.equation, at: CGPoint(x: 200, y: 200))
+    board.beginEditing(equationID)
+
+    XCTAssertTrue(board.flushSave(abandoningActiveEdit: true))
+
+    XCTAssertFalse(board.cards.contains(where: { $0.id == equationID }))
+    XCTAssertNil(board.editingCardID)
+  }
+
   func testNewPayloadHasExplicitVersionAndLegacyArraysStillDecode() throws {
     let cards = [CardState.firstCard(text: "Versioned")]
 

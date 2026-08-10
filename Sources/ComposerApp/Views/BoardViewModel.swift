@@ -360,6 +360,9 @@ final class BoardViewModel: ObservableObject {
     // during the mount/focus delay of a freshly placed card), so the editor's own focus-loss
     // callback never fires `endEditing` — the abandoned-card discard must also happen here.
     discardIfAbandoned(id)
+    // Structured stages keep equation input as a local draft. If navigation/teardown retires the
+    // session before that draft ever commits, remove the invisible blank equation as well.
+    pruneBlankEquation(id)
   }
 
   // MARK: Load / save
