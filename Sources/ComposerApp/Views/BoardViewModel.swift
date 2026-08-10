@@ -199,6 +199,12 @@ final class BoardViewModel: ObservableObject {
     undoCache.values.reduce(0) { $0 + $1.snapshotCardCount }
   }
   var cachedHistoryBoardIDs: Set<PersistentIdentifier> { Set(undoCache.keys) }
+  var hasMeaningfulContent: Bool {
+    cards.contains { card in
+      card.elementKind != .text ||
+        !plainText(for: card).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+  }
 
   /// The injectable store exists for tests (an in-memory `DumpStore`); the app always uses shared.
   /// (`nil` default rather than `= .shared`: a default-argument expression is nonisolated, so it
