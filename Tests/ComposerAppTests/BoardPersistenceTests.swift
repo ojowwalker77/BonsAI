@@ -14,7 +14,8 @@ final class BoardPersistenceTests: XCTestCase {
 
     XCTAssertTrue(board.cards.isEmpty)
     XCTAssertTrue(board.flushSave())
-    XCTAssertTrue(store.currentCards.isEmpty)
+    let payload = try BoardPayload.decode(try XCTUnwrap(store.current?.cardsData))
+    XCTAssertTrue(payload.cards.isEmpty)
   }
 
   func testRemountFlushKeepsTransientlyEmptyActiveEdit() throws {
@@ -43,7 +44,8 @@ final class BoardPersistenceTests: XCTestCase {
     XCTAssertTrue(board.cards.isEmpty)
     XCTAssertNil(board.editingCardID)
     XCTAssertFalse(board.selectedCardIDs.contains(id))
-    XCTAssertTrue(store.currentCards.isEmpty)
+    let payload = try BoardPayload.decode(try XCTUnwrap(store.current?.cardsData))
+    XCTAssertTrue(payload.cards.isEmpty)
   }
 
   func testNewPayloadHasExplicitVersionAndLegacyArraysStillDecode() throws {
