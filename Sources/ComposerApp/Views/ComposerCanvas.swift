@@ -1567,22 +1567,22 @@ struct ComposerCanvas: View {
 
   private func gotoOlder() {
     guard commitBoardRename() else { return }
-    guard board.flushSave() else { return }
+    guard board.flushSave(abandoningActiveEdit: true) else { return }
     store.goOlder(); board.loadFromStore(); resetView()
   }
   private func gotoNewer() {
     guard commitBoardRename() else { return }
-    guard board.flushSave() else { return }
+    guard board.flushSave(abandoningActiveEdit: true) else { return }
     store.goNewer(); board.loadFromStore(); resetView()
   }
   private func newBoard() {
     guard commitBoardRename() else { return }
-    guard board.flushSave() else { return }
+    guard board.flushSave(abandoningActiveEdit: true) else { return }
     store.newDump(); board.loadFromStore(); resetView(); focusFirstCard()
   }
   private func pickBoard(_ id: PersistentIdentifier) {
     guard commitBoardRename() else { return }
-    guard board.flushSave() else { return }
+    guard board.flushSave(abandoningActiveEdit: true) else { return }
     store.select(id); board.loadFromStore(); resetView()
   }
   private func requestBoardDeletion(_ id: PersistentIdentifier, title: String) {
@@ -1601,7 +1601,7 @@ struct ComposerCanvas: View {
     if deletingCurrent {
       // Deleting the open board swaps the canvas onto the next one, so checkpoint first: if
       // storage is failing, abort rather than tear down a board whose edits can't be saved.
-      guard board.flushSave() else {
+      guard board.flushSave(abandoningActiveEdit: true) else {
         show(Toast(
           text: "The board was not deleted because its latest changes could not be saved.".localizedUI,
           symbol: "exclamationmark.triangle.fill",

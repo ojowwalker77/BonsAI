@@ -15,7 +15,7 @@ final class CanvasBridge {
   /// `DumpStore`'s autosave is debounced ~400ms, so an edit (including one from an external
   /// agent via the canvas API) made just before quit would otherwise never reach disk.
   func flush() {
-    board?.flushSave()
+    board?.flushSave(abandoningActiveEdit: true)
   }
 
   // MARK: Read

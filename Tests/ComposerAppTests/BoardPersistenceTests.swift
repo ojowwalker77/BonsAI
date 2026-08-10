@@ -4,6 +4,48 @@ import SwiftData
 
 @MainActor
 final class BoardPersistenceTests: XCTestCase {
+  func testAbandoningOnlyTextCardPersistsAnActuallyEmptyBoard() throws {
+    let store = makeStore()
+    let board = BoardViewModel(store: store)
+    let id = try XCTUnwrap(board.cards.first?.id)
+
+    board.beginEditing(id)
+    board.endEditing(id)
+
+    XCTAssertTrue(board.cards.isEmpty)
+    XCTAssertTrue(board.flushSave())
+    XCTAssertTrue(store.currentCards.isEmpty)
+  }
+
+  func testRemountFlushKeepsTransientlyEmptyActiveEdit() throws {
+    let store = makeStore()
+    let board = BoardViewModel(store: store)
+    let card = try XCTUnwrap(board.cards.first)
+    board.setText(card.id, "draft")
+    board.beginEditing(card.id)
+    board.interaction(for: card.id).cachePlainText("")
+
+    XCTAssertTrue(board.flushSave())
+
+    XCTAssertTrue(board.cards.contains(where: { $0.id == card.id }))
+    XCTAssertEqual(board.editingCardID, card.id)
+  }
+
+  func testTeardownFlushDiscardsBlankAndDelayedFocusCannotResurrectIt() throws {
+    let store = makeStore()
+    let board = BoardViewModel(store: store)
+    let id = try XCTUnwrap(board.cards.first?.id)
+    board.beginEditing(id)
+
+    XCTAssertTrue(board.flushSave(abandoningActiveEdit: true))
+    board.beginEditing(id)
+
+    XCTAssertTrue(board.cards.isEmpty)
+    XCTAssertNil(board.editingCardID)
+    XCTAssertFalse(board.selectedCardIDs.contains(id))
+    XCTAssertTrue(store.currentCards.isEmpty)
+  }
+
   func testNewPayloadHasExplicitVersionAndLegacyArraysStillDecode() throws {
     let cards = [CardState.firstCard(text: "Versioned")]
 

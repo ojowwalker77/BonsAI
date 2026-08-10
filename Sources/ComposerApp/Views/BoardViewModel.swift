@@ -300,6 +300,9 @@ final class BoardViewModel: ObservableObject {
 
   /// Double-click / freshly placed card / click into the editor: enter text edit.
   func beginEditing(_ id: UUID) {
+    // Placement focus is delayed until the editor mounts. The card may have been abandoned during
+    // that delay, so never resurrect selection/editing state for an ID that no longer exists.
+    guard cards.contains(where: { $0.id == id }) else { return }
     selectedCardIDs = [id]
     primarySelectedCardID = id
     editingCardID = id
@@ -327,7 +330,7 @@ final class BoardViewModel: ObservableObject {
     guard let i = index(for: id), cards[i].elementKind == .text,
           plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else { return }
-    delete(id)
+    delete(id, createStarterIfEmpty: false)
   }
 
   /// Click on empty board: drop selection and leave text edit (resigning the editor).
@@ -484,10 +487,13 @@ final class BoardViewModel: ObservableObject {
   /// Build the persistence snapshot only when the debounce actually fires. This avoids cloning
   /// the entire board on every keystroke and keeps cancelled saves from retaining stale snapshots.
   func scheduleSave() { store.scheduleUpdate { [weak self] in self?.snapshot() } }
-  /// Ends any in-flight edit first so an abandoned empty text card is discarded — not persisted —
-  /// when the board is switched or the workspace tears down mid-edit.
+  /// Force the current snapshot to storage. Remount-only flushes keep the active edit alive; real
+  /// navigation/teardown callers opt into ending it so an abandoned blank is discarded.
   @discardableResult
-  func flushSave() -> Bool { stopEditing(); return store.flush(cards: snapshot()) }
+  func flushSave(abandoningActiveEdit: Bool = false) -> Bool {
+    if abandoningActiveEdit { stopEditing() }
+    return store.flush(cards: snapshot())
+  }
 
   @discardableResult
   func duplicateProtectedBoardForEditing() -> Bool {
@@ -1722,6 +1728,10 @@ final class BoardViewModel: ObservableObject {
   }
 
   func delete(_ id: UUID) {
+    delete(id, createStarterIfEmpty: true)
+  }
+
+  private func delete(_ id: UUID, createStarterIfEmpty: Bool) {
     clearMovePreview()
     guard let i = index(for: id), !cards[i].locked else { return }
     registerUndo()
@@ -1731,7 +1741,7 @@ final class BoardViewModel: ObservableObject {
     if editingCardID == id { editingCardID = nil }
     selectedCardIDs.remove(id)
     if primarySelectedCardID == id { primarySelectedCardID = selectedCardIDs.first }
-    if cards.isEmpty {
+    if cards.isEmpty, createStarterIfEmpty {
       let fresh = CardState.firstCard()
       cards = [fresh]
       interactions[fresh.id] = CardInteraction(fresh)
