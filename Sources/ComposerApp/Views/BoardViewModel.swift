@@ -1121,7 +1121,7 @@ final class BoardViewModel: ObservableObject {
   func pruneBlankEquation(_ id: UUID) {
     guard let i = index(for: id), cards[i].elementKind == .equation else { return }
     let committed = (cards[i].latex ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    if committed.isEmpty { delete(id) }
+    if committed.isEmpty { delete(id, createStarterIfEmpty: false) }
   }
 
   // MARK: Promotions (the "promotion seam" — rough matter promoted into richer matter)
