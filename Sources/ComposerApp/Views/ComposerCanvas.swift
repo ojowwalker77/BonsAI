@@ -1567,23 +1567,30 @@ struct ComposerCanvas: View {
 
   private func gotoOlder() {
     guard commitBoardRename() else { return }
-    guard board.flushSave() else { return }
+    guard checkpointBeforeLeavingCurrentBoard() else { return }
     store.goOlder(); board.loadFromStore(); resetView()
   }
   private func gotoNewer() {
     guard commitBoardRename() else { return }
-    guard board.flushSave() else { return }
+    guard checkpointBeforeLeavingCurrentBoard() else { return }
     store.goNewer(); board.loadFromStore(); resetView()
   }
   private func newBoard() {
     guard commitBoardRename() else { return }
-    guard board.flushSave() else { return }
+    guard checkpointBeforeLeavingCurrentBoard() else { return }
     store.newDump(); board.loadFromStore(); resetView(); focusFirstCard()
   }
   private func pickBoard(_ id: PersistentIdentifier) {
     guard commitBoardRename() else { return }
-    guard board.flushSave() else { return }
+    guard checkpointBeforeLeavingCurrentBoard() else { return }
     store.select(id); board.loadFromStore(); resetView()
+  }
+
+  /// Protected recovery boards are deliberately read-only: their fallback edits are never saved,
+  /// but that must not trap the user on the board. Editable boards still require a successful
+  /// checkpoint before any action that replaces the working card array.
+  private func checkpointBeforeLeavingCurrentBoard() -> Bool {
+    store.currentBoardProtection != nil || board.flushSave()
   }
   private func requestBoardDeletion(_ id: PersistentIdentifier, title: String) {
     guard store.dumps.count > 1,
@@ -1601,7 +1608,7 @@ struct ComposerCanvas: View {
     if deletingCurrent {
       // Deleting the open board swaps the canvas onto the next one, so checkpoint first: if
       // storage is failing, abort rather than tear down a board whose edits can't be saved.
-      guard board.flushSave() else {
+      guard checkpointBeforeLeavingCurrentBoard() else {
         show(Toast(
           text: "The board was not deleted because its latest changes could not be saved.".localizedUI,
           symbol: "exclamationmark.triangle.fill",
