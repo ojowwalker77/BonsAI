@@ -569,13 +569,10 @@ struct ComposerCanvas: View {
                              y: (point.y - pan.height) / effectiveScale)
     let id = board.addElement(kind, at: boardPoint)
     tool = .select
-    // Text and equation both drop straight into edit mode — an empty card is useless until you
-    // type. The editor now lives in the centered `EditingStage` (keyed off `editingCardID`), which
-    // owns its own focus delay, so both kinds just arm edit mode after the card mounts.
+    // Editing state is established synchronously so navigation cannot race the stage's own focus
+    // delay and persist an abandoned structured card before its editor mounts.
     if kind == .text || kind == .equation || kind == .sticky || kind == .checklist || kind == .table {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-        board.beginEditing(id)
-      }
+      board.beginEditing(id)
     }
   }
 
