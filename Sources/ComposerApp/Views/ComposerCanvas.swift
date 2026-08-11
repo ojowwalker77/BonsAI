@@ -73,6 +73,9 @@ struct ComposerCanvas: View {
   /// The card that held the caret when the palette was summoned, captured before the palette's
   /// search field steals first responder — so a cancel can hand editing back to it.
   @State private var paletteReturnCardID: UUID?
+  /// A quick capture gets one second-pass reveal after its AppKit editor reports the true live hug.
+  /// Cleared immediately after that callback so ordinary typing never auto-pans the board.
+  @State private var quickCaptureRevealCardID: UUID?
 
   // Board transform. Committed scale/pan live in the retained workspace so changing the theme or
   // language does not teleport the user back to the origin. The in-flight gesture remains local.
@@ -229,7 +232,12 @@ struct ComposerCanvas: View {
       else if let previous { evaluateTextPromotion(previous) }
     }
     // Selection change away from the offer's card retracts it; a single text selection can arm one.
-    .onChange(of: board.selectedCardIDs) { _, _ in promotionSelectionChanged() }
+    .onChange(of: board.selectedCardIDs) { _, selected in
+      promotionSelectionChanged()
+      if let quickCaptureRevealCardID, !selected.contains(quickCaptureRevealCardID) {
+        self.quickCaptureRevealCardID = nil
+      }
+    }
   }
 
   // MARK: Board content (pan / zoom / place)
@@ -302,6 +310,11 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerEnterEditing)) { _ in
         enterEditingForEntry(reveal: true)
       }
+      .onReceive(NotificationCenter.default.publisher(for: .composerTextCardLiveFrameChanged)) { note in
+        guard let id = note.object as? UUID, id == quickCaptureRevealCardID else { return }
+        revealCard(id)
+        quickCaptureRevealCardID = nil
+      }
       .onReceive(NotificationCenter.default.publisher(for: .composerSelectTool)) { note in
         if let index = note.userInfo?["index"] as? Int { selectTool(index: index) }
       }
@@ -327,6 +340,7 @@ struct ComposerCanvas: View {
     guard let id = board.captureExternalText(
       text,
       around: boardPoint(forViewport: viewportCenter)) else { return }
+    quickCaptureRevealCardID = id
     revealCard(id)
     show(Toast(text: "Captured on board".localizedUI, symbol: "leaf.fill", tint: .accentColor))
   }
@@ -1665,18 +1679,25 @@ struct ComposerCanvas: View {
   /// ready to type. A capture remains the primary/editing card, so reopening the board returns to
   /// that thought instead of preserving a viewport that can no longer see it.
   private func enterEditingForEntry(reveal: Bool) {
-    guard !store.isSettingsOpen, store.compiledDraft == nil, !store.isHistoryOpen else { return }
+    guard !showAgent, !showPalette, focusedCardID == nil,
+          pendingBoardDeletion == nil, renamingBoardID == nil,
+          !store.isSettingsOpen, store.compiledDraft == nil, !store.isHistoryOpen else { return }
     let id = board.editingCardID ?? board.primarySelectedCardID ?? board.cards.first?.id
     guard let id, board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
+    let interaction = board.interaction(for: id)
     if board.editingCardID != id { board.beginEditing(id) }
     if reveal { revealCard(id) }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+      guard board.editingCardID == id else { return }
+      interaction.controller.focus()
+    }
   }
 
   /// Preserve zoom and move only as far as needed to expose the target. The retained workspace
   /// owns the final pan, so the same focus survives later SwiftUI remounts.
   private func revealCard(_ id: UUID) {
     withAnimation(Theme.Motion.accessory) {
-      workspace.revealCard(id, in: lastViewportSize)
+      workspace.revealCard(id, in: lastViewportSize, transientPan: panLive)
     }
   }
 

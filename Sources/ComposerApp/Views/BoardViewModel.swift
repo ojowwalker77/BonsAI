@@ -262,6 +262,13 @@ final class BoardViewModel: ObservableObject {
   var editingInteraction: CardInteraction? { editingCardID.flatMap { interactions[$0] } }
   var selectedCardID: UUID? { primarySelectedCardID }
 
+  /// The card geometry currently painted on the canvas. Text editing keeps its live hug outside
+  /// `cards` to avoid publishing the whole board on every layout callback, so viewport consumers
+  /// must use this accessor rather than reading the persisted frame directly.
+  func renderingFrame(for id: UUID) -> CGRect? {
+    liveTextFrames[id] ?? cards.first(where: { $0.id == id })?.frame
+  }
+
   private func index(for id: UUID) -> Int? {
     cards.firstIndex { $0.id == id }
   }
@@ -1784,6 +1791,7 @@ final class BoardViewModel: ObservableObject {
     guard abs(previous.width - width) > 0.5 || abs(previous.height - height) > 0.5 else { return previous }
     liveTextFrames[id] = frame
     scheduleSave()
+    NotificationCenter.default.post(name: .composerTextCardLiveFrameChanged, object: id)
     return frame
   }
 

@@ -88,6 +88,37 @@ final class QuickCaptureTests: XCTestCase {
     XCTAssertEqual(session.pan, originalPan)
   }
 
+  func testRevealUsesTheEditorsLiveFrame() throws {
+    let session = makeSession()
+    let cardID = try XCTUnwrap(session.board.cards.first?.id)
+    session.board.setText(cardID, "Growing capture")
+    session.board.setFrame(cardID, CGRect(x: 100, y: 70, width: 360, height: 60))
+    session.board.beginEditing(cardID)
+    let liveFrame = try XCTUnwrap(session.board.fitTextEditing(
+      cardID,
+      naturalEditorWidth: 300,
+      editorContentHeight: 500))
+    let viewport = CGSize(width: 800, height: 300)
+
+    XCTAssertTrue(session.revealCard(cardID, in: viewport))
+
+    let renderedMidY = liveFrame.midY * session.scale + session.pan.height
+    XCTAssertEqual(renderedMidY, viewport.height / 2, accuracy: 0.5)
+  }
+
+  func testRevealIncludesAnInFlightPanGesture() throws {
+    let session = makeSession()
+    let cardID = try XCTUnwrap(session.board.cards.first?.id)
+    session.board.setFrame(cardID, CGRect(x: 900, y: 100, width: 360, height: 80))
+    let originalPan = session.pan
+
+    XCTAssertFalse(session.revealCard(
+      cardID,
+      in: CGSize(width: 800, height: 600),
+      transientPan: CGSize(width: -700, height: 0)))
+    XCTAssertEqual(session.pan, originalPan)
+  }
+
   private func makeBoard() -> BoardViewModel {
     BoardViewModel(store: DumpStore(inMemoryOnly: true, loadInitialContent: false))
   }
