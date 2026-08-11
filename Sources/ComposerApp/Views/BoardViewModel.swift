@@ -152,6 +152,11 @@ final class BoardViewModel: ObservableObject {
   private var undoStack: [HistorySnapshot] = []
   private var redoStack: [HistorySnapshot] = []
   private var textEditBaselines: [UUID: String] = [:]
+  /// `setText` publishes through `CardInteraction`, so the card view observes the same value after
+  /// the mutation already registered undo. Remember that exact value until `noteEdited` consumes
+  /// it; comparing against `CardState.text` is unsafe because live inline edits intentionally leave
+  /// the serialized card snapshot stale until persistence.
+  private var committedTextNotifications: [UUID: String] = [:]
   private var isRestoringHistory = false
   /// Set while a compound mutation (e.g. building a whole diagram) runs, so the inner
   /// `insertText`/`connectCards` calls don't each push their own undo step — the batch registers
@@ -397,6 +402,7 @@ final class BoardViewModel: ObservableObject {
     undoStack = restored?.undo ?? (isReloadingSameBoard ? undoStack : [])
     redoStack = restored?.redo ?? (isReloadingSameBoard ? redoStack : [])
     textEditBaselines = [:]
+    committedTextNotifications = [:]
     if let first = loaded.first?.id {
       selectedCardIDs = [first]
       primarySelectedCardID = first
@@ -545,6 +551,7 @@ final class BoardViewModel: ObservableObject {
     nextZ = max(value.nextZ, (value.cards.map(\.z).max() ?? 0) + 1)
     clearMovePreview()
     textEditBaselines = [:]
+    committedTextNotifications = [:]
     scheduleSave()
     isRestoringHistory = false
     invalidateBoardTextContext()
@@ -931,7 +938,9 @@ final class BoardViewModel: ObservableObject {
     }
     cards[i].text = text
     cards[i].whoWrote = nextAuthor
+    let publishesExistingInteraction = interactions[id] != nil
     let bundle = interaction(for: id)
+    if publishesExistingInteraction { committedTextNotifications[id] = text }
     bundle.text = text
     bundle.cachePlainText(text)
     if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w, fontScale: cards[i].textScale)) }
@@ -1614,7 +1623,9 @@ final class BoardViewModel: ObservableObject {
     case .diamond: width = ceil(width * 1.5); height = ceil(height * 1.5)
     default: break
     }
-    return CGSize(width: width, height: height)
+    return CGSize(
+      width: max(width, CardState.shapeMinSize.width),
+      height: max(height, CardState.shapeMinSize.height))
   }
 
   /// The point on `rect`'s edge along the line toward `target`, pushed out by `margin`. Used to land
@@ -1773,6 +1784,7 @@ final class BoardViewModel: ObservableObject {
     cards.removeAll { $0.id == id }
     interactions[id] = nil
     liveTextFrames[id] = nil
+    committedTextNotifications[id] = nil
     if editingCardID == id { editingCardID = nil }
     selectedCardIDs.remove(id)
     if primarySelectedCardID == id { primarySelectedCardID = selectedCardIDs.first }
@@ -1819,6 +1831,7 @@ final class BoardViewModel: ObservableObject {
     for id in deleting {
       interactions[id] = nil
       liveTextFrames[id] = nil
+      committedTextNotifications[id] = nil
     }
     if let editingCardID, deleting.contains(editingCardID) { self.editingCardID = nil }
     selectedCardIDs = []
@@ -2352,10 +2365,15 @@ final class BoardViewModel: ObservableObject {
     if editingCardID == cardID, let i = cards.firstIndex(where: { $0.id == cardID }), cards[i].whoWrote != Author.human {
       cards[i].whoWrote = Author.human
     }
-    // `setText` already registers the mutation before publishing the interaction text. Its
-    // resulting SwiftUI `onChange` must not add a second undo checkpoint (shape-label commits use
-    // this path so text + auto-fit geometry undo together).
-    let isAlreadyCommitted = cards.first(where: { $0.id == cardID })?.text == interactions[cardID]?.plainText
+    // `setText` already registers the mutation before publishing the interaction text. Consume its
+    // explicit marker instead of inferring from `CardState.text`, which stays stale during inline
+    // editing and can coincidentally equal a legitimate later edit.
+    let isAlreadyCommitted: Bool
+    if let committed = committedTextNotifications.removeValue(forKey: cardID) {
+      isAlreadyCommitted = committed == interactions[cardID]?.plainText
+    } else {
+      isAlreadyCommitted = false
+    }
     if textEditBaselines[cardID] == nil, !isAlreadyCommitted {
       textEditBaselines[cardID] = previousText
       let before = snapshot().map { card -> CardState in

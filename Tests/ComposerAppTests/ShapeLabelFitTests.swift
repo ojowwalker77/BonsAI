@@ -79,6 +79,13 @@ final class ShapeLabelFitTests: XCTestCase {
     XCTAssertGreaterThan(long.height, short.height * 3)
   }
 
+  func testShortLabelRespectsShapeMinimum() {
+    let size = BoardViewModel.fittedShapeSize("Fit", shape: .rectangle)
+
+    XCTAssertGreaterThanOrEqual(size.width, CardState.shapeMinSize.width)
+    XCTAssertGreaterThanOrEqual(size.height, CardState.shapeMinSize.height)
+  }
+
   func testClearingLabelPreservesManualShapeFrame() throws {
     let board = makeBoard()
     let id = board.addElement(.diamond, at: CGPoint(x: 300, y: 180))
@@ -110,5 +117,28 @@ final class ShapeLabelFitTests: XCTestCase {
       y: fittedShape.frame.minY + CGFloat(anchor.y) * fittedShape.frame.height)
     let actualEnd = endpoints(of: fittedArrow).end
     XCTAssertLessThan(hypot(actualEnd.x - expectedEnd.x, actualEnd.y - expectedEnd.y), 1)
+  }
+
+  func testLaterInlineEditCanReturnToStaleCardTextAndStillUndo() throws {
+    let board = makeBoard()
+    let id = board.insertText("A", at: CGPoint(x: 40, y: 40))
+    let interaction = board.interaction(for: id)
+
+    board.beginEditing(id)
+    interaction.text = "B"
+    interaction.cachePlainText("B")
+    board.noteEdited(cardID: id, previousText: "A")
+    board.endEditing(id)
+
+    // Inline editing intentionally leaves CardState.text at "A". Returning to that same value in
+    // a later session is still a real B → A edit and must capture B as its undo baseline.
+    board.beginEditing(id)
+    interaction.text = "A"
+    interaction.cachePlainText("A")
+    board.noteEdited(cardID: id, previousText: "B")
+    board.endEditing(id)
+
+    board.undo()
+    XCTAssertEqual(board.plainText(for: try card(id, in: board)), "B")
   }
 }
