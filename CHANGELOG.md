@@ -11,6 +11,12 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Quick captures stay with the thought you were working on.** Menu-bar captures now land near
+  the active card or visible board area, avoid occupied nearby slots, and return into view with
+  the caret ready when BonsAI opens or regains focus.
+
 ## [1.4.10] - 2026-08-10
 
 ### Changed
