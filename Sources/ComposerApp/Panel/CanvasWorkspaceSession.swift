@@ -34,6 +34,50 @@ final class CanvasWorkspaceSession: ObservableObject {
     CanvasBridge.shared.register(board)
     lastRemountTrigger = trigger
   }
+
+  /// Minimally pan until `cardID` is visible inside the canvas. Keeping this on the retained
+  /// workspace makes a reveal durable across window focus changes and SwiftUI remounts.
+  @discardableResult
+  func revealCard(_ cardID: UUID, in viewportSize: CGSize, margin: CGFloat = 48) -> Bool {
+    guard viewportSize.width > 0, viewportSize.height > 0,
+          let frame = board.cards.first(where: { $0.id == cardID })?.frame else { return false }
+
+    let safeScale = max(scale, 0.01)
+    let horizontalMargin = min(margin, max((viewportSize.width - 1) / 2, 0))
+    let verticalMargin = min(margin, max((viewportSize.height - 1) / 2, 0))
+    let visible = CGRect(
+      x: horizontalMargin,
+      y: verticalMargin,
+      width: max(viewportSize.width - horizontalMargin * 2, 1),
+      height: max(viewportSize.height - verticalMargin * 2, 1))
+    let rendered = CGRect(
+      x: frame.minX * safeScale + pan.width,
+      y: frame.minY * safeScale + pan.height,
+      width: frame.width * safeScale,
+      height: frame.height * safeScale)
+
+    func adjustment(minimum: CGFloat, maximum: CGFloat,
+                    visibleMinimum: CGFloat, visibleMaximum: CGFloat) -> CGFloat {
+      if maximum - minimum > visibleMaximum - visibleMinimum {
+        return (visibleMinimum + visibleMaximum) / 2 - (minimum + maximum) / 2
+      }
+      if minimum < visibleMinimum { return visibleMinimum - minimum }
+      if maximum > visibleMaximum { return visibleMaximum - maximum }
+      return 0
+    }
+
+    let delta = CGSize(
+      width: adjustment(
+        minimum: rendered.minX, maximum: rendered.maxX,
+        visibleMinimum: visible.minX, visibleMaximum: visible.maxX),
+      height: adjustment(
+        minimum: rendered.minY, maximum: rendered.maxY,
+        visibleMinimum: visible.minY, visibleMaximum: visible.maxY))
+    guard delta != .zero else { return false }
+    pan.width += delta.width
+    pan.height += delta.height
+    return true
+  }
 }
 
 enum CanvasRemountTrigger: CaseIterable {

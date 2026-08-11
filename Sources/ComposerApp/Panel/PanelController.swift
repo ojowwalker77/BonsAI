@@ -134,7 +134,15 @@ final class PanelController: NSObject, NSWindowDelegate {
 
   func windowDidResize(_ notification: Notification) { relayoutChromeButtons(notification) }
   func windowDidMove(_ notification: Notification) { relayoutChromeButtons(notification) }
-  func windowDidBecomeKey(_ notification: Notification) { relayoutChromeButtons(notification) }
+  func windowDidBecomeKey(_ notification: Notification) {
+    relayoutChromeButtons(notification)
+    guard let panel, (notification.object as? NSWindow) === panel else { return }
+    // Refocusing an already-visible board must restore the active card just like summoning a hidden
+    // one. Defer one turn so AppKit can finish handing the window its first responder first.
+    DispatchQueue.main.async {
+      NotificationCenter.default.post(name: .composerEnterEditing, object: nil)
+    }
+  }
   func windowDidResignKey(_ notification: Notification) { relayoutChromeButtons(notification) }
 
   /// Full screen goes FULLY NATIVE and FULLY SOLID — no window-mode cleverness survives the

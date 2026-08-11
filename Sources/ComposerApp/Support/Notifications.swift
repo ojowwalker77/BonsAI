@@ -35,8 +35,8 @@ extension Notification.Name {
   /// and zooms the board instead of dead-ending on an (unselected) element.
   static let composerCanvasScroll = Notification.Name("composerCanvasScroll")
   static let composerCanvasMagnify = Notification.Name("composerCanvasMagnify")
-  /// Posted when the panel is summoned — the canvas enters editing on the active card so the
-  /// caret is ready and you can type immediately, without double-clicking first.
+  /// Posted when the panel is summoned or becomes key — the canvas reveals and enters editing on
+  /// the active card so the caret is ready and you can type immediately, without double-clicking.
   static let composerEnterEditing = Notification.Name("composerEnterEditing")
   /// ⌘1–⌘8 pick a canvas tool; userInfo["index"] is 1-based (1 = select, 2 = text, …).
   static let composerSelectTool = Notification.Name("composerSelectTool")

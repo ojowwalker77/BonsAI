@@ -210,7 +210,9 @@ struct ComposerCanvas: View {
     .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
     .onAppear {
       lastViewportSize = inner
-      enterEditingForEntry()
+      // A theme/language remount must preserve the viewport exactly. PanelController posts the
+      // reveal-bearing entry notification separately when the window is actually summoned.
+      enterEditingForEntry(reveal: false)
       CanvasBridge.shared.register(board)
       showLatestReportedError()
       for text in CaptureInbox.shared.drainPending() {
@@ -298,7 +300,7 @@ struct ComposerCanvas: View {
         handleScroll(CGSize(width: dx, height: dy))
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerEnterEditing)) { _ in
-        enterEditingForEntry()
+        enterEditingForEntry(reveal: true)
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerSelectTool)) { note in
         if let index = note.userInfo?["index"] as? Int { selectTool(index: index) }
@@ -320,8 +322,13 @@ struct ComposerCanvas: View {
   }
 
   private func ingestQuickCapture(_ text: String) {
-    guard board.captureExternalText(text) != nil else { return }
-      show(Toast(text: "Captured on board".localizedUI, symbol: "leaf.fill", tint: .accentColor))
+    // With no selected card, the visible viewport is the active context. BoardViewModel still
+    // prefers an edited/selected card when one exists, then collision-resolves around it.
+    guard let id = board.captureExternalText(
+      text,
+      around: boardPoint(forViewport: viewportCenter)) else { return }
+    revealCard(id)
+    show(Toast(text: "Captured on board".localizedUI, symbol: "leaf.fill", tint: .accentColor))
   }
 
   /// The agent and Settings share the single overlay slot, driven by `showAgent` /
@@ -1654,15 +1661,23 @@ struct ComposerCanvas: View {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.beginEditing(id) }
   }
 
-  /// On panel open: enter editing on the active (or first) text card so the caret is ready to type.
-  /// The stage owns focus, so this just arms edit mode. Never steals it mid-edit or while an
-  /// overlay/settings is up.
-  private func enterEditingForEntry() {
-    guard board.editingInteraction == nil, !store.isSettingsOpen, store.compiledDraft == nil,
-          !store.isHistoryOpen else { return }
-    let id = board.primarySelectedCardID ?? board.cards.first?.id
+  /// On panel open: reveal and enter editing on the active (or first) text card so the caret is
+  /// ready to type. A capture remains the primary/editing card, so reopening the board returns to
+  /// that thought instead of preserving a viewport that can no longer see it.
+  private func enterEditingForEntry(reveal: Bool) {
+    guard !store.isSettingsOpen, store.compiledDraft == nil, !store.isHistoryOpen else { return }
+    let id = board.editingCardID ?? board.primarySelectedCardID ?? board.cards.first?.id
     guard let id, board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
-    board.beginEditing(id)
+    if board.editingCardID != id { board.beginEditing(id) }
+    if reveal { revealCard(id) }
+  }
+
+  /// Preserve zoom and move only as far as needed to expose the target. The retained workspace
+  /// owns the final pan, so the same focus survives later SwiftUI remounts.
+  private func revealCard(_ id: UUID) {
+    withAnimation(Theme.Motion.accessory) {
+      workspace.revealCard(id, in: lastViewportSize)
+    }
   }
 
   /// The sidebar gear toggles Settings the way ⌘J / the rail toggle Agent: a second click on the
