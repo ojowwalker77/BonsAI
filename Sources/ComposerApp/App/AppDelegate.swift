@@ -52,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     panelController.show()
   }
 
+  func applicationDidBecomeActive(_ notification: Notification) {
+    panelController.restoreEntryFocusAfterActivation()
+  }
+
   /// Register every bundled `.otf` (Nohemi, Satoshi) so `NSFont(name:)` can resolve the custom
   /// faces the app-font picker selects. The fonts live inside the nested SwiftPM resource bundle;
   /// we iterate whatever `.otf`s it contains rather than hard-coding filenames. Registration is

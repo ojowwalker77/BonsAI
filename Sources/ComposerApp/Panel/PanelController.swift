@@ -8,6 +8,7 @@ import SwiftUI
 final class PanelController: NSObject, NSWindowDelegate {
   private var panel: FloatingPanel?
   private let workspace = CanvasWorkspaceSession()
+  private var entryFocusWork: DispatchWorkItem?
   var isVisible: Bool { panel?.isVisible ?? false }
 
   override init() {
@@ -47,15 +48,23 @@ final class PanelController: NSObject, NSWindowDelegate {
     focusEditor(in: panel)
     // The active card's editor only exists once SwiftUI mounts it, so ask the canvas to enter
     // editing — the caret is ready to type the instant the window appears (no double-click).
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-      NotificationCenter.default.post(name: .composerEnterEditing, object: nil)
-    }
+    scheduleEntryFocus()
   }
 
   func hide() {
     guard let panel, panel.isVisible else { return }
+    entryFocusWork?.cancel()
+    entryFocusWork = nil
     panel.orderOut(nil)
     NSApp.deactivate()
+  }
+
+  /// Returning from another app is a real board refocus; returning from an attached open/save
+  /// sheet is not. AppDelegate calls this only for application activation, and the shared scheduler
+  /// coalesces it with `show()` when activation and summon happen in the same turn.
+  func restoreEntryFocusAfterActivation() {
+    guard isVisible else { return }
+    scheduleEntryFocus()
   }
 
   /// Apply the selected theme: set the window's appearance class AND rebuild the canvas —
@@ -184,6 +193,18 @@ final class PanelController: NSObject, NSWindowDelegate {
   }
 
   // MARK: Focus the text view so typing works the instant the window appears.
+
+  private func scheduleEntryFocus() {
+    entryFocusWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.entryFocusWork = nil
+      guard self.isVisible, self.panel?.isKeyWindow == true else { return }
+      NotificationCenter.default.post(name: .composerEnterEditing, object: nil)
+    }
+    entryFocusWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+  }
 
   private func focusEditor(in panel: NSWindow) {
     guard let content = panel.contentView, let textView = firstTextView(in: content) else { return }
