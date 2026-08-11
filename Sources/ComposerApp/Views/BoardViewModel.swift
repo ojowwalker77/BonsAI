@@ -271,6 +271,13 @@ final class BoardViewModel: ObservableObject {
   var editingInteraction: CardInteraction? { editingCardID.flatMap { interactions[$0] } }
   var selectedCardID: UUID? { primarySelectedCardID }
 
+  /// The card geometry currently painted on the canvas. Text editing keeps its live hug outside
+  /// `cards` to avoid publishing the whole board on every layout callback, so viewport consumers
+  /// must use this accessor rather than reading the persisted frame directly.
+  func renderingFrame(for id: UUID) -> CGRect? {
+    liveTextFrames[id] ?? cards.first(where: { $0.id == id })?.frame
+  }
+
   private func index(for id: UUID) -> Int? {
     cards.firstIndex { $0.id == id }
   }
@@ -1550,7 +1557,7 @@ final class BoardViewModel: ObservableObject {
   /// one-off card without (or not caring about) coordinates.
   @discardableResult
   func insertTextAutoPlaced(_ text: String) -> UUID {
-    let size = Self.fittedTextSize(text)
+    let size = Self.textInsertionSize(text)
     return insertText(text, at: autoPlacePoint(for: size))
   }
 
@@ -1562,13 +1569,96 @@ final class BoardViewModel: ObservableObject {
   }
 
   /// Append captured text from the menu bar, Services menu, URL scheme, or loopback API.
+  ///
+  /// Prefer the card the user is editing or has selected. When there is no active card, the live
+  /// canvas supplies its viewport center so capture still lands in the area the user is looking at.
+  /// Callers without a viewport (the loopback bridge) retain the below-board fallback.
   @discardableResult
-  func captureExternalText(_ text: String) -> UUID? {
+  func captureExternalText(_ text: String, around activeBoardPoint: CGPoint? = nil) -> UUID? {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
-    let id = insertTextAutoPlaced(trimmed)
+    let size = Self.capturePlacementSize(trimmed)
+    let activeID = editingCardID ?? primarySelectedCardID
+    let activeFrame = activeID.flatMap { renderingFrame(for: $0) }
+    let point: CGPoint
+    if let activeFrame {
+      point = autoPlacePoint(for: size, near: activeFrame)
+    } else if let activeBoardPoint {
+      point = autoPlacePoint(
+        for: size,
+        near: CGRect(origin: activeBoardPoint, size: .zero),
+        includeAnchor: true)
+    } else {
+      point = autoPlacePoint(for: size)
+    }
+    let id = insertText(trimmed, at: point)
     beginEditing(id)
     return id
+  }
+
+  /// The frame `insertText` creates before its live editor reports a tighter content hug.
+  private static func textInsertionSize(_ text: String) -> CGSize {
+    let width = CardState.textDefaultSize.width
+    return CGSize(width: width, height: fittedTextHeight(text, width: width))
+  }
+
+  /// Reserve enough room for both the inserted seed frame and the live editor's eventual hug.
+  /// Long single lines can grow 32pt wider than `textDefaultSize` once content padding is applied;
+  /// short captures begin at the seed width before their first layout callback shrinks them.
+  static func capturePlacementSize(_ text: String) -> CGSize {
+    let inserted = textInsertionSize(text)
+    let fitted = fittedTextSize(text, fontScale: 1)
+    return CGSize(width: max(inserted.width, fitted.width),
+                  height: max(inserted.height, fitted.height))
+  }
+
+  /// Find the nearest clear grid slot around an active card or board point. Candidates expand in
+  /// rings, preferring below/right/left/above so a stream of captures reads naturally while still
+  /// escaping a busy cluster. The ordinary no-context auto-placement remains a separate fallback.
+  func autoPlacePoint(for size: CGSize, near anchor: CGRect, includeAnchor: Bool = false) -> CGPoint {
+    let gap: CGFloat = 36
+    let anchorCenter = CGPoint(x: anchor.midX, y: anchor.midY)
+    let stepX = max(size.width + gap, (anchor.width + size.width) / 2 + gap)
+    let stepY = max(size.height + gap, (anchor.height + size.height) / 2 + gap)
+
+    func point(dx: Int, dy: Int) -> CGPoint {
+      CGPoint(
+        x: anchorCenter.x + CGFloat(dx) * stepX - size.width / 2,
+        y: anchorCenter.y + CGFloat(dy) * stepY - size.height / 2)
+    }
+
+    func isClear(_ origin: CGPoint) -> Bool {
+      let candidate = CGRect(origin: origin, size: size).insetBy(dx: -gap / 2, dy: -gap / 2)
+      return cards.allSatisfy { card in
+        !(liveTextFrames[card.id] ?? card.frame).intersects(candidate)
+      }
+    }
+
+    if includeAnchor {
+      let origin = point(dx: 0, dy: 0)
+      if isClear(origin) { return origin }
+    }
+
+    // A square ring of radius r has enough slots to escape ordinary dense clusters without a
+    // board-wide vertical jump. The extra two rings account for large cards covering several slots.
+    let maxRadius = max(4, Int(ceil(sqrt(Double(cards.count + 1)))) + 2)
+    for radius in 1...maxRadius {
+      let preferred = [(0, radius), (radius, 0), (-radius, 0), (0, -radius)]
+      for offset in preferred {
+        let origin = point(dx: offset.0, dy: offset.1)
+        if isClear(origin) { return origin }
+      }
+
+      for dy in (-radius)...radius {
+        for dx in (-radius)...radius where max(abs(dx), abs(dy)) == radius {
+          guard !preferred.contains(where: { $0.0 == dx && $0.1 == dy }) else { continue }
+          let origin = point(dx: dx, dy: dy)
+          if isClear(origin) { return origin }
+        }
+      }
+    }
+
+    return autoPlacePoint(for: size)
   }
 
   /// A clear board point below existing content for an auto-placed element.
@@ -1751,6 +1841,7 @@ final class BoardViewModel: ObservableObject {
     guard abs(previous.width - width) > 0.5 || abs(previous.height - height) > 0.5 else { return previous }
     liveTextFrames[id] = frame
     scheduleSave()
+    NotificationCenter.default.post(name: .composerTextCardLiveFrameChanged, object: id)
     return frame
   }
 

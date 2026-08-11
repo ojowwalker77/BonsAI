@@ -13,6 +13,9 @@ under the new version heading.
 
 ### Fixed
 
+- **Quick captures stay with the thought you were working on.** Menu-bar captures now land near
+  the active card or visible board area, avoid occupied nearby slots, and return into view with
+  the caret ready when BonsAI opens or regains focus.
 - **Shape labels now fit their containers.** Rectangles, ellipses, and diamonds resize around
   their labels with consistent padding, keep their position and connected arrows intact, and wrap
   longer text instead of clipping it.
