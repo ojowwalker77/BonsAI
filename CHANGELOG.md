@@ -11,6 +11,12 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shape labels now fit their containers.** Rectangles, ellipses, and diamonds resize around
+  their labels with consistent padding, keep their position and connected arrows intact, and wrap
+  longer text instead of clipping it.
+
 ## [1.4.10] - 2026-08-10
 
 ### Changed
