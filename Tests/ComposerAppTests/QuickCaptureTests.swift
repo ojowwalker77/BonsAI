@@ -55,6 +55,19 @@ final class QuickCaptureTests: XCTestCase {
     XCTAssertFalse(captured.frame.intersects(blockerFrame))
   }
 
+  func testCapturePlacementReservesTheEventualLiveHugSize() {
+    let longCapture = String(repeating: "Wide capture ", count: 12)
+    let fitted = BoardViewModel.fittedTextSize(longCapture, fontScale: 1)
+    let reserved = BoardViewModel.capturePlacementSize(longCapture)
+    XCTAssertGreaterThan(fitted.width, CardState.textDefaultSize.width)
+    XCTAssertEqual(reserved.width, fitted.width, accuracy: 0.5)
+    XCTAssertGreaterThanOrEqual(reserved.height, fitted.height)
+
+    let shortReserved = BoardViewModel.capturePlacementSize("Short capture")
+    XCTAssertGreaterThanOrEqual(shortReserved.width, CardState.textDefaultSize.width)
+    XCTAssertGreaterThanOrEqual(shortReserved.height, CardState.textDefaultSize.height)
+  }
+
   func testRevealMinimallyPansAnOffscreenCaptureIntoView() throws {
     let session = makeSession()
     let cardID = try XCTUnwrap(session.board.cards.first?.id)

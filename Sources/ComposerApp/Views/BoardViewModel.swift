@@ -1577,7 +1577,7 @@ final class BoardViewModel: ObservableObject {
   func captureExternalText(_ text: String, around activeBoardPoint: CGPoint? = nil) -> UUID? {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
-    let size = Self.textInsertionSize(trimmed)
+    let size = Self.capturePlacementSize(trimmed)
     let activeID = editingCardID ?? primarySelectedCardID
     let activeFrame = activeID.flatMap { id in
       liveTextFrames[id] ?? cards.first(where: { $0.id == id })?.frame
@@ -1602,6 +1602,16 @@ final class BoardViewModel: ObservableObject {
   private static func textInsertionSize(_ text: String) -> CGSize {
     let width = CardState.textDefaultSize.width
     return CGSize(width: width, height: fittedTextHeight(text, width: width))
+  }
+
+  /// Reserve enough room for both the inserted seed frame and the live editor's eventual hug.
+  /// Long single lines can grow 32pt wider than `textDefaultSize` once content padding is applied;
+  /// short captures begin at the seed width before their first layout callback shrinks them.
+  static func capturePlacementSize(_ text: String) -> CGSize {
+    let inserted = textInsertionSize(text)
+    let fitted = fittedTextSize(text, fontScale: 1)
+    return CGSize(width: max(inserted.width, fitted.width),
+                  height: max(inserted.height, fitted.height))
   }
 
   /// Find the nearest clear grid slot around an active card or board point. Candidates expand in

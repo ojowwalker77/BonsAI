@@ -342,7 +342,10 @@ struct ComposerCanvas: View {
       around: boardPoint(forViewport: viewportCenter)) else { return }
     quickCaptureRevealCardID = id
     revealCard(id)
-    show(Toast(text: "Captured on board".localizedUI, symbol: "leaf.fill", tint: .accentColor))
+    show(Toast(
+      text: "Captured on board".localizedUI,
+      symbol: "leaf.fill",
+      tint: Theme.Palette.accent))
   }
 
   /// The agent and Settings share the single overlay slot, driven by `showAgent` /
