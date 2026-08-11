@@ -152,6 +152,15 @@ final class BoardViewModel: ObservableObject {
   private var undoStack: [HistorySnapshot] = []
   private var redoStack: [HistorySnapshot] = []
   private var textEditBaselines: [UUID: String] = [:]
+  /// During an active edit, `setText` publishes through `CardInteraction`, so the card view observes
+  /// the same value after the mutation already registered undo. Remember that exact value until
+  /// `noteEdited` consumes it; comparing against `CardState.text` is unsafe because live inline
+  /// edits intentionally leave the serialized card snapshot stale until persistence.
+  private var committedTextNotifications: [UUID: String] = [:]
+  /// Cards with a live `BoardCardView`. Programmatic text updates only need a notification marker
+  /// when a mounted view can observe `CardInteraction.text`; keeping this explicit prevents both a
+  /// duplicate undo checkpoint for visible cards and stale markers for culled/off-screen cards.
+  private var mountedCardIDs: Set<UUID> = []
   private var isRestoringHistory = false
   /// Set while a compound mutation (e.g. building a whole diagram) runs, so the inner
   /// `insertText`/`connectCards` calls don't each push their own undo step — the batch registers
@@ -397,6 +406,7 @@ final class BoardViewModel: ObservableObject {
     undoStack = restored?.undo ?? (isReloadingSameBoard ? undoStack : [])
     redoStack = restored?.redo ?? (isReloadingSameBoard ? redoStack : [])
     textEditBaselines = [:]
+    committedTextNotifications = [:]
     if let first = loaded.first?.id {
       selectedCardIDs = [first]
       primarySelectedCardID = first
@@ -545,6 +555,7 @@ final class BoardViewModel: ObservableObject {
     nextZ = max(value.nextZ, (value.cards.map(\.z).max() ?? 0) + 1)
     clearMovePreview()
     textEditBaselines = [:]
+    committedTextNotifications = [:]
     scheduleSave()
     isRestoringHistory = false
     invalidateBoardTextContext()
@@ -932,9 +943,13 @@ final class BoardViewModel: ObservableObject {
     cards[i].text = text
     cards[i].whoWrote = nextAuthor
     let bundle = interaction(for: id)
+    if mountedCardIDs.contains(id) || editingCardID == id {
+      committedTextNotifications[id] = text
+    }
     bundle.text = text
     bundle.cachePlainText(text)
     if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w, fontScale: cards[i].textScale)) }
+    fitShapeSize(id)
     invalidateBoardTextContext()
     scheduleSave()
   }
@@ -1600,7 +1615,8 @@ final class BoardViewModel: ObservableObject {
     paragraph.alignment = .center
     let attributes: [NSAttributedString.Key: Any] = [.font: ComposerPreferences.appFont(ofSize: 14, weight: .semibold),
                                                       .paragraphStyle: paragraph]
-    let ns = (text.isEmpty ? " " : text) as NSString
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let ns = (trimmed.isEmpty ? " " : trimmed) as NSString
     let natural = ns.size(withAttributes: attributes).width
     let contentWidth = min(max(natural, 72), maxWidth - 24)   // 12pt horizontal padding each side
     let measured = ns.boundingRect(with: NSSize(width: contentWidth, height: .greatestFiniteMagnitude),
@@ -1612,7 +1628,9 @@ final class BoardViewModel: ObservableObject {
     case .diamond: width = ceil(width * 1.5); height = ceil(height * 1.5)
     default: break
     }
-    return CGSize(width: width, height: height)
+    return CGSize(
+      width: max(width, CardState.shapeMinSize.width),
+      height: max(height, CardState.shapeMinSize.height))
   }
 
   /// The point on `rect`'s edge along the line toward `target`, pushed out by `margin`. Used to land
@@ -1665,6 +1683,30 @@ final class BoardViewModel: ObservableObject {
     guard abs(cards[i].w - Double(fitted.width)) > 0.5 || abs(cards[i].h - Double(fitted.height)) > 0.5 else { return }
     cards[i].w = Double(fitted.width)
     cards[i].h = Double(fitted.height)
+    refreshBoundArrows()
+    scheduleSave()
+  }
+
+  /// Fit a rectangle/ellipse/diamond around its committed label with consistent content padding.
+  /// The shape stays centered where the user placed it, and bound connectors are refreshed against
+  /// the new boundary. Like text hugging, this is a consequence of the label edit that already owns
+  /// the undo checkpoint, so fitting does not create a second undo step. An empty label preserves
+  /// the user's current geometry instead of collapsing an intentional unlabelled shape.
+  func fitShapeSize(_ id: UUID) {
+    guard let i = cards.firstIndex(where: { $0.id == id }) else { return }
+    let kind = cards[i].elementKind
+    guard kind == .rectangle || kind == .ellipse || kind == .diamond else { return }
+    let label = plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !label.isEmpty else { return }
+    let fitted = Self.fittedShapeSize(label, shape: kind)
+    guard abs(cards[i].w - Double(fitted.width)) > 0.5 ||
+            abs(cards[i].h - Double(fitted.height)) > 0.5 else { return }
+    let center = Self.center(of: cards[i])
+    cards[i].frame = CGRect(
+      x: center.x - fitted.width / 2,
+      y: center.y - fitted.height / 2,
+      width: fitted.width,
+      height: fitted.height)
     refreshBoundArrows()
     scheduleSave()
   }
@@ -1747,6 +1789,8 @@ final class BoardViewModel: ObservableObject {
     cards.removeAll { $0.id == id }
     interactions[id] = nil
     liveTextFrames[id] = nil
+    mountedCardIDs.remove(id)
+    committedTextNotifications[id] = nil
     if editingCardID == id { editingCardID = nil }
     selectedCardIDs.remove(id)
     if primarySelectedCardID == id { primarySelectedCardID = selectedCardIDs.first }
@@ -1793,6 +1837,8 @@ final class BoardViewModel: ObservableObject {
     for id in deleting {
       interactions[id] = nil
       liveTextFrames[id] = nil
+      mountedCardIDs.remove(id)
+      committedTextNotifications[id] = nil
     }
     if let editingCardID, deleting.contains(editingCardID) { self.editingCardID = nil }
     selectedCardIDs = []
@@ -2326,7 +2372,16 @@ final class BoardViewModel: ObservableObject {
     if editingCardID == cardID, let i = cards.firstIndex(where: { $0.id == cardID }), cards[i].whoWrote != Author.human {
       cards[i].whoWrote = Author.human
     }
-    if textEditBaselines[cardID] == nil {
+    // `setText` already registers the mutation before publishing the interaction text. Consume its
+    // explicit marker instead of inferring from `CardState.text`, which stays stale during inline
+    // editing and can coincidentally equal a legitimate later edit.
+    let isAlreadyCommitted: Bool
+    if let committed = committedTextNotifications.removeValue(forKey: cardID) {
+      isAlreadyCommitted = committed == interactions[cardID]?.plainText
+    } else {
+      isAlreadyCommitted = false
+    }
+    if textEditBaselines[cardID] == nil, !isAlreadyCommitted {
       textEditBaselines[cardID] = previousText
       let before = snapshot().map { card -> CardState in
         guard card.id == cardID else { return card }
@@ -2338,6 +2393,16 @@ final class BoardViewModel: ObservableObject {
     }
     invalidateBoardTextContext()
     scheduleSave()
+  }
+
+  /// Tracks whether a card can currently observe `CardInteraction` publications.
+  func setCardMounted(_ id: UUID, _ mounted: Bool) {
+    if mounted {
+      mountedCardIDs.insert(id)
+    } else {
+      mountedCardIDs.remove(id)
+      committedTextNotifications[id] = nil
+    }
   }
 
   // MARK: Derived context

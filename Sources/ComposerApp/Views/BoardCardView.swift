@@ -99,6 +99,8 @@ struct BoardCardView: View {
       .overlay(lockBadge, alignment: .topLeading)
       .overlay(pointComposerPopover, alignment: .bottom)
       .offset(x: liveFrame.minX * zoom, y: liveFrame.minY * zoom)
+      .onAppear { board.setCardMounted(card.id, true) }
+      .onDisappear { board.setCardMounted(card.id, false) }
       .onHover { hovering = $0 }
       .onChange(of: interaction.text) { oldValue, newValue in
         // FreeWriteEditor writes serialized text here. Keeping the plain-text cache current lets
@@ -1021,7 +1023,7 @@ private struct SimpleTableView: View {
 }
 
 /// The centered label inside a diagram-node box. No pill background — the surrounding shape is the
-/// container — and it wraps/scales to fit rather than truncating mid-word.
+/// container — and it wraps to fit rather than truncating mid-word.
 private struct NodeLabel: View {
   let text: String
   var zoom: CGFloat = 1
@@ -1032,8 +1034,6 @@ private struct NodeLabel: View {
       // Must match the face `BoardViewModel.fittedShapeSize` measures with, or boxes mis-fit.
       .font(ComposerPreferences.appSwiftUIFont(size: 14 * zoom, weight: .semibold))
       .multilineTextAlignment(.center)
-      .lineLimit(5)
-      .minimumScaleFactor(0.82)
       // Board ink (or the element's tint) — ink on paper casts no shadow (elementShadow is clear
       // on light themes).
       .foregroundStyle(tint ?? Theme.Palette.body)
