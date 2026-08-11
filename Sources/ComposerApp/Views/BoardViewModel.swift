@@ -1579,9 +1579,7 @@ final class BoardViewModel: ObservableObject {
     guard !trimmed.isEmpty else { return nil }
     let size = Self.capturePlacementSize(trimmed)
     let activeID = editingCardID ?? primarySelectedCardID
-    let activeFrame = activeID.flatMap { id in
-      liveTextFrames[id] ?? cards.first(where: { $0.id == id })?.frame
-    }
+    let activeFrame = activeID.flatMap { renderingFrame(for: $0) }
     let point: CGPoint
     if let activeFrame {
       point = autoPlacePoint(for: size, near: activeFrame)
