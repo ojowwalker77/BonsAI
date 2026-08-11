@@ -70,6 +70,22 @@ final class ShapeLabelFitTests: XCTestCase {
     XCTAssertEqual(restored.frame, before.frame)
   }
 
+  func testMountedProgrammaticLabelUpdateKeepsUndoAtomic() throws {
+    let board = makeBoard()
+    let id = board.addElement(.rectangle, at: CGPoint(x: 300, y: 180))
+    let before = try card(id, in: board)
+    board.setCardMounted(id, true)
+
+    board.setText(id, "Programmatic label")
+    // Mirror the mounted card view observing the published interaction value.
+    board.noteEdited(cardID: id, previousText: before.text)
+
+    board.undo()
+    let restored = try card(id, in: board)
+    XCTAssertEqual(restored.text, before.text)
+    XCTAssertEqual(restored.frame, before.frame)
+  }
+
   func testLongLabelCapsWidthAndGrowsHeight() {
     let short = BoardViewModel.fittedShapeSize("Short", shape: .rectangle)
     let long = BoardViewModel.fittedShapeSize(String(repeating: "readable label ", count: 30), shape: .rectangle)

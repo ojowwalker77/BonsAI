@@ -99,6 +99,8 @@ struct BoardCardView: View {
       .overlay(lockBadge, alignment: .topLeading)
       .overlay(pointComposerPopover, alignment: .bottom)
       .offset(x: liveFrame.minX * zoom, y: liveFrame.minY * zoom)
+      .onAppear { board.setCardMounted(card.id, true) }
+      .onDisappear { board.setCardMounted(card.id, false) }
       .onHover { hovering = $0 }
       .onChange(of: interaction.text) { oldValue, newValue in
         // FreeWriteEditor writes serialized text here. Keeping the plain-text cache current lets

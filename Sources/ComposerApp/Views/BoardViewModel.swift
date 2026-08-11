@@ -157,6 +157,10 @@ final class BoardViewModel: ObservableObject {
   /// `noteEdited` consumes it; comparing against `CardState.text` is unsafe because live inline
   /// edits intentionally leave the serialized card snapshot stale until persistence.
   private var committedTextNotifications: [UUID: String] = [:]
+  /// Cards with a live `BoardCardView`. Programmatic text updates only need a notification marker
+  /// when a mounted view can observe `CardInteraction.text`; keeping this explicit prevents both a
+  /// duplicate undo checkpoint for visible cards and stale markers for culled/off-screen cards.
+  private var mountedCardIDs: Set<UUID> = []
   private var isRestoringHistory = false
   /// Set while a compound mutation (e.g. building a whole diagram) runs, so the inner
   /// `insertText`/`connectCards` calls don't each push their own undo step — the batch registers
@@ -939,7 +943,9 @@ final class BoardViewModel: ObservableObject {
     cards[i].text = text
     cards[i].whoWrote = nextAuthor
     let bundle = interaction(for: id)
-    if editingCardID == id { committedTextNotifications[id] = text }
+    if mountedCardIDs.contains(id) || editingCardID == id {
+      committedTextNotifications[id] = text
+    }
     bundle.text = text
     bundle.cachePlainText(text)
     if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w, fontScale: cards[i].textScale)) }
@@ -1783,6 +1789,7 @@ final class BoardViewModel: ObservableObject {
     cards.removeAll { $0.id == id }
     interactions[id] = nil
     liveTextFrames[id] = nil
+    mountedCardIDs.remove(id)
     committedTextNotifications[id] = nil
     if editingCardID == id { editingCardID = nil }
     selectedCardIDs.remove(id)
@@ -1830,6 +1837,7 @@ final class BoardViewModel: ObservableObject {
     for id in deleting {
       interactions[id] = nil
       liveTextFrames[id] = nil
+      mountedCardIDs.remove(id)
       committedTextNotifications[id] = nil
     }
     if let editingCardID, deleting.contains(editingCardID) { self.editingCardID = nil }
@@ -2385,6 +2393,16 @@ final class BoardViewModel: ObservableObject {
     }
     invalidateBoardTextContext()
     scheduleSave()
+  }
+
+  /// Tracks whether a card can currently observe `CardInteraction` publications.
+  func setCardMounted(_ id: UUID, _ mounted: Bool) {
+    if mounted {
+      mountedCardIDs.insert(id)
+    } else {
+      mountedCardIDs.remove(id)
+      committedTextNotifications[id] = nil
+    }
   }
 
   // MARK: Derived context
