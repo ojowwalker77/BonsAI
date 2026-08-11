@@ -11,6 +11,12 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Canvas tabs no longer show a hard-edged shadow in light themes.** The horizontally scrollable
+  board picker now leaves room for each pill's shadow to fade naturally without moving the tabs or
+  overlapping the top-right controls.
+
 ## [1.4.10] - 2026-08-10
 
 ### Changed
