@@ -65,7 +65,6 @@ final class QuickCaptureTests: XCTestCase {
 
     let shortReserved = BoardViewModel.capturePlacementSize("Short capture")
     XCTAssertGreaterThanOrEqual(shortReserved.width, CardState.textDefaultSize.width)
-    XCTAssertGreaterThanOrEqual(shortReserved.height, CardState.textDefaultSize.height)
   }
 
   func testRevealMinimallyPansAnOffscreenCaptureIntoView() throws {

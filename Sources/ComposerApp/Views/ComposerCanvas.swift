@@ -1700,7 +1700,7 @@ struct ComposerCanvas: View {
   /// owns the final pan, so the same focus survives later SwiftUI remounts.
   private func revealCard(_ id: UUID) {
     withAnimation(Theme.Motion.accessory) {
-      workspace.revealCard(id, in: lastViewportSize, transientPan: panLive)
+      _ = workspace.revealCard(id, in: lastViewportSize, transientPan: panLive)
     }
   }
 
