@@ -832,6 +832,9 @@ struct ComposerCanvas: View {
       .frame(width: maxWidth + shadowOverflow * 2, height: rowHeight + shadowOverflow * 2)
       .offset(x: -shadowOverflow, y: -shadowOverflow)
       .frame(width: maxWidth, height: rowHeight, alignment: .topLeading)
+      // Drawing may overflow this rectangle; interaction must not, or canvas drags below the row
+      // would be swallowed by the horizontal scroller's invisible shadow allowance.
+      .contentShape(.interaction, Rectangle())
       .onAppear { scrollCurrentBoardPill(using: proxy, animated: false) }
       .onChange(of: store.currentID) { _, _ in scrollCurrentBoardPill(using: proxy, animated: true) }
     }
