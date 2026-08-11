@@ -152,10 +152,10 @@ final class BoardViewModel: ObservableObject {
   private var undoStack: [HistorySnapshot] = []
   private var redoStack: [HistorySnapshot] = []
   private var textEditBaselines: [UUID: String] = [:]
-  /// `setText` publishes through `CardInteraction`, so the card view observes the same value after
-  /// the mutation already registered undo. Remember that exact value until `noteEdited` consumes
-  /// it; comparing against `CardState.text` is unsafe because live inline edits intentionally leave
-  /// the serialized card snapshot stale until persistence.
+  /// During an active edit, `setText` publishes through `CardInteraction`, so the card view observes
+  /// the same value after the mutation already registered undo. Remember that exact value until
+  /// `noteEdited` consumes it; comparing against `CardState.text` is unsafe because live inline
+  /// edits intentionally leave the serialized card snapshot stale until persistence.
   private var committedTextNotifications: [UUID: String] = [:]
   private var isRestoringHistory = false
   /// Set while a compound mutation (e.g. building a whole diagram) runs, so the inner
@@ -938,9 +938,8 @@ final class BoardViewModel: ObservableObject {
     }
     cards[i].text = text
     cards[i].whoWrote = nextAuthor
-    let publishesExistingInteraction = interactions[id] != nil
     let bundle = interaction(for: id)
-    if publishesExistingInteraction { committedTextNotifications[id] = text }
+    if editingCardID == id { committedTextNotifications[id] = text }
     bundle.text = text
     bundle.cachePlainText(text)
     if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w, fontScale: cards[i].textScale)) }
