@@ -13,6 +13,9 @@ under the new version heading.
 
 ### Fixed
 
+- **Canvas tabs no longer show a hard-edged shadow in light themes.** The horizontally scrollable
+  board picker now leaves room for each pill's shadow to fade naturally without moving the tabs or
+  overlapping the top-right controls.
 - **Quick captures stay with the thought you were working on.** Menu-bar captures now land near
   the active card or visible board area, avoid occupied nearby slots, and return into view with
   the caret ready when BonsAI opens or regains focus.

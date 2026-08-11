@@ -773,6 +773,9 @@ struct ComposerCanvas: View {
       WindowChrome.boardPillWidth + WindowChrome.controlHeight + WindowChrome.edgeInset / 2,
       size.width - WindowChrome.trafficLightInset - WindowChrome.topRightReservedWidth
     )
+    let menuShadow = Theme.Shadow.menu
+    let shadowOverflow = CGFloat(menuShadow.radius + abs(menuShadow.y))
+    let rowHeight = WindowChrome.controlHeight + WindowChrome.padV * 2
     return ScrollViewReader { proxy in
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHStack(spacing: WindowChrome.edgeInset / 2) {
@@ -845,9 +848,17 @@ struct ComposerCanvas: View {
           .chromePill()
           .help("New board  ⌘N".localizedUI)
         }
+        // Keep the pills at their existing coordinates while giving their shadows real pixels
+        // inside the scroll viewport. The outer frame below preserves the picker's layout width,
+        // so the padded viewport cannot move content into the reserved top-right control lane.
+        .padding(shadowOverflow)
       }
-      .frame(width: maxWidth)
-      .frame(height: WindowChrome.controlHeight + WindowChrome.padV * 2)
+      .frame(width: maxWidth + shadowOverflow * 2, height: rowHeight + shadowOverflow * 2)
+      .offset(x: -shadowOverflow, y: -shadowOverflow)
+      .frame(width: maxWidth, height: rowHeight, alignment: .topLeading)
+      // Drawing may overflow this rectangle; interaction must not, or canvas drags below the row
+      // would be swallowed by the horizontal scroller's invisible shadow allowance.
+      .contentShape(.interaction, Rectangle())
       .onAppear { scrollCurrentBoardPill(using: proxy, animated: false) }
       .onChange(of: store.currentID) { _, _ in scrollCurrentBoardPill(using: proxy, animated: true) }
     }
