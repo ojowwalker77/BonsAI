@@ -11,6 +11,8 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.4.10] - 2026-08-10
+
 ### Changed
 
 - **Board content stays readable under the top chrome.** Elements panned beneath the top-left and
@@ -28,6 +30,10 @@ under the new version heading.
   loads require it; live text-editor sizing is held out of the published board until the edit
   boundary; and inactive per-board undo/redo histories are bounded by LRU and total snapshot-card
   budgets.
+- **Escape and board deletion no longer take more than you asked for.** One Escape press dismisses
+  exactly one thing, in priority order, and cancels a board rename instead of committing it;
+  deleting a background board leaves the board you are editing — and any agent draft — untouched,
+  and a delete that fails rolls back with a warning instead of appearing to succeed.
 
 ## [1.4.9] - 2026-08-06
 
