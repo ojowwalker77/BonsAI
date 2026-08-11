@@ -935,6 +935,7 @@ final class BoardViewModel: ObservableObject {
     bundle.text = text
     bundle.cachePlainText(text)
     if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w, fontScale: cards[i].textScale)) }
+    fitShapeSize(id)
     invalidateBoardTextContext()
     scheduleSave()
   }
@@ -1600,7 +1601,8 @@ final class BoardViewModel: ObservableObject {
     paragraph.alignment = .center
     let attributes: [NSAttributedString.Key: Any] = [.font: ComposerPreferences.appFont(ofSize: 14, weight: .semibold),
                                                       .paragraphStyle: paragraph]
-    let ns = (text.isEmpty ? " " : text) as NSString
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let ns = (trimmed.isEmpty ? " " : trimmed) as NSString
     let natural = ns.size(withAttributes: attributes).width
     let contentWidth = min(max(natural, 72), maxWidth - 24)   // 12pt horizontal padding each side
     let measured = ns.boundingRect(with: NSSize(width: contentWidth, height: .greatestFiniteMagnitude),
@@ -1665,6 +1667,30 @@ final class BoardViewModel: ObservableObject {
     guard abs(cards[i].w - Double(fitted.width)) > 0.5 || abs(cards[i].h - Double(fitted.height)) > 0.5 else { return }
     cards[i].w = Double(fitted.width)
     cards[i].h = Double(fitted.height)
+    refreshBoundArrows()
+    scheduleSave()
+  }
+
+  /// Fit a rectangle/ellipse/diamond around its committed label with consistent content padding.
+  /// The shape stays centered where the user placed it, and bound connectors are refreshed against
+  /// the new boundary. Like text hugging, this is a consequence of the label edit that already owns
+  /// the undo checkpoint, so fitting does not create a second undo step. An empty label preserves
+  /// the user's current geometry instead of collapsing an intentional unlabelled shape.
+  func fitShapeSize(_ id: UUID) {
+    guard let i = cards.firstIndex(where: { $0.id == id }) else { return }
+    let kind = cards[i].elementKind
+    guard kind == .rectangle || kind == .ellipse || kind == .diamond else { return }
+    let label = plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !label.isEmpty else { return }
+    let fitted = Self.fittedShapeSize(label, shape: kind)
+    guard abs(cards[i].w - Double(fitted.width)) > 0.5 ||
+            abs(cards[i].h - Double(fitted.height)) > 0.5 else { return }
+    let center = Self.center(of: cards[i])
+    cards[i].frame = CGRect(
+      x: center.x - fitted.width / 2,
+      y: center.y - fitted.height / 2,
+      width: fitted.width,
+      height: fitted.height)
     refreshBoundArrows()
     scheduleSave()
   }
@@ -2326,7 +2352,11 @@ final class BoardViewModel: ObservableObject {
     if editingCardID == cardID, let i = cards.firstIndex(where: { $0.id == cardID }), cards[i].whoWrote != Author.human {
       cards[i].whoWrote = Author.human
     }
-    if textEditBaselines[cardID] == nil {
+    // `setText` already registers the mutation before publishing the interaction text. Its
+    // resulting SwiftUI `onChange` must not add a second undo checkpoint (shape-label commits use
+    // this path so text + auto-fit geometry undo together).
+    let isAlreadyCommitted = cards.first(where: { $0.id == cardID })?.text == interactions[cardID]?.plainText
+    if textEditBaselines[cardID] == nil, !isAlreadyCommitted {
       textEditBaselines[cardID] = previousText
       let before = snapshot().map { card -> CardState in
         guard card.id == cardID else { return card }

@@ -471,7 +471,7 @@ struct EditingStage: View {
   }
 
   private func commitLabel() {
-    interaction.text = labelDraft
+    board.setText(card.id, labelDraft)
     board.endEditing(card.id)
   }
 
