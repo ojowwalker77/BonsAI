@@ -157,7 +157,7 @@ struct CanvasToolbar: View {
 
   /// Keep every direct tool affordance while the window has room for it.
   private var fullToolbar: some View {
-    HStack(spacing: 5) {
+    HStack(spacing: WindowChrome.itemSpacing) {
       ForEach(CanvasToolbarCatalog.fullTools) { descriptor in
         toolButton(descriptor)
       }
@@ -170,7 +170,7 @@ struct CanvasToolbar: View {
   /// buttons. Preserve the primary Select/Text actions and group related placement tools into
   /// discoverable menus; keyboard shortcuts continue to select every tool directly.
   private var compactToolbar: some View {
-    HStack(spacing: 5) {
+    HStack(spacing: WindowChrome.itemSpacing) {
       toolButton(CanvasToolbarCatalog.select)
       toolButton(CanvasToolbarCatalog.text)
       toolMenu(CanvasToolbarCatalog.shapeGroup)
