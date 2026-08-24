@@ -43,6 +43,20 @@ final class CanvasDotGridTests: XCTestCase {
     XCTAssertLessThanOrEqual(layout.dotCount, CanvasDotGridLayout.maximumDotCount)
   }
 
+  func testLowZoomPanPhasesStayWithinThePerFramePathBudget() {
+    let viewport = CGSize(width: 7680, height: 4320)
+    let translations = stride(from: -120, through: 120, by: 12).map {
+      CGSize(width: CGFloat($0), height: CGFloat(-$0 / 2))
+    }
+    let layouts = translations.map {
+      CanvasDotGridLayout.layout(scale: 0.35, translation: $0, viewportSize: viewport)
+    }
+
+    XCTAssertTrue(layouts.allSatisfy { $0.dotCount <= 4_000 })
+    XCTAssertGreaterThanOrEqual(layouts.map(\.boardStep).min() ?? 0, 9)
+    XCTAssertLessThan(layouts.map(\.dotCount).max() ?? .max, 3_500)
+  }
+
   func testAdaptiveStrideKeepsPhaseStableAcrossEquivalentTranslations() {
     let size = CGSize(width: 5120, height: 2880)
     let original = CanvasDotGridLayout.layout(

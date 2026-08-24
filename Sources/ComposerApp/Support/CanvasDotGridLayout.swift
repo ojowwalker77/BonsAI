@@ -10,7 +10,10 @@ enum CanvasDotGridLayout {
   /// Below this screen-space separation, render every second/third/etc. board intersection. This
   /// keeps the grid quiet and bounds the path work while preserving board-space alignment.
   static let minimumScreenSpacing: CGFloat = 24
-  static let maximumDotCount = 12_000
+  /// Each dot adds an ellipse subpath on every live pan/zoom frame. Four thousand is a hard
+  /// per-frame path-work budget; an 8K viewport at minimum zoom measures about 3,300 dots after
+  /// integer board-step alignment, down from roughly 10,800 with the former 12K budget.
+  static let maximumDotCount = 4_000
 
   struct Axis: Equatable {
     let first: CGFloat
