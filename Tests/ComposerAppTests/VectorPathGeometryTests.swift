@@ -129,4 +129,74 @@ final class VectorPathBoardTests: XCTestCase {
     board.undo()
     XCTAssertFalse(board.cards.contains(where: { $0.id == id }))
   }
+
+  func testZoomedAnchorPreviewPlacementEqualsCommittedPlacement() throws {
+    let (board, id, before) = try makeEditingVectorBoard()
+    let spec = try XCTUnwrap(before.vectorPath)
+    let anchorBefore = try XCTUnwrap(VectorPathGeometry.controlPoint(
+      .anchor, nodeAt: 0, in: spec, frame: before.frame))
+    let screenTranslation = CGSize(width: 55, height: -30)
+    let zoom: CGFloat = 2.5
+    let preview = try XCTUnwrap(VectorPathControlDrag.placement(
+      .anchor,
+      nodeAt: 0,
+      screenTranslation: screenTranslation,
+      zoom: zoom,
+      in: spec,
+      frame: before.frame))
+
+    XCTAssertTrue(board.setVectorPath(id, placement: preview))
+    let committed = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    XCTAssertEqual(committed.frame, preview.frame)
+    XCTAssertEqual(committed.vectorPath, preview.spec)
+    let anchorAfter = try XCTUnwrap(VectorPathGeometry.controlPoint(
+      .anchor, nodeAt: 0, in: preview.spec, frame: preview.frame))
+    let boardTranslation = VectorPathControlDrag.boardTranslation(
+      from: screenTranslation, zoom: zoom)
+    XCTAssertEqual(anchorAfter.x, anchorBefore.x + boardTranslation.width, accuracy: 0.001)
+    XCTAssertEqual(anchorAfter.y, anchorBefore.y + boardTranslation.height, accuracy: 0.001)
+  }
+
+  func testZoomedHandlePreviewPlacementEqualsCommittedPlacement() throws {
+    let (board, id, before) = try makeEditingVectorBoard()
+    let spec = try XCTUnwrap(before.vectorPath)
+    let handleBefore = try XCTUnwrap(VectorPathGeometry.controlPoint(
+      .outgoing, nodeAt: 1, in: spec, frame: before.frame))
+    let screenTranslation = CGSize(width: -36, height: 63)
+    let zoom: CGFloat = 1.8
+    let preview = try XCTUnwrap(VectorPathControlDrag.placement(
+      .outgoing,
+      nodeAt: 1,
+      screenTranslation: screenTranslation,
+      zoom: zoom,
+      in: spec,
+      frame: before.frame))
+
+    XCTAssertTrue(board.setVectorPath(id, placement: preview))
+    let committed = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    XCTAssertEqual(committed.frame, preview.frame)
+    XCTAssertEqual(committed.vectorPath, preview.spec)
+    let handleAfter = try XCTUnwrap(VectorPathGeometry.controlPoint(
+      .outgoing, nodeAt: 1, in: preview.spec, frame: preview.frame))
+    let boardTranslation = VectorPathControlDrag.boardTranslation(
+      from: screenTranslation, zoom: zoom)
+    XCTAssertEqual(handleAfter.x, handleBefore.x + boardTranslation.width, accuracy: 0.001)
+    XCTAssertEqual(handleAfter.y, handleBefore.y + boardTranslation.height, accuracy: 0.001)
+  }
+
+  private func makeEditingVectorBoard() throws -> (BoardViewModel, UUID, CardState) {
+    var draft = VectorPathDraft()
+    XCTAssertNil(draft.finish(
+      anchor: CGPoint(x: 10, y: 20),
+      drag: CGPoint(x: 10, y: 20),
+      closeTolerance: 8))
+    XCTAssertNil(draft.finish(
+      anchor: CGPoint(x: 150, y: 90),
+      drag: CGPoint(x: 170, y: 100),
+      closeTolerance: 8))
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let id = try XCTUnwrap(board.addVectorPath(try XCTUnwrap(draft.commitOpen())))
+    board.beginEditing(id)
+    return (board, id, try XCTUnwrap(board.cards.first(where: { $0.id == id })))
+  }
 }

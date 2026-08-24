@@ -681,10 +681,11 @@ struct BoardCardView: View {
     guard isEditing,
           let spec = card.vectorPath,
           let drag = vectorControlDrag else { return nil }
-    return VectorPathGeometry.moving(
+    return VectorPathControlDrag.placement(
       drag.control,
       nodeAt: drag.nodeIndex,
-      by: CGSize(width: drag.translation.width / zoom, height: drag.translation.height / zoom),
+      screenTranslation: drag.translation,
+      zoom: zoom,
       in: spec,
       frame: card.frame)
   }
@@ -759,7 +760,9 @@ struct BoardCardView: View {
   }
 
   private func vectorControlGesture(nodeIndex: Int, control: VectorPathControl) -> some Gesture {
-    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+    // Global coordinates stay stable while the preview refits and repositions this card. A local
+    // translation would observe that moving origin and feed the geometry change back into itself.
+    DragGesture(minimumDistance: 0, coordinateSpace: .global)
       .updating($vectorControlDrag) { value, state, _ in
         state = VectorControlDragSession(
           nodeIndex: nodeIndex,
@@ -768,11 +771,11 @@ struct BoardCardView: View {
       }
       .onEnded { value in
         guard let spec = card.vectorPath,
-              let placement = VectorPathGeometry.moving(
+              let placement = VectorPathControlDrag.placement(
                 control,
                 nodeAt: nodeIndex,
-                by: CGSize(width: value.translation.width / zoom,
-                           height: value.translation.height / zoom),
+                screenTranslation: value.translation,
+                zoom: zoom,
                 in: spec,
                 frame: card.frame) else { return }
         board.setVectorPath(card.id, placement: placement)

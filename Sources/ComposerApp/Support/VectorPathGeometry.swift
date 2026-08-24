@@ -46,6 +46,32 @@ enum VectorPathControl: Equatable {
   case outgoing
 }
 
+/// Converts a stable screen-space control drag into one vector placement. Keeping zoom conversion
+/// and the refit in this pure seam guarantees the local preview and mouse-up commit use identical
+/// geometry even though refitting changes the card's frame and origin during the gesture.
+enum VectorPathControlDrag {
+  static func boardTranslation(from screenTranslation: CGSize, zoom: CGFloat) -> CGSize {
+    let safeZoom = max(zoom, 0.01)
+    return CGSize(
+      width: screenTranslation.width / safeZoom,
+      height: screenTranslation.height / safeZoom)
+  }
+
+  static func placement(_ control: VectorPathControl,
+                        nodeAt index: Int,
+                        screenTranslation: CGSize,
+                        zoom: CGFloat,
+                        in spec: VectorPathSpec,
+                        frame: CGRect) -> VectorPathPlacement? {
+    VectorPathGeometry.moving(
+      control,
+      nodeAt: index,
+      by: boardTranslation(from: screenTranslation, zoom: zoom),
+      in: spec,
+      frame: frame)
+  }
+}
+
 /// A multi-click pen draft in board coordinates. Callers feed it one press/drag at a time and only
 /// need to distinguish `nil` (keep drawing) from a returned placement (closed path committed).
 struct VectorPathDraft: Equatable {
