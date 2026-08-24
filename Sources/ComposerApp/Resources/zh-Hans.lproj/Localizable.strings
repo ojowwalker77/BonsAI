@@ -530,6 +530,7 @@
 "Renaming the board" = "正在重命名画板";
 "%@: macOS Keychain access failed. Check Keychain Access and try again." = "%@：无法访问 macOS 钥匙串。请检查“钥匙串访问”后重试。";
 "%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again." = "%@：BonsAI 无法更新旧版连接器令牌文件。请检查 Application Support 权限后重试。";
+"Drag connector endpoint" = "拖动连接线端点";
 "Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI." = "无法验证连接器令牌迁移。旧版文件已保留以避免令牌丢失；请检查“钥匙串访问”，重新打开 BonsAI 后重试。";
 "Application" = "应用程序";
 "Choose how BonsAI appears in macOS." = "选择 BonsAI 在 macOS 中的显示方式。";

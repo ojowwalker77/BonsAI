@@ -4,7 +4,7 @@ import Foundation
 /// Which end of a line/arrow is being addressed. Kept independent of view geometry so drawing,
 /// endpoint handles, programmatic connections, persistence refresh, and tests all cross the same
 /// connector seam.
-enum ConnectorEndpoint: CaseIterable, Equatable {
+enum ConnectorEndpoint: CaseIterable, Hashable {
   case start
   case end
 }

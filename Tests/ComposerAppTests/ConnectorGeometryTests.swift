@@ -3,6 +3,16 @@ import XCTest
 @testable import ComposerApp
 
 final class ConnectorGeometryTests: XCTestCase {
+  func testEndpointDragTranslationIsConvertedFromScreenToBoardAtZoom() {
+    let moved = ConnectorEndpointDrag.boardPoint(
+      from: CGPoint(x: 80, y: 120),
+      translation: CGSize(width: 30, height: -18),
+      zoom: 1.5)
+
+    XCTAssertEqual(moved.x, 100, accuracy: 0.001)
+    XCTAssertEqual(moved.y, 108, accuracy: 0.001)
+  }
+
   private func shape(_ kind: CanvasElementKind = .rectangle,
                      id: UUID = UUID(),
                      frame: CGRect) -> CardState {

@@ -24,6 +24,9 @@ struct BoardCardView: View {
 
   @State private var moveDelta: CGSize = .zero
   @GestureState private var resize: ResizeSession?
+  /// Connector endpoints preview locally during a drag, then cross the model seam once on mouse-up
+  /// so the entire detach/rebind is one undoable mutation.
+  @GestureState private var endpointDrag: ConnectorEndpointDragSession?
   /// Text-only side resize: changes the wrapping width while preserving font scale. Corner resize
   /// remains proportional type scaling; the two gestures intentionally solve different jobs.
   @GestureState private var textWidthResize: TextWidthResizeSession?
@@ -197,7 +200,7 @@ struct BoardCardView: View {
         // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
         // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
         // zoom so the text is laid out at screen size (crisp), not stretched.
-        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: boardTextContext.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: boardTextContext.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id, connectorPoints: liveConnectorPoints)
           .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)
@@ -525,7 +528,8 @@ struct BoardCardView: View {
     // a text card it's chromeless too; the ring returns only once it's a placed object you
     // select to move or resize. Shapes keep their ring while editing.
     if (isSelected || isEditing) && !suppressEmptyChrome {
-      let showRing = !isTextElement || (isSelected && !isEditing)
+      let isConnector = ConnectorGeometry.isConnector(card)
+      let showRing = !isConnector && (!isTextElement || (isSelected && !isEditing))
       // Image cards draw their own rounded border, so a ring sitting `selectionGap` px outside reads
       // as an ugly double border with a gap. Hug the image's own edge instead — a single clean
       // accent outline. Other elements (text, shapes, lines) keep the offset ring.
@@ -544,25 +548,37 @@ struct BoardCardView: View {
               .allowsHitTesting(false)
           }
           if showHandles {
-            ForEach(Corner.allCases, id: \.self) { corner in
-              handleDot
-                .position(handlePoint(corner, in: geo.size))
-                .gesture(resizeGesture(corner))
-                // A diagonal resize cursor over each corner handle, restored on exit. Pushing/popping
-                // keeps the cursor correct even as SwiftUI reuses the handle views across cards.
-                .onHover { inside in
-                  if inside { corner.resizeCursor.push() } else { NSCursor.pop() }
-                }
-            }
-            if isTextElement {
-              ForEach(HorizontalEdge.allCases, id: \.self) { edge in
-                textWidthHandle
-                  .position(textWidthHandlePoint(edge, in: geo.size))
-                  .gesture(textWidthResizeGesture(edge))
+            if isConnector {
+              ForEach(ConnectorEndpoint.allCases, id: \.self) { endpoint in
+                connectorHandle
+                  .position(connectorHandlePoint(endpoint, in: geo.size))
+                  .gesture(connectorEndpointGesture(endpoint))
                   .onHover { inside in
-                    if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
                   }
-                  .help("Drag to change text wrapping width".localizedUI)
+                  .help("Drag connector endpoint".localizedUI)
+              }
+            } else {
+              ForEach(Corner.allCases, id: \.self) { corner in
+                handleDot
+                  .position(handlePoint(corner, in: geo.size))
+                  .gesture(resizeGesture(corner))
+                  // A diagonal resize cursor over each corner handle, restored on exit. Pushing/popping
+                  // keeps the cursor correct even as SwiftUI reuses the handle views across cards.
+                  .onHover { inside in
+                    if inside { corner.resizeCursor.push() } else { NSCursor.pop() }
+                  }
+              }
+              if isTextElement {
+                ForEach(HorizontalEdge.allCases, id: \.self) { edge in
+                  textWidthHandle
+                    .position(textWidthHandlePoint(edge, in: geo.size))
+                    .gesture(textWidthResizeGesture(edge))
+                    .onHover { inside in
+                      if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
+                    .help("Drag to change text wrapping width".localizedUI)
+                }
               }
             }
           }
@@ -584,6 +600,32 @@ struct BoardCardView: View {
     CGPoint(x: edge == .leading ? -selectionGap : size.width + selectionGap, y: size.height / 2)
   }
 
+  /// Actual stored endpoints, expressed in the card's current screen-space layout. In particular,
+  /// the end handle of an arrow sits on its tip instead of on the connector's padded frame corner.
+  private func connectorHandlePoint(_ endpoint: ConnectorEndpoint, in size: CGSize) -> CGPoint {
+    let points = liveConnectorPoints ?? card.points ?? CardState.defaultLinePoints()
+    let point = endpoint == .start ? points.first : points.dropFirst().first
+    let normalized = point?.cgPoint ?? (endpoint == .start
+      ? CGPoint(x: 0.06, y: 0.88)
+      : CGPoint(x: 0.94, y: 0.12))
+    return CGPoint(x: normalized.x * size.width, y: normalized.y * size.height)
+  }
+
+  private var liveConnectorPoints: [CanvasPoint]? {
+    guard ConnectorGeometry.isConnector(card) else { return nil }
+    guard let endpoints = ConnectorGeometry.endpoints(of: card), let endpointDrag else {
+      return card.points ?? CardState.defaultLinePoints()
+    }
+    var preview = endpoints
+    preview[endpointDrag.endpoint] = ConnectorEndpointDrag.boardPoint(
+      from: endpoints[endpointDrag.endpoint], translation: endpointDrag.translation, zoom: zoom)
+    return [preview.start, preview.end].map { point in
+      CanvasPoint(
+        x: Double((point.x - card.frame.minX) / max(card.frame.width, 1)),
+        y: Double((point.y - card.frame.minY) / max(card.frame.height, 1)))
+    }
+  }
+
   /// A small white square with a hairline accent edge and a soft shadow — reads as a crisp,
   /// premium resize handle on the dark glass rather than a flat blue block.
   private var handleDot: some View {
@@ -594,6 +636,18 @@ struct BoardCardView: View {
       .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
       .padding(9)
       .contentShape(Rectangle())
+  }
+
+  /// Circular endpoint furniture is deliberately distinct from the square box-resize furniture.
+  /// Its padded hit target remains easy to acquire without making a selected connector noisy.
+  private var connectorHandle: some View {
+    Circle()
+      .fill(Color.white)
+      .frame(width: 9, height: 9)
+      .overlay(Circle().strokeBorder(Theme.Palette.accent, lineWidth: 1.5))
+      .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+      .padding(9)
+      .contentShape(Circle())
   }
 
   /// A vertical pill distinguishes reflow handles from the four square scale handles. The visible
@@ -635,6 +689,19 @@ struct BoardCardView: View {
         } else {
           board.setFrame(card.id, applyResize(corner, translation: value.translation, to: card.frame))
         }
+      }
+  }
+
+  private func connectorEndpointGesture(_ endpoint: ConnectorEndpoint) -> some Gesture {
+    DragGesture(minimumDistance: 2, coordinateSpace: .local)
+      .updating($endpointDrag) { value, state, _ in
+        state = ConnectorEndpointDragSession(endpoint: endpoint, translation: value.translation)
+      }
+      .onEnded { value in
+        guard let endpoints = ConnectorGeometry.endpoints(of: card) else { return }
+        let destination = ConnectorEndpointDrag.boardPoint(
+          from: endpoints[endpoint], translation: value.translation, zoom: zoom)
+        board.setConnectorEndpoint(endpoint, of: card.id, to: destination)
       }
   }
 
@@ -813,6 +880,8 @@ private struct CanvasElementContent: View {
   /// in cardBody); `graphDropTarget` lightens the plot for an incoming equation. Both false on export.
   var graphSelected: Bool = false
   var graphDropTarget: Bool = false
+  /// Optional normalized line/arrow endpoints used only for an in-flight endpoint drag preview.
+  var connectorPoints: [CanvasPoint]?
 
   /// The card's tint slot resolved against the ACTIVE flavor — semantic, so the same element
   /// re-colors when the theme changes.
@@ -852,9 +921,9 @@ private struct CanvasElementContent: View {
         case .diamond:
           ShapeBox(kind: .diamond, tint: tint)
         case .line:
-          LineShape(arrow: false, points: card.points ?? CardState.defaultLinePoints(), tint: tint)
+          LineShape(arrow: false, points: connectorPoints ?? card.points ?? CardState.defaultLinePoints(), tint: tint)
         case .arrow:
-          LineShape(arrow: true, points: card.points ?? CardState.defaultLinePoints(), tint: tint)
+          LineShape(arrow: true, points: connectorPoints ?? card.points ?? CardState.defaultLinePoints(), tint: tint)
         case .freehand:
           FreehandShape(points: card.points ?? CardState.defaultFreehandPoints(), tint: tint)
         case .image:
@@ -2422,6 +2491,20 @@ private enum Corner: CaseIterable, Hashable {
 
 private struct ResizeSession: Equatable {
   let corner: Corner
+  var translation: CGSize
+}
+
+struct ConnectorEndpointDrag {
+  static func boardPoint(from origin: CGPoint, translation: CGSize, zoom: CGFloat) -> CGPoint {
+    let safeZoom = max(zoom, 0.01)
+    return CGPoint(
+      x: origin.x + translation.width / safeZoom,
+      y: origin.y + translation.height / safeZoom)
+  }
+}
+
+private struct ConnectorEndpointDragSession: Equatable {
+  let endpoint: ConnectorEndpoint
   var translation: CGSize
 }
 
