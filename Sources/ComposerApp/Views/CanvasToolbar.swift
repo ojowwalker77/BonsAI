@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The board tool. `select` moves/edits existing elements; the others drop a new element where
 /// you click.
-enum CanvasTool: Equatable {
+enum CanvasTool: CaseIterable, Hashable, Sendable {
   case select
   case text
   case rectangle
@@ -69,6 +69,79 @@ enum CanvasTool: Equatable {
   }
 }
 
+struct CanvasToolDescriptor: Identifiable, Hashable, Sendable {
+  let tool: CanvasTool
+  let symbol: String
+  let helpKey: String
+  let shortcut: Int?
+
+  var id: CanvasTool { tool }
+  var localizedHelp: String { helpKey.localizedUI }
+}
+
+struct CanvasToolGroupDescriptor: Equatable, Sendable {
+  let symbol: String
+  let helpKey: String
+  let tools: [CanvasToolDescriptor]
+}
+
+/// One catalog drives both toolbar variants, so a tool's glyph, help text, and shortcut cannot
+/// drift when the responsive layout groups it into a menu.
+enum CanvasToolbarCatalog {
+  static let select = CanvasToolDescriptor(
+    tool: .select, symbol: "cursorarrow", helpKey: "Select  ·  move & edit cards  1", shortcut: 1)
+  static let text = CanvasToolDescriptor(
+    tool: .text, symbol: "character", helpKey: "Text  ·  click the board, then type  2", shortcut: 2)
+  static let rectangle = CanvasToolDescriptor(
+    tool: .rectangle, symbol: "rectangle", helpKey: "Rectangle  ·  drag to draw  3", shortcut: 3)
+  static let ellipse = CanvasToolDescriptor(
+    tool: .ellipse, symbol: "circle", helpKey: "Ellipse  ·  drag to draw  4", shortcut: 4)
+  static let diamond = CanvasToolDescriptor(
+    tool: .diamond, symbol: "diamond", helpKey: "Diamond  ·  drag to draw  5", shortcut: 5)
+  static let line = CanvasToolDescriptor(
+    tool: .line, symbol: "line.diagonal", helpKey: "Line  ·  drag to draw  6", shortcut: 6)
+  static let arrow = CanvasToolDescriptor(
+    tool: .arrow, symbol: "arrow.up.right", helpKey: "Arrow  ·  drag to draw  7", shortcut: 7)
+  static let freehand = CanvasToolDescriptor(
+    tool: .freehand, symbol: "scribble.variable", helpKey: "Freehand stroke  ·  drag to draw  8", shortcut: 8)
+  static let vectorPen = CanvasToolDescriptor(
+    tool: .vectorPen, symbol: "pencil.tip",
+    helpKey: "Pen  ·  click corners, drag curves, Return commits  P", shortcut: nil)
+  static let equation = CanvasToolDescriptor(
+    tool: .equation, symbol: "x.squareroot",
+    helpKey: "Equation  ·  click the board, then type LaTeX  9", shortcut: 9)
+  static let sticky = CanvasToolDescriptor(
+    tool: .sticky, symbol: "note", helpKey: "Sticky note", shortcut: nil)
+  static let checklist = CanvasToolDescriptor(
+    tool: .checklist, symbol: "checklist", helpKey: "Checklist", shortcut: nil)
+  static let table = CanvasToolDescriptor(
+    tool: .table, symbol: "tablecells", helpKey: "Table", shortcut: nil)
+
+  static let fullTools = [
+    select, text, rectangle, ellipse, diamond, line, arrow, freehand, vectorPen, equation,
+  ]
+  static let shapeGroup = CanvasToolGroupDescriptor(
+    symbol: "square.on.circle", helpKey: rectangle.helpKey,
+    tools: [rectangle, ellipse, diamond])
+  static let connectorGroup = CanvasToolGroupDescriptor(
+    symbol: "arrow.up.right", helpKey: "Connectors", tools: [line, arrow])
+  static let drawingGroup = CanvasToolGroupDescriptor(
+    symbol: "pencil.and.scribble", helpKey: "Drawing", tools: [freehand, vectorPen])
+  static let moreGroup = CanvasToolGroupDescriptor(
+    symbol: "plus.square.on.square", helpKey: "More canvas elements",
+    tools: [sticky, checklist, table])
+}
+
+enum CanvasToolbarLayoutPolicy {
+  /// `ViewThatFits` must compare fixed footprints. The slot remains present even when its action is
+  /// unavailable, preventing Select/Text from choosing a different variant at the same width.
+  static let persistenceSlotCount = 1
+
+  static func showsPersistenceAction(for tool: CanvasTool) -> Bool {
+    tool.isRepeatableDrawingTool
+  }
+}
+
 /// The canvas tool cluster — the eight placement/selection tools, rendered bare so the bottom
 /// command bar can lay it alongside zoom and session utilities under one shared glass surface.
 struct CanvasToolbar: View {
@@ -85,40 +158,10 @@ struct CanvasToolbar: View {
   /// Keep every direct tool affordance while the window has room for it.
   private var fullToolbar: some View {
     HStack(spacing: 5) {
-      ToolButton(symbol: "cursorarrow", help: "Select  ·  move & edit cards  1".localizedUI,
-                 active: tool == .select, shortcut: 1) { tool = .select }
-      ToolButton(symbol: "character", help: "Text  ·  click the board, then type  2".localizedUI,
-                 active: tool == .text, shortcut: 2) { tool = .text }
-      ToolButton(symbol: "rectangle", help: "Rectangle  ·  drag to draw  3".localizedUI,
-                 active: tool == .rectangle, shortcut: 3) { tool = .rectangle }
-      ToolButton(symbol: "circle", help: "Ellipse  ·  drag to draw  4".localizedUI,
-                 active: tool == .ellipse, shortcut: 4) { tool = .ellipse }
-      ToolButton(symbol: "diamond", help: "Diamond  ·  drag to draw  5".localizedUI,
-                 active: tool == .diamond, shortcut: 5) { tool = .diamond }
-      ToolButton(symbol: "line.diagonal", help: "Line  ·  drag to draw  6".localizedUI,
-                 active: tool == .line, shortcut: 6) { tool = .line }
-      ToolButton(symbol: "arrow.up.right", help: "Arrow  ·  drag to draw  7".localizedUI,
-                 active: tool == .arrow, shortcut: 7) { tool = .arrow }
-      ToolButton(symbol: "scribble.variable", help: "Freehand stroke  ·  drag to draw  8".localizedUI,
-                 active: tool == .freehand, shortcut: 8) { tool = .freehand }
-      ToolButton(symbol: "pencil.tip", help: "Pen  ·  click corners, drag curves, Return commits  P".localizedUI,
-                 active: tool == .vectorPen) { tool = .vectorPen }
-      ToolButton(symbol: "x.squareroot", help: "Equation  ·  click the board, then type LaTeX  9".localizedUI,
-                 active: tool == .equation, shortcut: 9) { tool = .equation }
-      Menu {
-        Button("Sticky note".localizedUI) { tool = .sticky }
-        Button("Checklist".localizedUI) { tool = .checklist }
-        Button("Table".localizedUI) { tool = .table }
-      } label: {
-        Image(systemName: "plus.square.on.square")
-          .font(WindowChrome.iconFont)
-          .foregroundStyle([.sticky, .checklist, .table].contains(tool) ? Theme.Palette.accent : Theme.Palette.chromeGlyph)
-          .frame(width: ToolMetrics.side, height: ToolMetrics.side)
+      ForEach(CanvasToolbarCatalog.fullTools) { descriptor in
+        toolButton(descriptor)
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .help("More canvas elements".localizedUI)
-
+      toolMenu(CanvasToolbarCatalog.moreGroup)
       persistenceControl
     }
   }
@@ -128,86 +171,69 @@ struct CanvasToolbar: View {
   /// discoverable menus; keyboard shortcuts continue to select every tool directly.
   private var compactToolbar: some View {
     HStack(spacing: 5) {
-      ToolButton(symbol: "cursorarrow", help: "Select  ·  move & edit cards  1".localizedUI,
-                 active: tool == .select, shortcut: 1) { tool = .select }
-      ToolButton(symbol: "character", help: "Text  ·  click the board, then type  2".localizedUI,
-                 active: tool == .text, shortcut: 2) { tool = .text }
-      toolMenu(
-        symbol: "square.on.circle",
-        help: "Rectangle  ·  drag to draw  3".localizedUI,
-        active: [.rectangle, .ellipse, .diamond].contains(tool)
-      ) {
-        Button("Rectangle  ·  drag to draw  3".localizedUI) { tool = .rectangle }
-        Button("Ellipse  ·  drag to draw  4".localizedUI) { tool = .ellipse }
-        Button("Diamond  ·  drag to draw  5".localizedUI) { tool = .diamond }
-      }
-      toolMenu(
-        symbol: "arrow.up.right",
-        help: "Connectors".localizedUI,
-        active: [.line, .arrow].contains(tool)
-      ) {
-        Button("Line  ·  drag to draw  6".localizedUI) { tool = .line }
-        Button("Arrow  ·  drag to draw  7".localizedUI) { tool = .arrow }
-      }
-      toolMenu(
-        symbol: "pencil.and.scribble",
-        help: "Drawing".localizedUI,
-        active: [.freehand, .vectorPen].contains(tool)
-      ) {
-        Button("Freehand stroke  ·  drag to draw  8".localizedUI) { tool = .freehand }
-        Button("Pen  ·  click corners, drag curves, Return commits  P".localizedUI) { tool = .vectorPen }
-      }
-      ToolButton(symbol: "x.squareroot", help: "Equation  ·  click the board, then type LaTeX  9".localizedUI,
-                 active: tool == .equation, shortcut: 9) { tool = .equation }
-      toolMenu(
-        symbol: "plus.square.on.square",
-        help: "More canvas elements".localizedUI,
-        active: [.sticky, .checklist, .table].contains(tool)
-      ) {
-        Button("Sticky note".localizedUI) { tool = .sticky }
-        Button("Checklist".localizedUI) { tool = .checklist }
-        Button("Table".localizedUI) { tool = .table }
-      }
-
+      toolButton(CanvasToolbarCatalog.select)
+      toolButton(CanvasToolbarCatalog.text)
+      toolMenu(CanvasToolbarCatalog.shapeGroup)
+      toolMenu(CanvasToolbarCatalog.connectorGroup)
+      toolMenu(CanvasToolbarCatalog.drawingGroup)
+      toolButton(CanvasToolbarCatalog.equation)
+      toolMenu(CanvasToolbarCatalog.moreGroup)
       persistenceControl
     }
   }
 
-  private func toolMenu<Content: View>(
-    symbol: String,
-    help: String,
-    active: Bool,
-    @ViewBuilder content: () -> Content
-  ) -> some View {
-    Menu(content: content) {
-      Image(systemName: symbol)
+  private func toolButton(_ descriptor: CanvasToolDescriptor) -> some View {
+    ToolButton(
+      symbol: descriptor.symbol,
+      help: descriptor.localizedHelp,
+      active: tool == descriptor.tool,
+      shortcut: descriptor.shortcut
+    ) {
+      tool = descriptor.tool
+    }
+  }
+
+  private func toolMenu(_ group: CanvasToolGroupDescriptor) -> some View {
+    Menu {
+      ForEach(group.tools) { descriptor in
+        Button(descriptor.localizedHelp) { tool = descriptor.tool }
+      }
+    } label: {
+      Image(systemName: group.symbol)
         .font(WindowChrome.iconFont)
-        .foregroundStyle(active ? Theme.Palette.accent : Theme.Palette.chromeGlyph)
+        .foregroundStyle(
+          group.tools.contains(where: { $0.tool == tool })
+            ? Theme.Palette.accent : Theme.Palette.chromeGlyph)
         .frame(width: ToolMetrics.side, height: ToolMetrics.side)
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
-    .help(help)
+    .help(group.helpKey.localizedUI)
   }
 
-  @ViewBuilder
   private var persistenceControl: some View {
-    if tool.isRepeatableDrawingTool {
-      Button {
-        continuousDrawingEnabled.toggle()
-        Haptics.level()
-      } label: {
-        Image(systemName: continuousDrawingEnabled ? "pin.fill" : "pin.slash")
-          .font(WindowChrome.iconFont)
-          .foregroundStyle(continuousDrawingEnabled ? Theme.Palette.accent : Theme.Palette.chromeGlyph)
-          .frame(width: ToolMetrics.side, height: ToolMetrics.side)
-          .contentShape(Rectangle())
+    let showsAction = CanvasToolbarLayoutPolicy.showsPersistenceAction(for: tool)
+    return ZStack {
+      if showsAction {
+        Button {
+          continuousDrawingEnabled.toggle()
+          Haptics.level()
+        } label: {
+          Image(systemName: continuousDrawingEnabled ? "pin.fill" : "pin.slash")
+            .font(WindowChrome.iconFont)
+            .foregroundStyle(continuousDrawingEnabled ? Theme.Palette.accent : Theme.Palette.chromeGlyph)
+            .frame(width: ToolMetrics.side, height: ToolMetrics.side)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help((continuousDrawingEnabled
+               ? "Drawing tool stays active · click to use once"
+               : "Drawing tool is one-shot · click to keep active").localizedUI)
       }
-      .buttonStyle(.plain)
-      .help((continuousDrawingEnabled
-             ? "Drawing tool stays active · click to use once"
-             : "Drawing tool is one-shot · click to keep active").localizedUI)
     }
+    .frame(width: ToolMetrics.side, height: ToolMetrics.side)
+    .allowsHitTesting(showsAction)
+    .accessibilityHidden(!showsAction)
   }
 }
 
