@@ -23,6 +23,7 @@ struct ComposerCanvas: View {
   @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
   @AppStorage(ComposerPreferences.continuousDrawingEnabledKey) private var continuousDrawingEnabled
     = ComposerPreferences.defaultContinuousDrawingEnabled
+  @AppStorage(ComposerPreferences.dotGridEnabledKey) private var dotGridEnabled = false
 
   @State private var tool: CanvasTool = .select
   @State private var isWorking = false
@@ -393,6 +394,14 @@ struct ComposerCanvas: View {
         onZoom: handleZoom
       )
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      if dotGridEnabled {
+        CanvasDotGrid(
+          scale: effectiveScale,
+          translation: CGSize(
+            width: pan.width + panLive.width,
+            height: pan.height + panLive.height))
+      }
 
       // The card layer is isolated and `Equatable` so SwiftUI skips rebuilding every card when only a
       // transient gesture changed (draw / freehand / selection rect / pan / zoom). The live pan
@@ -2220,6 +2229,33 @@ struct ComposerCanvas: View {
       try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
       if toast?.id == id { toast = nil }
     }
+  }
+}
+
+/// A quiet board-space dot field rendered as one vector path. It sits above the pointer-input view
+/// but below cards and live drawing previews, and never participates in hit testing or export.
+private struct CanvasDotGrid: View {
+  let scale: CGFloat
+  let translation: CGSize
+
+  var body: some View {
+    Canvas { context, size in
+      let xAxis = CanvasDotGridLayout.axis(scale: scale, translation: translation.width)
+      let yAxis = CanvasDotGridLayout.axis(scale: scale, translation: translation.height)
+      let radius = min(max(scale, 0.7), 1.35)
+      var dots = Path()
+
+      for x in stride(from: xAxis.first, through: size.width, by: xAxis.spacing) {
+        for y in stride(from: yAxis.first, through: size.height, by: yAxis.spacing) {
+          dots.addEllipse(in: CGRect(x: x - radius, y: y - radius,
+                                     width: radius * 2, height: radius * 2))
+        }
+      }
+      context.fill(dots, with: .color(Theme.Palette.menuDesc.opacity(Theme.flavor.isDark ? 0.34 : 0.26)))
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
   }
 }
 

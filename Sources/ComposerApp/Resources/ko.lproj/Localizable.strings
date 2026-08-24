@@ -505,6 +505,8 @@
 "Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac." = "이 Mac에 설치되어 응답하는 엔진만 표시됩니다. CLI 프롬프트는 설정한 에이전트 계정에 머무릅니다. Apple Intelligence는 기기 내에서 검사를 실행하며 초안을 Mac 밖으로 내보내지 않습니다.";
 "Pick the body font for cards, chrome, and the editor." = "카드, UI, 편집기에 사용할 본문 글꼴을 선택합니다.";
 "Canvas" = "캔버스";
+"Dot grid" = "점 격자";
+"Show a subtle alignment grid behind board content." = "보드 콘텐츠 뒤에 은은한 정렬 격자를 표시합니다.";
 "Let the desktop blur through the board surface. Solid keeps the flat canvas." = "보드 표면 너머로 데스크탑 블러가 비치게 합니다. “단색”은 평면 캔버스를 유지합니다.";
 "Theme" = "테마";
 "Pick the palette for the whole app." = "앱 전체의 팔레트를 선택합니다.";

@@ -231,6 +231,7 @@ private struct SettingsContent: View {
   @AppStorage(ComposerPreferences.hideDockIconKey) private var hideDockIcon = false
   @AppStorage(ComposerPreferences.continuousDrawingEnabledKey) private var continuousDrawingEnabled
     = ComposerPreferences.defaultContinuousDrawingEnabled
+  @AppStorage(ComposerPreferences.dotGridEnabledKey) private var dotGridEnabled = false
   /// The raw text-size preference. Written directly by the stepper; the change notification is
   /// posted from `.onChange` — AFTER the SwiftUI update transaction — because the observer
   /// rebuilds the whole canvas, and doing that synchronously from inside a binding setter tears
@@ -847,6 +848,24 @@ private struct SettingsContent: View {
         }
         .font(.caption2)
         .foregroundStyle(Theme.Palette.count)
+
+        Divider().overlay(Theme.Palette.separator)
+
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Dot grid".localizedUI)
+              .font(.callout.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+            Text("Show a subtle alignment grid behind board content.".localizedUI)
+              .font(.caption)
+              .foregroundStyle(Theme.Palette.menuDesc)
+          }
+          Spacer(minLength: 12)
+          Toggle("", isOn: $dotGridEnabled)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(Theme.Palette.accent)
+        }
       }
       .padding(14)
       .settingsCard()

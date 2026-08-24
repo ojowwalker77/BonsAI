@@ -505,6 +505,8 @@
 "Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac." = "仅提供在这台 Mac 上已安装并能响应的引擎。CLI 提示会保留在你配置的代理账户中；Apple Intelligence 在设备端运行其检查，绝不会将草稿发送出你的 Mac。";
 "Pick the body font for cards, chrome, and the editor." = "为卡片、界面和编辑器选择正文字体。";
 "Canvas" = "画布";
+"Dot grid" = "点阵网格";
+"Show a subtle alignment grid behind board content." = "在画板内容后方显示淡雅的对齐网格。";
 "Let the desktop blur through the board surface. Solid keeps the flat canvas." = "让桌面的模糊透过画板表面显示。“实色”则保持平面画布。";
 "Theme" = "主题";
 "Pick the palette for the whole app." = "为整个应用选择配色。";

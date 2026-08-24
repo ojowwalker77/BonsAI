@@ -503,6 +503,8 @@
 "Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac." = "Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac.";
 "Pick the body font for cards, chrome, and the editor." = "Pick the body font for cards, chrome, and the editor.";
 "Canvas" = "Canvas";
+"Dot grid" = "Dot grid";
+"Show a subtle alignment grid behind board content." = "Show a subtle alignment grid behind board content.";
 "Let the desktop blur through the board surface. Solid keeps the flat canvas." = "Let the desktop blur through the board surface. Solid keeps the flat canvas.";
 "Theme" = "Theme";
 "Pick the palette for the whole app." = "Pick the palette for the whole app.";

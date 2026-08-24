@@ -505,6 +505,8 @@
 "Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac." = "この Mac にインストールされ、応答できるエンジンのみが表示されます。CLI のプロンプトは設定済みのエージェントアカウント内にとどまります。Apple Intelligence はデバイス上で lint を実行し、ドラフトを Mac の外へ送ることはありません。";
 "Pick the body font for cards, chrome, and the editor." = "カード、UI、エディタの本文フォントを選びます。";
 "Canvas" = "キャンバス";
+"Dot grid" = "ドットグリッド";
+"Show a subtle alignment grid behind board content." = "ボード内容の背面に控えめな位置合わせグリッドを表示します。";
 "Let the desktop blur through the board surface. Solid keeps the flat canvas." = "ボード表面からデスクトップのぼかしを透かします。「ソリッド」はフラットなキャンバスを保ちます。";
 "Theme" = "テーマ";
 "Pick the palette for the whole app." = "アプリ全体のパレットを選びます。";

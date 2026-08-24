@@ -135,6 +135,9 @@ enum ComposerPreferences {
   /// value must not silently decide the behavior of the redesigned, visible drawing latch.
   static let continuousDrawingEnabledKey = "composer.canvas.continuousDrawingEnabled.v2"
   static let defaultContinuousDrawingEnabled = false
+  /// Optional viewport alignment aid. It is an app preference, not board data: the grid follows
+  /// the current viewport and deliberately does not become part of board PNG exports.
+  static let dotGridEnabledKey = "composer.canvas.dotGridEnabled"
 
   static let minEditorFontSize: CGFloat = 11
   static let maxEditorFontSize: CGFloat = 28
