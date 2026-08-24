@@ -304,6 +304,62 @@ final class BoardExporterRenderTests: XCTestCase {
     XCTAssertTrue(foundImagePixel, "stored image pixels should appear in the whole-board export")
   }
 
+  func testImageAspectFillDoesNotPaintOutsideItsCardFrame() throws {
+    let filename = try writeStoredTestImage()
+    defer { try? FileManager.default.removeItem(at: AssetStore.storeDirectory.appendingPathComponent(filename)) }
+
+    // Deliberately mismatch the square fixture and a wide, short card. Aspect-fill must crop the
+    // image vertically at the card boundary; an unconstrained SwiftUI image instead reports its
+    // intrinsic fill height and paints far below the selection/resize frame.
+    let picture = CardState(
+      kind: .image,
+      x: 100,
+      y: 100,
+      w: 180,
+      h: 60,
+      z: 1,
+      imagePath: filename
+    )
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let id = try XCTUnwrap(board.insertCopies([picture], offset: .zero).first)
+    let card = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    guard let image = BoardExporter.renderBoardImage(cards: [card], board: board),
+          let rep = bitmapRep(of: image) else {
+      return XCTFail("image-card render failed")
+    }
+
+    var redBounds: CGRect?
+    for x in 0..<rep.pixelsWide {
+      for y in 0..<rep.pixelsHigh {
+        guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+              color.redComponent > 0.75,
+              color.greenComponent < 0.20,
+              color.blueComponent < 0.20 else { continue }
+        let pixel = CGRect(x: x, y: y, width: 1, height: 1)
+        redBounds = redBounds.map { $0.union(pixel) } ?? pixel
+      }
+    }
+
+    let painted = try XCTUnwrap(redBounds, "solid-red fixture should render inside the image card")
+    let expectedWidth = card.frame.width * BoardExporter.renderScale
+    let expectedHeight = card.frame.height * BoardExporter.renderScale
+    // The one-point hairline and rounded-corner antialiasing can consume a few edge pixels, but
+    // the solid fixture must otherwise cover the card and may never extend beyond it.
+    XCTAssertGreaterThanOrEqual(
+      painted.width,
+      expectedWidth - 6,
+      "aspect-fill must still cover the full card width")
+    XCTAssertLessThanOrEqual(painted.width, expectedWidth + 2)
+    XCTAssertGreaterThanOrEqual(
+      painted.height,
+      expectedHeight - 6,
+      "aspect-fill must still cover the full card height")
+    XCTAssertLessThanOrEqual(
+      painted.height,
+      expectedHeight + 2,
+      "aspect-fill pixels must be clipped to the same frame used by selection chrome")
+  }
+
   // MARK: Helpers
 
   private func writeStoredTestImage() throws -> String {

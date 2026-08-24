@@ -2393,36 +2393,40 @@ private struct ImageObjectPlaceholder: View {
   }
 
   var body: some View {
-    Group {
-      if let image = resolvedImage {
-      Image(nsImage: image)
-        .resizable()
-        .scaledToFill()
-        // Clamp to the card frame so `scaledToFill` fills-and-crops within the card instead of
-        // overflowing it — the image's rounded border (and the selection ring) then hug the frame.
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-      } else {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(Theme.Palette.elementFill)
-          .overlay {
-            VStack(spacing: 8) {
-              Image(systemName: "photo")
-                .font(.system(size: 24, weight: .medium))
-              Text(path.map { ($0 as NSString).lastPathComponent } ?? "Image".localizedUI)
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
+    GeometryReader { proxy in
+      Group {
+        if let image = resolvedImage {
+          Image(nsImage: image)
+            .resizable()
+            .scaledToFill()
+            // `scaledToFill` may choose an aspect-derived child size larger than its proposal. An
+            // exact frame makes the following clip use the card bounds (the same bounds read by
+            // selection chrome) instead of the overflowing image's intrinsic fill height.
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+        } else {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Theme.Palette.elementFill)
+            .overlay {
+              VStack(spacing: 8) {
+                Image(systemName: "photo")
+                  .font(.system(size: 24, weight: .medium))
+                Text(path.map { ($0 as NSString).lastPathComponent } ?? "Image".localizedUI)
+                  .font(.caption.weight(.medium))
+                  .lineLimit(1)
+              }
+              .foregroundStyle(Theme.Palette.chromeText)
+              .padding(10)
             }
-            .foregroundStyle(Theme.Palette.chromeText)
-            .padding(10)
-          }
-          .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(Theme.Palette.chromeDivider, style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
-          .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .strokeBorder(Theme.Palette.chromeDivider, style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
+            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+        }
       }
+      .frame(width: proxy.size.width, height: proxy.size.height)
     }
     // `.task(id:)` runs on appear AND whenever `path` changes, and is cancelled on disappear — so a
     // card reloaded from a saved board (or culled and re-added while panning) reliably re-decodes,
