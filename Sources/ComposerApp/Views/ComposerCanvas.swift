@@ -2240,13 +2240,13 @@ private struct CanvasDotGrid: View {
 
   var body: some View {
     Canvas { context, size in
-      let xAxis = CanvasDotGridLayout.axis(scale: scale, translation: translation.width)
-      let yAxis = CanvasDotGridLayout.axis(scale: scale, translation: translation.height)
+      let layout = CanvasDotGridLayout.layout(
+        scale: scale, translation: translation, viewportSize: size)
       let radius = min(max(scale, 0.7), 1.35)
       var dots = Path()
 
-      for x in stride(from: xAxis.first, through: size.width, by: xAxis.spacing) {
-        for y in stride(from: yAxis.first, through: size.height, by: yAxis.spacing) {
+      for x in stride(from: layout.xAxis.first, through: size.width, by: layout.xAxis.spacing) {
+        for y in stride(from: layout.yAxis.first, through: size.height, by: layout.yAxis.spacing) {
           dots.addEllipse(in: CGRect(x: x - radius, y: y - radius,
                                      width: radius * 2, height: radius * 2))
         }
