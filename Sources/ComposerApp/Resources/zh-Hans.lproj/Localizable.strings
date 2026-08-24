@@ -515,6 +515,10 @@
 "Text size" = "文字大小";
 "Drawing" = "绘图";
 "How the board behaves while you draw." = "绘制时画板的行为方式。";
+"Continuous drawing" = "连续绘图";
+"Keep shape, line, and freehand tools active after drawing. Esc returns to Select." = "绘制后保持形状、线条和手绘工具处于活动状态。按 Esc 返回选择工具。";
+"Drawing tool stays active · click to use once" = "绘图工具保持活动 · 点击改为单次使用";
+"Drawing tool is one-shot · click to keep active" = "绘图工具为单次使用 · 点击保持活动";
 "Snap sketches into shapes" = "草图自动转为图形";
 "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "识别出的笔画在抬笔时变为规整图形。关闭时保留建议提示。";
 "Migrating saved connector tokens" = "正在迁移已保存的连接器令牌";

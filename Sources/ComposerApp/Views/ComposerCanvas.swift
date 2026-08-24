@@ -21,6 +21,8 @@ struct ComposerCanvas: View {
   @ObservedObject private var engineCapabilities = EngineCapabilityStore.shared
   @ObservedObject private var userFacingErrors = UserFacingErrorStore.shared
   @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
+  @AppStorage(ComposerPreferences.continuousDrawingEnabledKey) private var continuousDrawingEnabled
+    = ComposerPreferences.defaultContinuousDrawingEnabled
 
   @State private var tool: CanvasTool = .select
   @State private var isWorking = false
@@ -595,7 +597,7 @@ struct ComposerCanvas: View {
     let boardPoint = CGPoint(x: (point.x - pan.width) / effectiveScale,
                              y: (point.y - pan.height) / effectiveScale)
     let id = board.addElement(kind, at: boardPoint)
-    tool = .select
+    tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
     // Editing state is established synchronously so navigation cannot race the stage's own focus
     // delay and persist an abandoned structured card before its editor mounts.
     if kind == .text || kind == .equation || kind == .sticky || kind == .checklist || kind == .table {
@@ -635,7 +637,7 @@ struct ComposerCanvas: View {
     guard elementDraft != nil else { return }
     guard let kind = tool.elementKind else { return }
     if let id = board.addDrawnElement(kind, from: boardPoint(forViewport: start), to: boardPoint(forViewport: end)) {
-      tool = .select
+      tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
       // A perpendicular partner means this pair of lines/arrows reads as axes — offer a graph.
       if kind == .line || kind == .arrow { offerGraphPromotion(id) }
     }
@@ -671,7 +673,7 @@ struct ComposerCanvas: View {
       )
     }
     if let id = board.addFreehandStroke(frame: frame, points: normalized) {
-      tool = .select
+      tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
       // Auto-snap (Settings ▸ Drawing): a confident read converts on pen-up, no chip — the rough
       // stroke stays its own undo step, so ⌘Z restores the original ink like OneNote. Arrows are
       // EXCLUDED from auto conversion: too many ordinary strokes read as arrow-with-a-hook and
@@ -1031,7 +1033,7 @@ struct ComposerCanvas: View {
 
       barDivider
 
-      CanvasToolbar(tool: $tool)
+      CanvasToolbar(tool: $tool, continuousDrawingEnabled: $continuousDrawingEnabled)
 
       barDivider
 
@@ -1575,6 +1577,7 @@ struct ComposerCanvas: View {
       elementDraft = nil
       freehandDraft = nil
       bindTargetID = nil
+      tool = .select
     case .tintPicker:
       withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
     case .activeTool:

@@ -513,6 +513,10 @@
 "Text size" = "Text size";
 "Drawing" = "Drawing";
 "How the board behaves while you draw." = "How the board behaves while you draw.";
+"Continuous drawing" = "Continuous drawing";
+"Keep shape, line, and freehand tools active after drawing. Esc returns to Select." = "Keep shape, line, and freehand tools active after drawing. Esc returns to Select.";
+"Drawing tool stays active · click to use once" = "Drawing tool stays active · click to use once";
+"Drawing tool is one-shot · click to keep active" = "Drawing tool is one-shot · click to keep active";
 "Snap sketches into shapes" = "Snap sketches into shapes";
 "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip.";
 "Migrating saved connector tokens" = "Migrating saved connector tokens";

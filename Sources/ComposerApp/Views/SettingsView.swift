@@ -229,6 +229,8 @@ private struct SettingsContent: View {
   @AppStorage(ComposerPreferences.autoSnapFreehandKey) private var autoSnapFreehand = false
   @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
   @AppStorage(ComposerPreferences.hideDockIconKey) private var hideDockIcon = false
+  @AppStorage(ComposerPreferences.continuousDrawingEnabledKey) private var continuousDrawingEnabled
+    = ComposerPreferences.defaultContinuousDrawingEnabled
   /// The raw text-size preference. Written directly by the stepper; the change notification is
   /// posted from `.onChange` — AFTER the SwiftUI update transaction — because the observer
   /// rebuilds the whole canvas, and doing that synchronously from inside a binding setter tears
@@ -689,6 +691,26 @@ private struct SettingsContent: View {
     VStack(alignment: .leading, spacing: 8) {
       pageHeader("Drawing", "How the board behaves while you draw.")
       VStack(spacing: 0) {
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Continuous drawing".localizedUI)
+              .font(.callout.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+            Text("Keep shape, line, and freehand tools active after drawing. Esc returns to Select.".localizedUI)
+              .font(.caption)
+              .foregroundStyle(Theme.Palette.menuDesc)
+          }
+          Spacer(minLength: 12)
+          Toggle("", isOn: $continuousDrawingEnabled)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(Theme.Palette.accent)
+        }
+        .padding(.vertical, 11)
+
+        Divider()
+          .overlay(Theme.Palette.separator)
+
         HStack(spacing: 12) {
           VStack(alignment: .leading, spacing: 2) {
             Text("Snap sketches into shapes".localizedUI)

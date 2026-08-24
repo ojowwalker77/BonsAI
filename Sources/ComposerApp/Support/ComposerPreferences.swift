@@ -130,6 +130,11 @@ enum ComposerPreferences {
   /// Visual alignment hairlines shown while moving cards. Snapping remains active independently;
   /// the helpers are off by default so the canvas stays quiet unless the user asks for them.
   static let helperLinesEnabledKey = "composer.canvas.helperLinesEnabled"
+  /// Whether repeatable drawing tools remain selected after committing an element. This key is
+  /// intentionally distinct from the removed `persistentToolSelection` experiment: an old stored
+  /// value must not silently decide the behavior of the redesigned, visible drawing latch.
+  static let continuousDrawingEnabledKey = "composer.canvas.continuousDrawingEnabled.v2"
+  static let defaultContinuousDrawingEnabled = false
 
   static let minEditorFontSize: CGFloat = 11
   static let maxEditorFontSize: CGFloat = 28
@@ -163,6 +168,13 @@ enum ComposerPreferences {
   /// Whether recognized freehand strokes auto-convert on pen-up (Settings ▸ Appearance ▸ Drawing).
   static var autoSnapFreehand: Bool {
     UserDefaults.standard.bool(forKey: autoSnapFreehandKey)
+  }
+
+  /// The toolbar exposes the live latch whenever a repeatable tool is active, and Settings offers
+  /// the persisted preference. Off preserves the established one-shot behavior until opted in.
+  static var continuousDrawingEnabled: Bool {
+    let stored = UserDefaults.standard.object(forKey: continuousDrawingEnabledKey) as? NSNumber
+    return stored?.boolValue ?? defaultContinuousDrawingEnabled
   }
 
   /// Whether the rendered theme tracks macOS Light/Dark (Settings ▸ Appearance).

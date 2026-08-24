@@ -515,6 +515,10 @@
 "Text size" = "텍스트 크기";
 "Drawing" = "그리기";
 "How the board behaves while you draw." = "그리는 동안 보드의 동작 방식을 설정합니다.";
+"Continuous drawing" = "연속 그리기";
+"Keep shape, line, and freehand tools active after drawing. Esc returns to Select." = "도형, 선, 자유형 도구를 그린 뒤에도 활성 상태로 유지합니다. Esc를 누르면 선택 도구로 돌아갑니다.";
+"Drawing tool stays active · click to use once" = "그리기 도구 고정됨 · 클릭하여 한 번만 사용";
+"Drawing tool is one-shot · click to keep active" = "그리기 도구 한 번만 사용 · 클릭하여 고정";
 "Snap sketches into shapes" = "스케치를 도형으로 스냅";
 "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "인식된 스트로크는 펜을 떼면 깔끔한 도형이 됩니다. 끄면 제안 칩이 유지됩니다.";
 "Migrating saved connector tokens" = "저장된 커넥터 토큰 마이그레이션 중";

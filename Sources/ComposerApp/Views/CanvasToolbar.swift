@@ -49,12 +49,29 @@ enum CanvasTool: Equatable {
 
   /// Shift snaps line/arrow drags to the nearer axis (see `CanvasElementKind.constrainsToAxis`).
   var constrainsToAxis: Bool { elementKind?.constrainsToAxis ?? false }
+
+  /// Tools that naturally create a run of peer elements. Text, equations, images, and structured
+  /// cards open an editor/chooser and remain one-shot. Add a future pen tool here to inherit the
+  /// same visible latch and post-commit policy.
+  var isRepeatableDrawingTool: Bool {
+    switch self {
+    case .rectangle, .ellipse, .diamond, .line, .arrow, .freehand: true
+    default: false
+    }
+  }
+
+  /// The tool to select after a successful placement. Keeping this policy pure avoids scattering
+  /// subtly different one-shot decisions across click, shape-drag, and freehand commit paths.
+  func afterSuccessfulPlacement(continuousDrawing: Bool) -> CanvasTool {
+    continuousDrawing && isRepeatableDrawingTool ? self : .select
+  }
 }
 
 /// The canvas tool cluster — the eight placement/selection tools, rendered bare so the bottom
 /// command bar can lay it alongside zoom and session utilities under one shared glass surface.
 struct CanvasToolbar: View {
   @Binding var tool: CanvasTool
+  @Binding var continuousDrawingEnabled: Bool
 
   var body: some View {
     HStack(spacing: 5) {
@@ -89,6 +106,23 @@ struct CanvasToolbar: View {
       .menuStyle(.borderlessButton)
       .menuIndicator(.hidden)
       .help("More canvas elements".localizedUI)
+
+      if tool.isRepeatableDrawingTool {
+        Button {
+          continuousDrawingEnabled.toggle()
+          Haptics.level()
+        } label: {
+          Image(systemName: continuousDrawingEnabled ? "pin.fill" : "pin.slash")
+            .font(WindowChrome.iconFont)
+            .foregroundStyle(continuousDrawingEnabled ? Theme.Palette.accent : Theme.Palette.chromeGlyph)
+            .frame(width: ToolMetrics.side, height: ToolMetrics.side)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help((continuousDrawingEnabled
+               ? "Drawing tool stays active · click to use once"
+               : "Drawing tool is one-shot · click to keep active").localizedUI)
+      }
     }
   }
 }
