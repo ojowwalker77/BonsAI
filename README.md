@@ -124,7 +124,8 @@ on-device, and powers the semantic linter only.
 
 ## Architecture notes
 
-BonsAI is a normal Dock app built on AppKit + SwiftUI. In 1.3, the workspace is
+BonsAI defaults to a normal Dock presence built on AppKit + SwiftUI; Appearance can hide the Dock
+icon while keeping the menu-bar item and global shortcut available. In 1.3, the workspace is
 one standard, resizable macOS window with floating canvas chrome: board switcher,
 tools, zoom, grounding, bottom command bar, and in-canvas Agent and Settings
 overlays. That composition is load-bearing and easy to "clean up" by accident,

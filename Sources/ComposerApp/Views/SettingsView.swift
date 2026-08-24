@@ -228,6 +228,7 @@ private struct SettingsContent: View {
   @AppStorage(ComposerPreferences.followSystemAppearanceKey) private var followSystemAppearance = false
   @AppStorage(ComposerPreferences.autoSnapFreehandKey) private var autoSnapFreehand = false
   @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
+  @AppStorage(ComposerPreferences.hideDockIconKey) private var hideDockIcon = false
   /// The raw text-size preference. Written directly by the stepper; the change notification is
   /// posted from `.onChange` — AFTER the SwiftUI update transaction — because the observer
   /// rebuilds the whole canvas, and doing that synchronously from inside a binding setter tears
@@ -643,11 +644,41 @@ private struct SettingsContent: View {
 
   private var appearancePage: some View {
     VStack(alignment: .leading, spacing: 22) {
+      applicationCard
       languageCard
       themeCard
       fontCard
       canvasGlassCard
       drawingCard
+    }
+  }
+
+  /// App presence is a live process policy, not static bundle metadata. The menu-bar status item and
+  /// global shortcuts stay installed in either mode, so hiding the Dock icon never strands the user.
+  private var applicationCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Application", "Choose how BonsAI appears in macOS.")
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Hide Dock icon".localizedUI)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(Theme.Palette.body)
+          Text("Keep BonsAI in the menu bar and use the global shortcut to restore the board.".localizedUI)
+            .font(.caption)
+            .foregroundStyle(Theme.Palette.menuDesc)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Spacer(minLength: 12)
+        Toggle("", isOn: $hideDockIcon)
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .tint(Theme.Palette.accent)
+      }
+      .padding(14)
+      .settingsCard()
+    }
+    .onChange(of: hideDockIcon) { _, _ in
+      NotificationCenter.default.post(name: .composerDockIconVisibilityChanged, object: nil)
     }
   }
 

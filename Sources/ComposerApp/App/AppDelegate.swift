@@ -12,10 +12,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Watches macOS Light/Dark for the "match macOS appearance" setting. NSApp's own appearance is
   /// never pinned, so `effectiveAppearance` tracks the system even while our windows are themed.
   private var appearanceObservation: NSKeyValueObservation?
+  private lazy var activationPolicyController = ApplicationActivationPolicyController(
+    setPolicy: { NSApp.setActivationPolicy($0) },
+    activate: { NSApp.activate(ignoringOtherApps: true) }
+  )
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    NSApp.setActivationPolicy(.regular)
-    NSApp.activate(ignoringOtherApps: true)
+    applyActivationPolicy(restoreFocus: true)
     registerBundledFonts()
     hotKeyManager.register()
     menuBarController.install()
@@ -37,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NotificationCenter.default.addObserver(
       self, selector: #selector(captureToBoard),
       name: .composerCaptureToBoard, object: nil)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(dockIconVisibilityChanged),
+      name: .composerDockIconVisibilityChanged, object: nil)
 
     // A system Light/Dark switch re-resolves the effective theme when "match macOS appearance"
     // is on — routed through the same notification a manual theme pick posts, so the window
@@ -111,6 +117,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @objc private func toggle() { panelController.toggle() }
   @objc private func showBoard() { panelController.show() }
+
+  @objc private func dockIconVisibilityChanged() {
+    applyActivationPolicy(restoreFocus: panelController.isVisible)
+  }
+
+  private func applyActivationPolicy(restoreFocus: Bool) {
+    guard activationPolicyController.apply(
+      hidesDockIcon: ComposerPreferences.hidesDockIcon,
+      restoreFocus: restoreFocus
+    ) else {
+      NSLog("BonsAI: could not update the application activation policy")
+      return
+    }
+  }
 
   /// "Snap to board": run the region capture overlay, save the shot, summon the board, and hand the
   /// PNG to the canvas to add the card and read it on-device. Capture runs above all apps, so this

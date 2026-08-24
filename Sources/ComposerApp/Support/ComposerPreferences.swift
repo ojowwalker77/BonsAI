@@ -108,6 +108,9 @@ enum ComposerFontFamily: String, CaseIterable, Identifiable {
 /// User-tunable appearance controls shared by SwiftUI surfaces and AppKit text views.
 enum ComposerPreferences {
   static let editorFontSizeKey = "composer.editor.fontPointSize"
+  /// Hide BonsAI from the Dock while retaining its status item, shortcuts, and windows. The
+  /// negative key deliberately defaults to false when it has never been stored.
+  static let hideDockIconKey = "composer.application.hideDockIcon"
   /// App-wide theme. Defaults to Bonsai Dark — the signature look.
   static let themeKey = "composer.appearance.theme"
   /// When on, the rendered theme swaps to the picked theme's light/dark counterpart as macOS
@@ -131,6 +134,10 @@ enum ComposerPreferences {
   static let minEditorFontSize: CGFloat = 11
   static let maxEditorFontSize: CGFloat = 28
   static let fontSizeStep: CGFloat = 1
+
+  static var hidesDockIcon: Bool {
+    UserDefaults.standard.bool(forKey: hideDockIconKey)
+  }
 
   /// Internal so the Settings stepper can seed its @AppStorage default with the same value the
   /// clamped `editorFontSize` getter falls back to.

@@ -520,3 +520,7 @@
 "%@: macOS Keychain access failed. Check Keychain Access and try again." = "%@: macOS Keychain access failed. Check Keychain Access and try again.";
 "%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again." = "%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again.";
 "Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI." = "Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI.";
+"Application" = "Application";
+"Choose how BonsAI appears in macOS." = "Choose how BonsAI appears in macOS.";
+"Hide Dock icon" = "Hide Dock icon";
+"Keep BonsAI in the menu bar and use the global shortcut to restore the board." = "Keep BonsAI in the menu bar and use the global shortcut to restore the board.";
