@@ -49,6 +49,9 @@ struct BoardCardView: View {
   /// The graph marker currently being dragged (series id + point index), armed on a plain press that
   /// lands on a marker of a selected graph card. While set, drags move the point, not the card.
   @State private var markerDrag: (seriesID: UUID, index: Int)?
+  /// Real rendered checkbox bounds in this card's screen-space coordinate system. Using measured
+  /// symbols avoids guessing row strides when text wraps or a text card has its own font scale.
+  @State private var checklistCheckboxFrames: [Int: CGRect] = [:]
 
   /// The content's corner radius, so the selection ring hugs each element shape correctly
   /// (a too-round ring around a square image is what reads as "wrong").
@@ -69,6 +72,7 @@ struct BoardCardView: View {
   private var isTextElement: Bool { card.elementKind == .text }
   private var isEquationElement: Bool { card.elementKind == .equation }
   private var isGraphElement: Bool { card.elementKind == .graph }
+  private var checklistCoordinateSpace: String { "checklist-\(card.id.uuidString)" }
   /// An empty text card is just a place to write, not a placed object — so it shows no chrome.
   private var isEmptyText: Bool { isTextElement && interaction.text.trimmed.isEmpty }
   /// Suppress chrome (ring, handles, delete ✕) on an empty text card ONLY while it's being edited —
@@ -200,7 +204,7 @@ struct BoardCardView: View {
         // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
         // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
         // zoom so the text is laid out at screen size (crisp), not stretched.
-        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: boardTextContext.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id, connectorPoints: liveConnectorPoints)
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: boardTextContext.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id, connectorPoints: liveConnectorPoints, checklistCoordinateSpace: checklistCoordinateSpace)
           .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)
@@ -217,20 +221,19 @@ struct BoardCardView: View {
       // single/double tap recognizers wait out the double-click interval first.
       CardPointerCatcher(
         onPress: { modifiers, localPoint in
-          if card.elementKind == .checklist, modifiers.isEmpty {
-            let items = card.checklist ?? []
+          if !card.locked, card.elementKind == .checklist, modifiers.isEmpty {
             if let index = ChecklistInteraction.itemIndex(
-              at: localPoint, zoom: zoom, itemCount: items.count, layout: .structured) {
+              at: localPoint, renderedFrames: checklistCheckboxFrames) {
               board.toggleChecklistItem(card.id, index: index)
               armedForMove = false
               return .consumed
             }
           }
-          if card.elementKind == .text, modifiers.isEmpty {
+          if !card.locked, card.elementKind == .text, modifiers.isEmpty {
             let lines = interaction.plainText.components(separatedBy: "\n")
             if let line = ChecklistInteraction.itemIndex(
-              at: localPoint, zoom: zoom, itemCount: lines.count, layout: .markdown),
-               lines[line].hasPrefix("- [") {
+              at: localPoint, renderedFrames: checklistCheckboxFrames),
+               lines.indices.contains(line), lines[line].hasPrefix("- [") {
               board.toggleTextChecklistLine(card.id, lineIndex: line)
               armedForMove = false
               return .consumed
@@ -272,6 +275,10 @@ struct BoardCardView: View {
       if isGraphElement, isSelected, !isEditing, selectable {
         GraphInteractionOverlay(spec: card.graph ?? CardState.GraphSpec(), board: board, graphID: card.id)
       }
+    }
+    .coordinateSpace(name: checklistCoordinateSpace)
+    .onPreferenceChange(ChecklistCheckboxFramesPreferenceKey.self) { frames in
+      if checklistCheckboxFrames != frames { checklistCheckboxFrames = frames }
     }
   }
 
@@ -952,6 +959,9 @@ private struct CanvasElementContent: View {
   var graphDropTarget: Bool = false
   /// Optional normalized line/arrow endpoints used only for an in-flight endpoint drag preview.
   var connectorPoints: [CanvasPoint]?
+  /// Present only for live board cards. Export renderers omit it, so measuring interaction geometry
+  /// never changes exported content.
+  var checklistCoordinateSpace: String? = nil
 
   /// The card's tint slot resolved against the ACTIVE flavor — semantic, so the same element
   /// re-colors when the theme changes.
@@ -972,7 +982,8 @@ private struct CanvasElementContent: View {
                 .lineSpacing(Theme.Typography.bodyLineSpacing * zoom)
                 .foregroundStyle(Theme.Palette.placeholder)
             } else if Self.containsChecklist(text) {
-              InlineChecklistText(text: text, zoom: zoom, tint: tint)
+              InlineChecklistText(text: text, zoom: zoom, tint: tint,
+                                  checklistCoordinateSpace: checklistCoordinateSpace)
             } else {
               ComposerChipText(tint: tint, plain: text, ink: ink, definedVars: definedVars, failedCommands: failedCommands, zoom: zoom)
             }
@@ -1019,7 +1030,8 @@ private struct CanvasElementContent: View {
         case .sticky:
           StickyNoteView(title: card.stickyTitle ?? "", bodyText: text, tint: tint, zoom: zoom)
         case .checklist:
-          ChecklistView(items: card.checklist ?? [], tint: tint, zoom: zoom)
+          ChecklistView(items: card.checklist ?? [], tint: tint, zoom: zoom,
+                        checklistCoordinateSpace: checklistCoordinateSpace)
         case .table:
           SimpleTableView(spec: card.table ?? CardState.TableSpec(), tint: tint, zoom: zoom)
         }
@@ -1045,18 +1057,45 @@ private struct CanvasElementContent: View {
   }
 }
 
+private struct ChecklistCheckboxFramesPreferenceKey: PreferenceKey {
+  static var defaultValue: [Int: CGRect] = [:]
+
+  static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+    value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+  }
+}
+
+private extension View {
+  @ViewBuilder
+  func reportChecklistCheckbox(index: Int, in coordinateSpace: String?) -> some View {
+    if let coordinateSpace {
+      background {
+        GeometryReader { proxy in
+          Color.clear.preference(
+            key: ChecklistCheckboxFramesPreferenceKey.self,
+            value: [index: proxy.frame(in: .named(coordinateSpace))])
+        }
+      }
+    } else {
+      self
+    }
+  }
+}
+
 private struct InlineChecklistText: View {
   let text: String
   let zoom: CGFloat
   let tint: Color?
+  let checklistCoordinateSpace: String?
   var body: some View {
     VStack(alignment: .leading, spacing: 3 * zoom) {
-      ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
+      ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { index, line in
         if line.hasPrefix("- [ ] ") || line.lowercased().hasPrefix("- [x] ") {
           let checked = line.lowercased().hasPrefix("- [x] ")
           HStack(spacing: 8 * zoom) {
             Image(systemName: checked ? "checkmark.circle.fill" : "circle")
               .foregroundStyle(checked ? (tint ?? Theme.Palette.accent) : Theme.Palette.menuDesc)
+              .reportChecklistCheckbox(index: index, in: checklistCoordinateSpace)
             Text(String(line.dropFirst(6))).strikethrough(checked)
           }
           .foregroundStyle(checked ? Theme.Palette.menuDesc : (tint ?? Theme.Palette.body))
@@ -1113,12 +1152,14 @@ private struct ChecklistView: View {
   let items: [CardState.ChecklistItem]
   let tint: Color?
   let zoom: CGFloat
+  let checklistCoordinateSpace: String?
   var body: some View {
     VStack(alignment: .leading, spacing: 8 * zoom) {
-      ForEach(items) { item in
+      ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
         HStack(alignment: .firstTextBaseline, spacing: 9 * zoom) {
           Image(systemName: item.isChecked ? "checkmark.square.fill" : "square")
             .foregroundStyle(item.isChecked ? (tint ?? Theme.Palette.accent) : Theme.Palette.menuDesc)
+            .reportChecklistCheckbox(index: index, in: checklistCoordinateSpace)
           Text(item.text).strikethrough(item.isChecked).foregroundStyle(item.isChecked ? Theme.Palette.menuDesc : Theme.Palette.body)
         }
         .font(ComposerPreferences.appSwiftUIFont(size: 15 * zoom))

@@ -8,50 +8,33 @@ import Foundation
 /// the same module for stable-ID reordering, keeping both behaviors independently testable from
 /// SwiftUI and AppKit.
 enum ChecklistInteraction {
-  enum CanvasLayout {
-    case structured
-    case markdown
+  /// A checkbox remains intentionally acquirable when the board is zoomed out. The source rects
+  /// are measured from the rendered symbols in screen space, so wrapping, font choice, and a text
+  /// card's own scale cannot make the interaction drift to a different row.
+  static let minimumCheckboxHitSide: CGFloat = 24
 
-    fileprivate var topInset: CGFloat {
-      switch self {
-      case .structured: 16
-      case .markdown: 18
-      }
-    }
-
-    fileprivate var rowStride: CGFloat {
-      switch self {
-      case .structured: 30
-      case .markdown: 24
-      }
-    }
-
-    fileprivate var checkboxHeight: CGFloat {
-      switch self {
-      case .structured: 22
-      case .markdown: 20
-      }
-    }
+  static func checkboxHitRect(for renderedFrame: CGRect) -> CGRect {
+    let width = max(renderedFrame.width, minimumCheckboxHitSide)
+    let height = max(renderedFrame.height, minimumCheckboxHitSide)
+    return CGRect(
+      x: renderedFrame.midX - width / 2,
+      y: renderedFrame.midY - height / 2,
+      width: width,
+      height: height)
   }
 
-  /// A padded checkbox column: wide enough to acquire intentionally, narrow enough that task text
-  /// and the rest of the card always fall through to select/move/double-click editing.
-  private static let checkboxXRange: ClosedRange<CGFloat> = 10...42
-
-  static func itemIndex(at point: CGPoint,
-                        zoom: CGFloat,
-                        itemCount: Int,
-                        layout: CanvasLayout) -> Int? {
-    guard zoom > 0, itemCount > 0 else { return nil }
-    let local = CGPoint(x: point.x / zoom, y: point.y / zoom)
-    guard checkboxXRange.contains(local.x) else { return nil }
-    let relativeY = local.y - layout.topInset
-    guard relativeY >= 0 else { return nil }
-    let index = Int(relativeY / layout.rowStride)
-    guard (0..<itemCount).contains(index) else { return nil }
-    let yWithinRow = relativeY - CGFloat(index) * layout.rowStride
-    guard yWithinRow <= layout.checkboxHeight else { return nil }
-    return index
+  /// Resolve among measured checkbox frames. Expanded targets can overlap at very small board
+  /// zooms, so nearest-center wins instead of dictionary order deciding which row toggles.
+  static func itemIndex(at point: CGPoint, renderedFrames: [Int: CGRect]) -> Int? {
+    renderedFrames
+      .compactMap { index, frame -> (index: Int, distance: CGFloat)? in
+        guard checkboxHitRect(for: frame).contains(point) else { return nil }
+        return (index, hypot(point.x - frame.midX, point.y - frame.midY))
+      }
+      .min { lhs, rhs in
+        lhs.distance == rhs.distance ? lhs.index < rhs.index : lhs.distance < rhs.distance
+      }?
+      .index
   }
 
   /// Move one stable checklist row to the position occupied by another. Text, completion state,

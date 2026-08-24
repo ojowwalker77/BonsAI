@@ -869,6 +869,7 @@ final class BoardViewModel: ObservableObject {
   @discardableResult
   func toggleChecklistItem(_ id: UUID, index itemIndex: Int) -> Bool {
     guard let i = index(for: id), cards[i].elementKind == .checklist,
+          !cards[i].locked,
           cards[i].checklist?.indices.contains(itemIndex) == true else { return false }
     registerUndo()
     cards[i].checklist![itemIndex].isChecked.toggle()
@@ -881,7 +882,7 @@ final class BoardViewModel: ObservableObject {
   /// Apple Notes-style checklist syntax remains ordinary text, so an existing note can opt into
   /// tappable todos without converting to a different element or losing mentions/markdown.
   func toggleTextChecklistLine(_ id: UUID, lineIndex: Int) {
-    guard let i = index(for: id), cards[i].elementKind == .text else { return }
+    guard let i = index(for: id), cards[i].elementKind == .text, !cards[i].locked else { return }
     var lines = plainText(for: cards[i]).components(separatedBy: "\n")
     guard lines.indices.contains(lineIndex) else { return }
     if lines[lineIndex].hasPrefix("- [ ] ") {
@@ -894,7 +895,7 @@ final class BoardViewModel: ObservableObject {
 
   @discardableResult
   func setChecklist(_ id: UUID, _ items: [CardState.ChecklistItem]) -> Bool {
-    guard let i = index(for: id), cards[i].elementKind == .checklist else { return false }
+    guard let i = index(for: id), cards[i].elementKind == .checklist, !cards[i].locked else { return false }
     registerUndo(); cards[i].checklist = items; cards[i].whoWrote = nextAuthor
     invalidateBoardTextContext(); scheduleSave()
     return true

@@ -1,31 +1,80 @@
 import XCTest
 @testable import ComposerApp
 
+@MainActor
 final class ChecklistInteractionTests: XCTestCase {
-  func testStructuredChecklistOnlyTargetsTheCheckboxColumn() {
+  func testMeasuredCheckboxFramesFollowWrappedRowsInsteadOfInferringAStride() {
+    let frames = [
+      0: CGRect(x: 12, y: 16, width: 12, height: 12),
+      // A long first row wrapped, so the second checkbox is much lower than a fixed stride.
+      1: CGRect(x: 12, y: 92, width: 12, height: 12),
+    ]
+
     XCTAssertEqual(
-      ChecklistInteraction.itemIndex(
-        at: CGPoint(x: 20, y: 50), zoom: 1, itemCount: 3, layout: .structured),
+      ChecklistInteraction.itemIndex(at: CGPoint(x: 18, y: 98), renderedFrames: frames),
       1)
     XCTAssertNil(ChecklistInteraction.itemIndex(
-      at: CGPoint(x: 100, y: 50), zoom: 1, itemCount: 3, layout: .structured))
-    XCTAssertNil(ChecklistInteraction.itemIndex(
-      at: CGPoint(x: 20, y: 39), zoom: 1, itemCount: 3, layout: .structured),
-      "the inter-row gap is not a checkbox")
-    XCTAssertNil(ChecklistInteraction.itemIndex(
-      at: CGPoint(x: 20, y: 8), zoom: 1, itemCount: 3, layout: .structured),
-      "padding above the first row is not a checkbox")
+      at: CGPoint(x: 18, y: 50), renderedFrames: frames))
   }
 
-  func testMarkdownCheckboxHitRegionScalesWithZoom() {
+  func testMeasuredFramesHonorTextScaleAndKeepAMinimumScreenSpaceTarget() {
+    let frames = [
+      0: CGRect(x: 8, y: 18, width: 5, height: 5),
+      1: CGRect(x: 8, y: 74, width: 18, height: 18),
+    ]
+
+    XCTAssertEqual(
+      ChecklistInteraction.itemIndex(at: CGPoint(x: 20, y: 76), renderedFrames: frames),
+      1,
+      "the measured scaled row is used directly")
+    let smallCenter = CGPoint(x: frames[0]!.midX, y: frames[0]!.midY)
     XCTAssertEqual(
       ChecklistInteraction.itemIndex(
-        at: CGPoint(x: 40, y: 94), zoom: 2, itemCount: 3, layout: .markdown),
+        at: CGPoint(x: smallCenter.x + 11, y: smallCenter.y), renderedFrames: frames),
+      0,
+      "a tiny zoomed-out symbol still has a 24pt screen-space target")
+    XCTAssertNil(ChecklistInteraction.itemIndex(
+      at: CGPoint(x: smallCenter.x + 13, y: smallCenter.y), renderedFrames: frames))
+  }
+
+  func testOverlappingMinimumTargetsChooseTheNearestRenderedCheckbox() {
+    let frames = [
+      0: CGRect(x: 10, y: 10, width: 4, height: 4),
+      1: CGRect(x: 10, y: 20, width: 4, height: 4),
+    ]
+
+    XCTAssertEqual(
+      ChecklistInteraction.itemIndex(at: CGPoint(x: 12, y: 19), renderedFrames: frames),
       1)
-    XCTAssertNil(ChecklistInteraction.itemIndex(
-      at: CGPoint(x: 120, y: 94), zoom: 2, itemCount: 3, layout: .markdown))
-    XCTAssertNil(ChecklistInteraction.itemIndex(
-      at: CGPoint(x: 40, y: 130), zoom: 2, itemCount: 2, layout: .markdown))
+  }
+
+  func testLockedStructuredChecklistRejectsToggleAndEditWithoutUndoCheckpoint() throws {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let original = [CardState.ChecklistItem(text: "Ship")]
+    let id = board.insertStructured(.checklist, checklist: original, at: .zero)
+    board.lockSelection(true)
+
+    XCTAssertFalse(board.toggleChecklistItem(id, index: 0))
+    XCTAssertFalse(board.setChecklist(id, [.init(text: "Changed", isChecked: true)]))
+    XCTAssertEqual(try XCTUnwrap(board.cards.first { $0.id == id }.flatMap(\.checklist)), original)
+
+    board.undo()
+    XCTAssertFalse(try XCTUnwrap(board.cards.first { $0.id == id }).locked,
+                   "rejected mutations must not add an undo checkpoint after the lock")
+  }
+
+  func testLockedMarkdownChecklistRejectsToggleWithoutUndoCheckpoint() throws {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let original = "- [ ] Locked task"
+    let id = board.insertText(original, at: .zero)
+    board.lockSelection(true)
+
+    board.toggleTextChecklistLine(id, lineIndex: 0)
+    XCTAssertEqual(try XCTUnwrap(board.cards.first { $0.id == id }).text, original)
+
+    board.undo()
+    XCTAssertFalse(try XCTUnwrap(board.cards.first { $0.id == id }).locked,
+                   "the rejected toggle must not add an undo checkpoint after the lock")
   }
 
   func testReorderMovesTheWholeStableItemInEitherDirection() {
