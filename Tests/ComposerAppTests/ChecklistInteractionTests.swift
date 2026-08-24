@@ -77,24 +77,59 @@ final class ChecklistInteractionTests: XCTestCase {
                    "the rejected toggle must not add an undo checkpoint after the lock")
   }
 
-  func testReorderMovesTheWholeStableItemInEitherDirection() {
+  func testDropPlacementUsesTheHoveredRowHalf() {
+    XCTAssertEqual(ChecklistInteraction.dropPlacement(at: 0, rowHeight: 34), .before)
+    XCTAssertEqual(ChecklistInteraction.dropPlacement(at: 16.9, rowHeight: 34), .before)
+    XCTAssertEqual(ChecklistInteraction.dropPlacement(at: 17, rowHeight: 34), .after)
+    XCTAssertEqual(ChecklistInteraction.dropPlacement(at: 34, rowHeight: 34), .after)
+  }
+
+  func testReorderPlacementIsSymmetricInBothDirections() {
     let first = CardState.ChecklistItem(text: "First", isChecked: true)
     let second = CardState.ChecklistItem(text: "Second", isChecked: false)
     let third = CardState.ChecklistItem(text: "Third", isChecked: true)
     var items = [first, second, third]
 
-    XCTAssertTrue(ChecklistInteraction.move(&items, itemID: first.id, to: third.id))
+    XCTAssertTrue(ChecklistInteraction.move(
+      &items, itemID: first.id, to: third.id, placement: .before))
+    XCTAssertEqual(items, [second, first, third])
+
+    items = [first, second, third]
+    XCTAssertTrue(ChecklistInteraction.move(
+      &items, itemID: first.id, to: third.id, placement: .after))
     XCTAssertEqual(items, [second, third, first])
-    XCTAssertTrue(ChecklistInteraction.move(&items, itemID: first.id, to: second.id))
-    XCTAssertEqual(items, [first, second, third])
+
+    items = [first, second, third]
+    XCTAssertTrue(ChecklistInteraction.move(
+      &items, itemID: third.id, to: first.id, placement: .before))
+    XCTAssertEqual(items, [third, first, second])
+
+    items = [first, second, third]
+    XCTAssertTrue(ChecklistInteraction.move(
+      &items, itemID: third.id, to: first.id, placement: .after))
+    XCTAssertEqual(items, [first, third, second])
   }
 
   func testInvalidAndIdentityDropsDoNotMutateTheDraft() {
     let item = CardState.ChecklistItem(text: "Only", isChecked: true)
     var items = [item]
 
-    XCTAssertFalse(ChecklistInteraction.move(&items, itemID: item.id, to: item.id))
-    XCTAssertFalse(ChecklistInteraction.move(&items, itemID: UUID(), to: item.id))
+    XCTAssertFalse(ChecklistInteraction.move(
+      &items, itemID: item.id, to: item.id, placement: .before))
+    XCTAssertFalse(ChecklistInteraction.move(
+      &items, itemID: UUID(), to: item.id, placement: .after))
     XCTAssertEqual(items, [item])
+  }
+
+  func testAdjacentDropsThatAlreadyMatchTheRequestedEdgeAreNoOps() {
+    let first = CardState.ChecklistItem(text: "First")
+    let second = CardState.ChecklistItem(text: "Second")
+    var items = [first, second]
+
+    XCTAssertFalse(ChecklistInteraction.move(
+      &items, itemID: first.id, to: second.id, placement: .before))
+    XCTAssertFalse(ChecklistInteraction.move(
+      &items, itemID: second.id, to: first.id, placement: .after))
+    XCTAssertEqual(items, [first, second])
   }
 }

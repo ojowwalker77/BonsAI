@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The one editing surface for every card kind. Presented by `ComposerCanvas` whenever
 /// `board.editingCardID` is non-nil, it recedes the board behind a scrim and elevates a centered
@@ -51,6 +52,8 @@ struct EditingStage: View {
   @State private var stickyBodyDraft = ""
   @FocusState private var stickyTitleFocused: Bool
   @State private var checklistDraft: [CardState.ChecklistItem] = []
+  @State private var draggedChecklistItemID: UUID?
+  @State private var checklistDropTarget: ChecklistRowDropTarget?
   @State private var tableDraft = CardState.TableSpec()
 
   private var tint: Color? { Theme.tintColor(card.tint).map { Color(nsColor: $0) } }
@@ -171,7 +174,13 @@ struct EditingStage: View {
                 .foregroundStyle(Theme.Palette.menuDesc)
                 .frame(width: 22, height: 30)
                 .contentShape(Rectangle())
-                .draggable(item.id.uuidString)
+                .onDrag {
+                  draggedChecklistItemID = item.id
+                  checklistDropTarget = nil
+                  return NSItemProvider(
+                    item: item.id.uuidString as NSString,
+                    typeIdentifier: UTType.composerChecklistItem.identifier)
+                }
                 .help("Drag to reorder".localizedUI)
               Toggle("", isOn: $item.isChecked).toggleStyle(.checkbox).labelsHidden()
               TextField("Task".localizedUI, text: $item.text).textFieldStyle(.plain)
@@ -180,10 +189,24 @@ struct EditingStage: View {
               }.buttonStyle(.plain).help("Remove task".localizedUI)
             }
             .padding(.horizontal, 10).frame(height: 34).background(labelFieldSurface)
-            .dropDestination(for: String.self) { values, _ in
-              guard let rawID = values.first, let draggedID = UUID(uuidString: rawID) else { return false }
-              return ChecklistInteraction.move(&checklistDraft, itemID: draggedID, to: item.id)
+            .overlay(alignment: checklistDropTarget?.placement == .before ? .top : .bottom) {
+              if checklistDropTarget?.targetID == item.id {
+                Capsule()
+                  .fill(Theme.Palette.accent)
+                  .frame(height: 2)
+                  .padding(.horizontal, 4)
+                  .offset(y: checklistDropTarget?.placement == .before ? -4 : 4)
+                  .allowsHitTesting(false)
+              }
             }
+            .onDrop(
+              of: [.composerChecklistItem],
+              delegate: ChecklistRowDropDelegate(
+                targetID: item.id,
+                rowHeight: 34,
+                draggedItemID: $draggedChecklistItemID,
+                dropTarget: $checklistDropTarget,
+                items: $checklistDraft))
           }
           Button { checklistDraft.append(.init(text: "")) } label: {
             Label("Add task".localizedUI, systemImage: "plus")
@@ -593,6 +616,61 @@ struct EditingStage: View {
     default:
       onClose()
     }
+  }
+}
+
+private extension UTType {
+  static let composerChecklistItem = UTType(exportedAs: "dev.jow.BonsAI.checklist-item")
+}
+
+private struct ChecklistRowDropTarget: Equatable {
+  let targetID: UUID
+  let placement: ChecklistInteraction.DropPlacement
+}
+
+private struct ChecklistRowDropDelegate: DropDelegate {
+  let targetID: UUID
+  let rowHeight: CGFloat
+  @Binding var draggedItemID: UUID?
+  @Binding var dropTarget: ChecklistRowDropTarget?
+  @Binding var items: [CardState.ChecklistItem]
+
+  func validateDrop(info: DropInfo) -> Bool {
+    draggedItemID != nil && info.hasItemsConforming(to: [.composerChecklistItem])
+  }
+
+  func dropEntered(info: DropInfo) {
+    updateTarget(for: info)
+  }
+
+  func dropUpdated(info: DropInfo) -> DropProposal? {
+    updateTarget(for: info)
+    return DropProposal(operation: dropTarget == nil ? .forbidden : .move)
+  }
+
+  func dropExited(info: DropInfo) {
+    if dropTarget?.targetID == targetID { dropTarget = nil }
+  }
+
+  func performDrop(info: DropInfo) -> Bool {
+    defer {
+      dropTarget = nil
+      draggedItemID = nil
+    }
+    guard let draggedItemID, draggedItemID != targetID else { return false }
+    let placement = ChecklistInteraction.dropPlacement(at: info.location.y, rowHeight: rowHeight)
+    return ChecklistInteraction.move(
+      &items, itemID: draggedItemID, to: targetID, placement: placement)
+  }
+
+  private func updateTarget(for info: DropInfo) {
+    guard let draggedItemID, draggedItemID != targetID else {
+      if dropTarget?.targetID == targetID { dropTarget = nil }
+      return
+    }
+    dropTarget = ChecklistRowDropTarget(
+      targetID: targetID,
+      placement: ChecklistInteraction.dropPlacement(at: info.location.y, rowHeight: rowHeight))
   }
 }
 

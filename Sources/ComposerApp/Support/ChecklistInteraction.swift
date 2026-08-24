@@ -8,6 +8,11 @@ import Foundation
 /// the same module for stable-ID reordering, keeping both behaviors independently testable from
 /// SwiftUI and AppKit.
 enum ChecklistInteraction {
+  enum DropPlacement: Equatable {
+    case before
+    case after
+  }
+
   /// A checkbox remains intentionally acquirable when the board is zoomed out. The source rects
   /// are measured from the rendered symbols in screen space, so wrapping, font choice, and a text
   /// card's own scale cannot make the interaction drift to a different row.
@@ -37,17 +42,26 @@ enum ChecklistInteraction {
       .index
   }
 
-  /// Move one stable checklist row to the position occupied by another. Text, completion state,
-  /// and UUID travel together; invalid or identity drops are no-ops.
+  static func dropPlacement(at y: CGFloat, rowHeight: CGFloat) -> DropPlacement {
+    y < rowHeight / 2 ? .before : .after
+  }
+
+  /// Insert one stable checklist row before or after another. The insertion index is adjusted after
+  /// removal, so the same target half has the same meaning in both drag directions. Text,
+  /// completion state, and UUID travel together; invalid and already-in-place drops are no-ops.
   @discardableResult
   static func move(_ items: inout [CardState.ChecklistItem],
                    itemID: UUID,
-                   to targetID: UUID) -> Bool {
+                   to targetID: UUID,
+                   placement: DropPlacement) -> Bool {
     guard itemID != targetID,
           let source = items.firstIndex(where: { $0.id == itemID }),
           let target = items.firstIndex(where: { $0.id == targetID }) else { return false }
+    var insertion = target + (placement == .after ? 1 : 0)
+    if source < insertion { insertion -= 1 }
+    guard insertion != source else { return false }
     let item = items.remove(at: source)
-    items.insert(item, at: min(target, items.endIndex))
+    items.insert(item, at: min(max(insertion, 0), items.endIndex))
     return true
   }
 }
