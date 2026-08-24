@@ -1388,8 +1388,7 @@ struct ComposerCanvas: View {
       .id(id)
     } else if let id = board.editingCardID,
        let card = board.cards.first(where: { $0.id == id }),
-       card.elementKind != .freehand, card.elementKind != .vectorPath,
-       card.elementKind != .image, card.elementKind != .text {
+       EditingStagePresentationPolicy.presentsStage(for: card.elementKind) {
       EditingStage(
         board: board,
         card: card,

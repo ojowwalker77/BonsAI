@@ -125,6 +125,16 @@ final class VectorPathBoardTests: XCTestCase {
     XCTAssertFalse(VectorPathNodeEditorPolicy.isVisible(isEditing: true, kind: .rectangle))
   }
 
+  func testVectorEditSessionRoutesToInlineNodesWithoutAStageScrim() throws {
+    let (board, id, card) = try makeEditingVectorBoard()
+
+    XCTAssertEqual(board.editingCardID, id)
+    XCTAssertTrue(VectorPathNodeEditorPolicy.isVisible(
+      isEditing: board.editingCardID == id,
+      kind: card.elementKind))
+    XCTAssertFalse(EditingStagePresentationPolicy.presentsStage(for: card.elementKind))
+  }
+
   func testPlacementUsesCurrentTintAndUndoesAsOneInsertion() throws {
     var draft = VectorPathDraft()
     XCTAssertNil(draft.finish(anchor: CGPoint(x: 10, y: 20), drag: CGPoint(x: 10, y: 20), closeTolerance: 8))

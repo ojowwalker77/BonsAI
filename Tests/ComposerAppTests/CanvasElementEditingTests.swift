@@ -37,6 +37,24 @@ final class CanvasElementEditingTests: XCTestCase {
     XCTAssertEqual(board.selectedCardIDs, [id])
   }
 
+  func testEditingStageRoutingKeepsInlineEditorsOnTheBoard() {
+    XCTAssertFalse(EditingStagePresentationPolicy.presentsStage(for: .text))
+    XCTAssertFalse(EditingStagePresentationPolicy.presentsStage(for: .vectorPath))
+  }
+
+  func testEditingStageRoutingStillPresentsEveryStructuredEditor() {
+    let staged: [CanvasElementKind] = [
+      .rectangle, .ellipse, .diamond, .line, .arrow, .equation, .graph,
+      .sticky, .checklist, .table,
+    ]
+
+    for kind in staged {
+      XCTAssertTrue(EditingStagePresentationPolicy.presentsStage(for: kind), "\(kind) should use the stage")
+    }
+    XCTAssertFalse(EditingStagePresentationPolicy.presentsStage(for: .freehand))
+    XCTAssertFalse(EditingStagePresentationPolicy.presentsStage(for: .image))
+  }
+
   func testLockedElementCannotEnterEditing() throws {
     let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
     let id = board.addElement(.rectangle, at: .zero)

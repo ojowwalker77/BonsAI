@@ -315,6 +315,16 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     )
   }
 
+  func testEscapeCoordinatorEndsAnIdleInlineVectorEditorAsTheActiveEditor() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasActiveEditor: true,
+        hasActiveVectorEditor: true
+      )),
+      .activeEditor
+    )
+  }
+
   func testEscapeCancelsInProgressVectorDraftBeforeLeavingTheTool() {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(

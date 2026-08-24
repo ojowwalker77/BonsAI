@@ -2,16 +2,16 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The one editing surface for every card kind. Presented by `ComposerCanvas` whenever
-/// `board.editingCardID` is non-nil, it recedes the board behind a scrim and elevates a centered
-/// glass panel — the shape the Focus Write sheet had always used — so text, equation, graph, and
-/// shape/line editing all enter, sit, and exit identically. Per-kind draft state (equation LaTeX,
-/// graph spec) lives here, seeded from the card on appear and committed through the board's own
-/// mutations (each already registers exactly one undo step).
+/// The centered editing surface for structured card kinds plus the explicitly summoned Focus Write
+/// sheet. `ComposerCanvas` consults `EditingStagePresentationPolicy` before mounting it, so inline
+/// text and vector-node editors remain on the board instead of being covered by this view's scrim.
+/// Per-kind draft state (equation LaTeX, graph spec) lives here, seeded from the card on appear and
+/// committed through the board's own mutations (each already registers exactly one undo step).
 ///
-/// `editingCardID` stays the single source of truth: nothing here invents new global edit state.
-/// The card behind the scrim renders statically while its stage is open — the live editor mounts
-/// only in the stage, handed over via the same `captureEditorState()` the focus sheet always used.
+/// `editingCardID` stays the single source of truth for structured editing: nothing here invents
+/// new global edit state. The card behind the scrim renders statically while its stage is open —
+/// the live editor mounts only in the stage, handed over via the same `captureEditorState()` the
+/// focus sheet always used.
 struct EditingStage: View {
   private static let checklistRowHeight: CGFloat = 34
 
@@ -629,6 +629,21 @@ struct EditingStage: View {
       commitTable()
     default:
       onClose()
+    }
+  }
+}
+
+/// Routes an `editingCardID` session to the centered stage. Inline editors must return `false`:
+/// mounting `EditingStage` for one would still install its full-window scrim even though the
+/// corresponding `stagePanel` branch intentionally renders no panel.
+enum EditingStagePresentationPolicy {
+  static func presentsStage(for kind: CanvasElementKind) -> Bool {
+    switch kind {
+    case .rectangle, .ellipse, .diamond, .line, .arrow,
+         .equation, .graph, .sticky, .checklist, .table:
+      true
+    case .text, .freehand, .vectorPath, .image:
+      false
     }
   }
 }
