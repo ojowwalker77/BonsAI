@@ -46,6 +46,21 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
   }
 }
 
+/// Keeps hover edit chrome from competing with higher-priority manipulation handles.
+enum CanvasEditAffordancePolicy {
+  /// macOS is pointer-first, but 20pt was still needlessly precise at speed. The visible chip stays
+  /// quiet while the actual button target has a stable screen-space floor.
+  static let minimumHitSide: CGFloat = 28
+
+  static func isAvailable(for kind: CanvasElementKind, whileSelected: Bool) -> Bool {
+    guard kind.supportsEditing else { return false }
+    // Selected connectors devote both endpoints to direct manipulation. Their hover pencil remains
+    // available before selection, then yields completely once endpoint handles appear.
+    if whileSelected, kind == .line || kind == .arrow { return false }
+    return true
+  }
+}
+
 /// One colored span of a text card's ink, measured in UTF-16 offsets of the SERIALIZED plain
 /// text (`composerPlainText`). `slot` indexes the active theme's `ThemeFlavor.tints`, so ranges
 /// re-resolve per theme exactly like element tints.

@@ -882,18 +882,26 @@ struct BoardCardView: View {
   /// transparent so a new stroke can begin anywhere.
   @ViewBuilder
   private var editAffordance: some View {
-    if hovering, selectable, !isEditing, !card.locked, card.elementKind.supportsEditing {
+    if hovering, selectable, !isEditing, !card.locked,
+       CanvasEditAffordancePolicy.isAvailable(
+         for: card.elementKind, whileSelected: isSelected) {
       Button(action: enterEditing) {
-        Image(systemName: "pencil")
-          .font(.system(size: 9.5, weight: .semibold))
-          .foregroundStyle(Theme.Palette.menuDesc)
-          .frame(width: 20, height: 20)
-          .background(Circle().fill(Theme.Palette.labelChipFill))
-          .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 0.75))
-          .contentShape(Circle())
+        ZStack {
+          Circle()
+            .fill(Theme.Palette.labelChipFill)
+            .frame(width: 20, height: 20)
+            .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 0.75))
+          Image(systemName: "pencil")
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(Theme.Palette.menuDesc)
+        }
+        .frame(
+          width: CanvasEditAffordancePolicy.minimumHitSide,
+          height: CanvasEditAffordancePolicy.minimumHitSide)
+        .contentShape(Circle())
       }
       .buttonStyle(.plain)
-      .padding(8)
+      .padding(4)
       .help("Edit element".localizedUI)
       .transition(.opacity)
     }

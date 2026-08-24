@@ -46,4 +46,16 @@ final class CanvasElementEditingTests: XCTestCase {
 
     XCTAssertNil(board.editingCardID)
   }
+
+  func testSelectedConnectorEditAffordanceYieldsToEndpointHandles() {
+    XCTAssertTrue(CanvasEditAffordancePolicy.isAvailable(for: .line, whileSelected: false))
+    XCTAssertTrue(CanvasEditAffordancePolicy.isAvailable(for: .arrow, whileSelected: false))
+    XCTAssertFalse(CanvasEditAffordancePolicy.isAvailable(for: .line, whileSelected: true))
+    XCTAssertFalse(CanvasEditAffordancePolicy.isAvailable(for: .arrow, whileSelected: true))
+    XCTAssertTrue(CanvasEditAffordancePolicy.isAvailable(for: .rectangle, whileSelected: true))
+  }
+
+  func testHoverEditAffordanceHasAUsableScreenSpaceTarget() {
+    XCTAssertGreaterThanOrEqual(CanvasEditAffordancePolicy.minimumHitSide, 28)
+  }
 }
