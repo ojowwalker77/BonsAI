@@ -1144,7 +1144,7 @@ struct ComposerCanvas: View {
   private func bottomCommandBar(fit innerSize: CGSize) -> some View {
     return HStack(spacing: WindowChrome.itemSpacing) {
       SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out".localizedUI) { zoom(0.8, anchoredAt: zoomAnchor) }
-      Button(action: { withAnimation(Theme.Motion.accessory) { scale = 1 } }) {
+      Button(action: resetZoom) {
         Text("\(Int((effectiveScale * 100).rounded()))%")
           .font(WindowChrome.labelFont.monospacedDigit())
           .foregroundStyle(Theme.Palette.chromeText)
