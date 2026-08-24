@@ -10,6 +10,39 @@ enum MenuBarStatusClickAction: Equatable {
   }
 }
 
+@MainActor
+protocol MenuBarScheduledClick: AnyObject {
+  func cancel()
+}
+
+@MainActor
+protocol MenuBarClickScheduling: AnyObject {
+  func schedule(
+    after delay: TimeInterval,
+    action: @escaping @MainActor () -> Void
+  ) -> any MenuBarScheduledClick
+}
+
+@MainActor
+final class MainQueueMenuBarClickScheduler: MenuBarClickScheduling {
+  private final class ScheduledClick: MenuBarScheduledClick {
+    let work: DispatchWorkItem
+
+    init(work: DispatchWorkItem) { self.work = work }
+    func cancel() { work.cancel() }
+    deinit { work.cancel() }
+  }
+
+  func schedule(
+    after delay: TimeInterval,
+    action: @escaping @MainActor () -> Void
+  ) -> any MenuBarScheduledClick {
+    let work = DispatchWorkItem { action() }
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    return ScheduledClick(work: work)
+  }
+}
+
 /// Menu-bar quick capture: one line → a new card on the current board.
 @MainActor
 final class MenuBarController: NSObject {
@@ -18,17 +51,18 @@ final class MenuBarController: NSObject {
   private var captureField: NSTextField?
   private let notificationCenter: NotificationCenter
   private let doubleClickInterval: TimeInterval
-  private var pendingSingleClick: DispatchWorkItem?
+  private let clickScheduler: any MenuBarClickScheduling
+  private var pendingSingleClick: (any MenuBarScheduledClick)?
 
   init(
     notificationCenter: NotificationCenter = .default,
-    doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval
+    doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval,
+    clickScheduler: (any MenuBarClickScheduling)? = nil
   ) {
     self.notificationCenter = notificationCenter
     self.doubleClickInterval = doubleClickInterval
+    self.clickScheduler = clickScheduler ?? MainQueueMenuBarClickScheduler()
   }
-
-  deinit { pendingSingleClick?.cancel() }
 
   func install() {
     guard statusItem == nil else { return }
@@ -75,13 +109,11 @@ final class MenuBarController: NSObject {
     switch MenuBarStatusClickAction.resolve(clickCount: clickCount) {
     case .deferToggleCapture:
       pendingSingleClick?.cancel()
-      let work = DispatchWorkItem { [weak self] in
+      pendingSingleClick = clickScheduler.schedule(after: doubleClickInterval) { [weak self] in
         guard let self else { return }
         self.pendingSingleClick = nil
         toggleCapture()
       }
-      pendingSingleClick = work
-      DispatchQueue.main.asyncAfter(deadline: .now() + doubleClickInterval, execute: work)
     case .cancelDeferredToggleAndShowBoard:
       pendingSingleClick?.cancel()
       pendingSingleClick = nil

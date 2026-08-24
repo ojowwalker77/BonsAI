@@ -1,6 +1,36 @@
 import XCTest
 @testable import ComposerApp
 
+@MainActor
+private final class ManualMenuBarClickScheduler: MenuBarClickScheduling {
+  private final class ScheduledClick: MenuBarScheduledClick {
+    private(set) var isCancelled = false
+    let action: @MainActor () -> Void
+
+    init(action: @escaping @MainActor () -> Void) { self.action = action }
+    func cancel() { isCancelled = true }
+    func run() { if !isCancelled { action() } }
+  }
+
+  private var scheduled: [ScheduledClick] = []
+  var pendingCount: Int { scheduled.filter { !$0.isCancelled }.count }
+
+  func schedule(
+    after delay: TimeInterval,
+    action: @escaping @MainActor () -> Void
+  ) -> any MenuBarScheduledClick {
+    let click = ScheduledClick(action: action)
+    scheduled.append(click)
+    return click
+  }
+
+  func runPending() {
+    let pending = scheduled
+    scheduled.removeAll()
+    pending.forEach { $0.run() }
+  }
+}
+
 final class MenuBarControllerTests: XCTestCase {
   func testClickActionDefersSingleClickCapture() {
     XCTAssertEqual(MenuBarStatusClickAction.resolve(clickCount: 0), .deferToggleCapture)
@@ -14,20 +44,26 @@ final class MenuBarControllerTests: XCTestCase {
 
   @MainActor
   func testSingleClickTogglesCaptureOnlyAfterDoubleClickInterval() {
-    let controller = MenuBarController(doubleClickInterval: 0.01)
+    let scheduler = ManualMenuBarClickScheduler()
+    let controller = MenuBarController(doubleClickInterval: 10, clickScheduler: scheduler)
     var toggleCount = 0
 
     controller.dispatchStatusClick(clickCount: 1) { toggleCount += 1 }
 
     XCTAssertEqual(toggleCount, 0)
-    RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+    XCTAssertEqual(scheduler.pendingCount, 1)
+    scheduler.runPending()
     XCTAssertEqual(toggleCount, 1)
   }
 
   @MainActor
   func testDoubleClickCancelsDeferredCaptureBeforeShowingBoard() {
     let center = NotificationCenter()
-    let controller = MenuBarController(notificationCenter: center, doubleClickInterval: 0.01)
+    let scheduler = ManualMenuBarClickScheduler()
+    let controller = MenuBarController(
+      notificationCenter: center,
+      doubleClickInterval: 10,
+      clickScheduler: scheduler)
     var toggleCount = 0
     var showCount = 0
     let observer = center.addObserver(
@@ -37,7 +73,7 @@ final class MenuBarControllerTests: XCTestCase {
 
     controller.dispatchStatusClick(clickCount: 1) { toggleCount += 1 }
     controller.dispatchStatusClick(clickCount: 2) { toggleCount += 1 }
-    RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+    scheduler.runPending()
 
     XCTAssertEqual(toggleCount, 0)
     XCTAssertEqual(showCount, 1)
@@ -45,13 +81,14 @@ final class MenuBarControllerTests: XCTestCase {
 
   @MainActor
   func testSupersedingSingleClickSuppressesStaleDeferredAction() {
-    let controller = MenuBarController(doubleClickInterval: 0.01)
+    let scheduler = ManualMenuBarClickScheduler()
+    let controller = MenuBarController(doubleClickInterval: 10, clickScheduler: scheduler)
     var staleToggleCount = 0
     var currentToggleCount = 0
 
     controller.dispatchStatusClick(clickCount: 1) { staleToggleCount += 1 }
     controller.dispatchStatusClick(clickCount: 1) { currentToggleCount += 1 }
-    RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+    scheduler.runPending()
 
     XCTAssertEqual(staleToggleCount, 0)
     XCTAssertEqual(currentToggleCount, 1)
