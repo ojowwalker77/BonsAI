@@ -324,7 +324,9 @@ final class BoardViewModel: ObservableObject {
   func beginEditing(_ id: UUID) {
     // Placement focus is delayed until the editor mounts. The card may have been abandoned during
     // that delay, so never resurrect selection/editing state for an ID that no longer exists.
-    guard cards.contains(where: { $0.id == id }) else { return }
+    guard let card = cards.first(where: { $0.id == id }),
+          !card.locked,
+          card.elementKind.supportsEditing else { return }
     selectedCardIDs = [id]
     primarySelectedCardID = id
     editingCardID = id

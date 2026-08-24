@@ -34,6 +34,16 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
     default: false
     }
   }
+
+  /// Whether the canvas has a real editing surface for this element. Text edits inline; shapes,
+  /// equations, graphs, and structured cards use `EditingStage`. Image/freehand elements currently
+  /// have no content editor, so advertising or entering edit mode for them would create dead state.
+  var supportsEditing: Bool {
+    switch self {
+    case .freehand, .image: false
+    default: true
+    }
+  }
 }
 
 /// One colored span of a text card's ink, measured in UTF-16 offsets of the SERIALIZED plain

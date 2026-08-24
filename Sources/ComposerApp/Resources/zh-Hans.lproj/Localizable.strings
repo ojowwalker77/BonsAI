@@ -224,6 +224,7 @@
 "Checking whether Composer has existing boards" = "正在检查 Composer 是否有现有画板";
 "Checklist" = "清单";
 "Drag to reorder" = "拖动以重新排序";
+"Edit element" = "编辑元素";
 "Claude authentication failed: %@. Run `claude auth login`, then retry." = "Claude 认证失败：%@。请运行 `claude auth login` 后重试。";
 "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry." = "Claude 认证被 API 拒绝（HTTP 401：%@）。请运行 `claude auth login` 后重试。";
 "Click again to permanently delete" = "再次点击将永久删除";

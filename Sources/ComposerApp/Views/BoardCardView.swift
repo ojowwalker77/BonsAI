@@ -96,6 +96,7 @@ struct BoardCardView: View {
       .overlay(graphDropRing)
       .overlay(selectionChrome)
       .overlay(deleteButton, alignment: .topTrailing)
+      .overlay(editAffordance, alignment: .bottomTrailing)
       .overlay(lockBadge, alignment: .topLeading)
       .overlay(pointComposerPopover, alignment: .bottom)
       .offset(x: liveFrame.minX * zoom, y: liveFrame.minY * zoom)
@@ -307,6 +308,7 @@ struct BoardCardView: View {
   /// owning focus/commit/Esc. This just arms edit mode; freehand/image kinds have no stage, so the
   /// canvas guards `beginEditing` for them (a double-click there does nothing).
   private func enterEditing() {
+    guard !card.locked, card.elementKind.supportsEditing else { return }
     board.beginEditing(card.id)
     // Text edits inline — hand the caret to the just-mounted in-card editor. Stage kinds focus
     // their own fields on appear.
@@ -730,6 +732,28 @@ struct BoardCardView: View {
   }
 
   // MARK: Delete
+
+  /// A small hover-only invitation to the editing surface. It stays inside the card so it does not
+  /// fight resize handles, and only appears under Select — drawing tools keep every card pointer-
+  /// transparent so a new stroke can begin anywhere.
+  @ViewBuilder
+  private var editAffordance: some View {
+    if hovering, selectable, !isEditing, !card.locked, card.elementKind.supportsEditing {
+      Button(action: enterEditing) {
+        Image(systemName: "pencil")
+          .font(.system(size: 9.5, weight: .semibold))
+          .foregroundStyle(Theme.Palette.menuDesc)
+          .frame(width: 20, height: 20)
+          .background(Circle().fill(Theme.Palette.labelChipFill))
+          .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 0.75))
+          .contentShape(Circle())
+      }
+      .buttonStyle(.plain)
+      .padding(8)
+      .help("Edit element".localizedUI)
+      .transition(.opacity)
+    }
+  }
 
   @ViewBuilder
   private var deleteButton: some View {

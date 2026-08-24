@@ -224,6 +224,7 @@
 "Checking whether Composer has existing boards" = "Composer에 기존 보드가 있는지 확인 중";
 "Checklist" = "체크리스트";
 "Drag to reorder" = "드래그하여 순서 변경";
+"Edit element" = "요소 편집";
 "Claude authentication failed: %@. Run `claude auth login`, then retry." = "Claude 인증 실패: %@. `claude auth login`을 실행한 뒤 다시 시도하세요.";
 "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry." = "Claude 인증이 API에서 거부되었습니다(HTTP 401: %@). `claude auth login`을 실행한 뒤 다시 시도하세요.";
 "Click again to permanently delete" = "다시 클릭하면 영구 삭제";
