@@ -30,6 +30,9 @@ struct BoardCardView: View {
   /// Vector control previews remain local for the entire drag. Mouse-up commits the refitted spec
   /// and frame once through `BoardViewModel`, preserving one undo checkpoint per gesture.
   @GestureState private var vectorControlDrag: VectorControlDragSession?
+  /// Quick-connect chooses line versus arrow when the gesture begins. Reading global modifiers on
+  /// mouse-up would let releasing Option mid-drag silently change the requested connector kind.
+  @State private var quickConnectDrag: QuickConnectDragSession?
   /// Text-only side resize: changes the wrapping width while preserving font scale. Corner resize
   /// remains proportional type scaling; the two gestures intentionally solve different jobs.
   @GestureState private var textWidthResize: TextWidthResizeSession?
@@ -274,7 +277,7 @@ struct BoardCardView: View {
       )
       .allowsHitTesting(!isEditing && selectable)
 
-      if isEditing, isVectorPath, selectable {
+      if VectorPathNodeEditorPolicy.isVisible(isEditing: isEditing, kind: card.elementKind) {
         vectorNodeEditor
       }
 
@@ -642,7 +645,7 @@ struct BoardCardView: View {
   private func quickConnectHandlePoint(_ direction: ConnectorDirection, in size: CGSize) -> CGPoint {
     // Keep a sliver of the padded hit target inside the card's bounds so SwiftUI routes drags that
     // begin on the outward-facing control, while the visible 15pt circle stays outside the ring.
-    let offset = selectionGap + 9
+    let offset = QuickConnectDragSession.screenHandleOffset
     return switch direction {
     case .up: CGPoint(x: size.width / 2, y: -offset)
     case .right: CGPoint(x: size.width + offset, y: size.height / 2)
@@ -744,7 +747,7 @@ struct BoardCardView: View {
       .fill(Theme.Palette.labelChipFill)
       .frame(width: 10, height: 10)
       .overlay(Circle().strokeBorder(Theme.Palette.accent, lineWidth: 1.75))
-      .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+      .shadow(color: Theme.Palette.elementShadow, radius: 2, y: 1)
       .padding(9)
       .contentShape(Circle())
   }
@@ -754,7 +757,7 @@ struct BoardCardView: View {
       .fill(Theme.Palette.accent)
       .frame(width: 8, height: 8)
       .overlay(Circle().strokeBorder(Theme.Palette.labelChipFill, lineWidth: 1))
-      .shadow(color: .black.opacity(0.22), radius: 1, y: 1)
+      .shadow(color: Theme.Palette.elementShadow, radius: 1, y: 1)
       .padding(9)
       .contentShape(Circle())
   }
@@ -798,10 +801,10 @@ struct BoardCardView: View {
   /// Its padded hit target remains easy to acquire without making a selected connector noisy.
   private var connectorHandle: some View {
     Circle()
-      .fill(Color.white)
+      .fill(Theme.Palette.labelChipFill)
       .frame(width: 9, height: 9)
       .overlay(Circle().strokeBorder(Theme.Palette.accent, lineWidth: 1.5))
-      .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+      .shadow(color: Theme.Palette.elementShadow, radius: 2, y: 1)
       .padding(9)
       .contentShape(Circle())
   }
@@ -813,7 +816,7 @@ struct BoardCardView: View {
       .frame(width: 15, height: 15)
       .background(Circle().fill(Theme.Palette.windowCanvas.opacity(0.94)))
       .overlay(Circle().strokeBorder(Theme.Palette.accent.opacity(0.62), lineWidth: 1))
-      .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+      .shadow(color: Theme.Palette.elementShadow, radius: 2, y: 1)
       .padding(7)
       .contentShape(Circle())
   }
@@ -875,23 +878,31 @@ struct BoardCardView: View {
 
   private func quickConnectGesture(_ direction: ConnectorDirection) -> some Gesture {
     DragGesture(minimumDistance: 0, coordinateSpace: .local)
+      .onChanged { _ in
+        if quickConnectDrag == nil {
+          quickConnectDrag = QuickConnectDragSession(
+            optionPressed: NSEvent.modifierFlags.contains(.option))
+        }
+      }
       .onEnded { value in
-        let connectorKind: CanvasElementKind = NSEvent.modifierFlags.contains(.option) ? .line : .arrow
+        let session = quickConnectDrag ?? QuickConnectDragSession(
+          optionPressed: NSEvent.modifierFlags.contains(.option))
+        quickConnectDrag = nil
         let distance = hypot(value.translation.width, value.translation.height)
         if distance <= 4 {
-          board.quickConnect(from: card.id, direction: direction, kind: connectorKind)
+          board.quickConnect(from: card.id, direction: direction, kind: session.connectorKind)
           return
         }
-        let origin = ConnectorGeometry.port(on: card.frame, direction: direction)
-        let destination = ConnectorEndpointDrag.boardPoint(
-          from: origin,
+        let destination = session.destination(
+          from: card.frame,
+          direction: direction,
           translation: value.translation,
           zoom: zoom)
         guard let targetID = board.bindCandidate(at: destination, excluding: [card.id]) else { return }
         board.quickConnect(
           from: card.id,
           direction: direction,
-          kind: connectorKind,
+          kind: session.connectorKind,
           to: targetID)
       }
   }
@@ -2764,6 +2775,43 @@ struct ConnectorEndpointDrag {
     return CGPoint(
       x: origin.x + translation.width / safeZoom,
       y: origin.y + translation.height / safeZoom)
+  }
+}
+
+struct QuickConnectDragSession: Equatable {
+  /// The handle center sits this many screen points beyond the card edge. Use this shared value for
+  /// both rendering and board-space destination math so a dragged handle remains under the pointer.
+  static let screenHandleOffset: CGFloat = 14
+
+  let connectorKind: CanvasElementKind
+
+  init(optionPressed: Bool) {
+    connectorKind = optionPressed ? .line : .arrow
+  }
+
+  func destination(from sourceFrame: CGRect,
+                   direction: ConnectorDirection,
+                   translation: CGSize,
+                   zoom: CGFloat) -> CGPoint {
+    let safeZoom = max(zoom, 0.01)
+    let offset = Self.screenHandleOffset / safeZoom
+    var origin = ConnectorGeometry.port(on: sourceFrame, direction: direction)
+    switch direction {
+    case .up: origin.y -= offset
+    case .right: origin.x += offset
+    case .down: origin.y += offset
+    case .left: origin.x -= offset
+    }
+    return ConnectorEndpointDrag.boardPoint(
+      from: origin,
+      translation: translation,
+      zoom: safeZoom)
+  }
+}
+
+enum VectorPathNodeEditorPolicy {
+  static func isVisible(isEditing: Bool, kind: CanvasElementKind) -> Bool {
+    isEditing && kind == .vectorPath
   }
 }
 

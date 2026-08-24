@@ -160,7 +160,11 @@ enum ConnectorGeometry {
                                  z: Int,
                                  author: Int?,
                                  tint: Int? = nil) -> CardState? {
-    guard kind == .line || kind == .arrow, source.id != target.id else { return nil }
+    guard kind == .line || kind == .arrow,
+          source.id != target.id,
+          isEligibleTarget(source),
+          isEligibleTarget(target)
+    else { return nil }
     let card = CardState(
       kind: kind,
       text: text,

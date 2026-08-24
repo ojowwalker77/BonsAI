@@ -32,6 +32,30 @@ final class ConnectorGeometryTests: XCTestCase {
     XCTAssertEqual(moved.y, 108, accuracy: 0.001)
   }
 
+  func testQuickConnectDragKeepsConnectorKindChosenAtStart() {
+    let optionDrag = QuickConnectDragSession(optionPressed: true)
+    let plainDrag = QuickConnectDragSession(optionPressed: false)
+
+    XCTAssertEqual(optionDrag.connectorKind, .line)
+    XCTAssertEqual(plainDrag.connectorKind, .arrow)
+  }
+
+  func testQuickConnectDestinationStartsAtOutsideHandleCenter() {
+    let source = CGRect(x: 40, y: 80, width: 120, height: 90)
+    let drag = QuickConnectDragSession(optionPressed: false)
+    let destination = drag.destination(
+      from: source,
+      direction: .right,
+      translation: CGSize(width: 30, height: -18),
+      zoom: 1.5)
+
+    XCTAssertEqual(
+      destination.x,
+      source.maxX + QuickConnectDragSession.screenHandleOffset / 1.5 + 30 / 1.5,
+      accuracy: 0.001)
+    XCTAssertEqual(destination.y, source.midY - 18 / 1.5, accuracy: 0.001)
+  }
+
   private func shape(_ kind: CanvasElementKind = .rectangle,
                      id: UUID = UUID(),
                      frame: CGRect) -> CardState {
@@ -113,6 +137,25 @@ final class ConnectorGeometryTests: XCTestCase {
     XCTAssertEqual(lineEnds.start.x, arrowEnds.start.x, accuracy: 0.001)
     XCTAssertEqual(lineEnds.end.x, target.frame.minX - 1, accuracy: 0.001)
     XCTAssertEqual(arrowEnds.end.x, target.frame.minX - 7, accuracy: 0.001)
+  }
+
+  func testProgrammaticConnectionsRejectEveryIneligibleEndpointKind() {
+    let eligible = shape(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+    var locked = shape(frame: CGRect(x: 300, y: 0, width: 100, height: 100))
+    locked.isLocked = true
+    let ineligible = [
+      locked,
+      connector(start: CGPoint(x: 300, y: 20), end: CGPoint(x: 400, y: 80)),
+      shape(.freehand, frame: CGRect(x: 300, y: 0, width: 100, height: 100)),
+      shape(.vectorPath, frame: CGRect(x: 300, y: 0, width: 100, height: 100)),
+    ]
+
+    for endpoint in ineligible {
+      XCTAssertNil(ConnectorGeometry.makeBoundConnector(
+        kind: .arrow, text: "", source: endpoint, target: eligible, z: 1, author: nil))
+      XCTAssertNil(ConnectorGeometry.makeBoundConnector(
+        kind: .arrow, text: "", source: eligible, target: endpoint, z: 1, author: nil))
+    }
   }
 
   func testMovingProgrammaticArrowStartPreservesUntouchedTipExactly() throws {

@@ -119,6 +119,12 @@ final class VectorPathGeometryTests: XCTestCase {
 
 @MainActor
 final class VectorPathBoardTests: XCTestCase {
+  func testNodeEditorVisibilityDependsOnEditSessionNotActiveTool() {
+    XCTAssertTrue(VectorPathNodeEditorPolicy.isVisible(isEditing: true, kind: .vectorPath))
+    XCTAssertFalse(VectorPathNodeEditorPolicy.isVisible(isEditing: false, kind: .vectorPath))
+    XCTAssertFalse(VectorPathNodeEditorPolicy.isVisible(isEditing: true, kind: .rectangle))
+  }
+
   func testPlacementUsesCurrentTintAndUndoesAsOneInsertion() throws {
     var draft = VectorPathDraft()
     XCTAssertNil(draft.finish(anchor: CGPoint(x: 10, y: 20), drag: CGPoint(x: 10, y: 20), closeTolerance: 8))
