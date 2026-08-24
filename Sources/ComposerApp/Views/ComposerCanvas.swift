@@ -1234,7 +1234,8 @@ struct ComposerCanvas: View {
 
   /// The unified editing surface for STRUCTURED edits — equation, graph, shape/line label — plus
   /// the ⇧⌘F writing sheet (`focusedCardID`). Text otherwise edits inline on the board and never
-  /// opens a stage from `editingCardID`; freehand/image never open one at all.
+  /// opens a stage from `editingCardID`; vector paths edit their nodes inline, and freehand/image
+  /// never open an editor at all.
   @ViewBuilder
   private func editingStageOverlay(in size: CGSize) -> some View {
     if let id = focusedCardID,
@@ -1251,7 +1252,8 @@ struct ComposerCanvas: View {
       .id(id)
     } else if let id = board.editingCardID,
        let card = board.cards.first(where: { $0.id == id }),
-       card.elementKind != .freehand, card.elementKind != .image, card.elementKind != .text {
+       card.elementKind != .freehand, card.elementKind != .vectorPath,
+       card.elementKind != .image, card.elementKind != .text {
       EditingStage(
         board: board,
         card: card,
@@ -1658,7 +1660,12 @@ struct ComposerCanvas: View {
       closeAuxiliaryPanel()
     case .activeEditor:
       // Inline text and structured stages own their draft cancellation. The window-level command
-      // must stop here rather than dismissing the workspace behind an active editor.
+      // must stop here rather than dismissing the workspace behind an active editor. Vector nodes
+      // are the one inline non-text editor, so Escape explicitly ends that session here.
+      if let id = board.editingCardID,
+         board.cards.first(where: { $0.id == id })?.elementKind == .vectorPath {
+        board.endEditing(id)
+      }
       return
     case .drawingDraft:
       // The InputView listens for the same escape and drops its drag, so a pending mouse-up cannot

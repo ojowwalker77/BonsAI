@@ -226,6 +226,8 @@
 "Checklist" = "Checklist";
 "Drag to reorder" = "Drag to reorder";
 "Edit element" = "Edit element";
+"Drag vector anchor" = "Drag vector anchor";
+"Drag vector handle" = "Drag vector handle";
 "Return applies · Shift-Return inserts a new line" = "Return applies · Shift-Return inserts a new line";
 "Claude authentication failed: %@. Run `claude auth login`, then retry." = "Claude authentication failed: %@. Run `claude auth login`, then retry.";
 "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry." = "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry.";

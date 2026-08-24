@@ -1886,6 +1886,29 @@ final class BoardViewModel: ObservableObject {
     scheduleSave()
   }
 
+  /// Commit one completed vector control gesture. Preview geometry stays in the card view; only
+  /// mouse-up crosses this mutation seam, so moving an anchor or either handle is one undo step.
+  @discardableResult
+  func setVectorPath(_ id: UUID, placement: VectorPathPlacement) -> Bool {
+    let minimumNodes = placement.spec.isClosed ? 3 : 2
+    guard let index = cards.firstIndex(where: { $0.id == id }),
+          cards[index].elementKind == .vectorPath,
+          !cards[index].locked,
+          placement.spec.nodes.count >= minimumNodes,
+          placement.frame.width.isFinite,
+          placement.frame.height.isFinite,
+          placement.frame.width > 0,
+          placement.frame.height > 0,
+          cards[index].frame != placement.frame || cards[index].vectorPath != placement.spec
+    else { return false }
+    registerUndo()
+    cards[index].frame = placement.frame
+    cards[index].vectorPath = placement.spec
+    cards[index].whoWrote = nextAuthor
+    scheduleSave()
+    return true
+  }
+
   /// Grow/shrink a text card to HUG what's typed (issue #76): recompute both width and height from
   /// its current text and font scale, top-left anchored (x,y unchanged — the card grows right and
   /// down). This is a layout consequence of editing (the keystroke already registered undo), so it

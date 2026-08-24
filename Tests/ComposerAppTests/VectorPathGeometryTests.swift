@@ -105,4 +105,28 @@ final class VectorPathBoardTests: XCTestCase {
     board.undo()
     XCTAssertFalse(board.cards.contains(where: { $0.id == id }))
   }
+
+  func testCompletedNodeGestureIsOneUndoStep() throws {
+    var draft = VectorPathDraft()
+    XCTAssertNil(draft.finish(anchor: CGPoint(x: 10, y: 20), drag: CGPoint(x: 10, y: 20), closeTolerance: 8))
+    XCTAssertNil(draft.finish(anchor: CGPoint(x: 150, y: 90), drag: CGPoint(x: 170, y: 100), closeTolerance: 8))
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let id = try XCTUnwrap(board.addVectorPath(try XCTUnwrap(draft.commitOpen())))
+    let before = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    board.beginEditing(id)
+    let moved = try XCTUnwrap(VectorPathGeometry.moving(
+      .anchor,
+      nodeAt: 0,
+      by: CGSize(width: 35, height: -18),
+      in: try XCTUnwrap(before.vectorPath),
+      frame: before.frame))
+
+    XCTAssertTrue(board.setVectorPath(id, placement: moved))
+    XCTAssertNotEqual(board.cards.first(where: { $0.id == id }), before)
+
+    board.undo()
+    XCTAssertEqual(board.cards.first(where: { $0.id == id }), before)
+    board.undo()
+    XCTAssertFalse(board.cards.contains(where: { $0.id == id }))
+  }
 }

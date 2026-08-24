@@ -27,6 +27,9 @@ struct BoardCardView: View {
   /// Connector endpoints preview locally during a drag, then cross the model seam once on mouse-up
   /// so the entire detach/rebind is one undoable mutation.
   @GestureState private var endpointDrag: ConnectorEndpointDragSession?
+  /// Vector control previews remain local for the entire drag. Mouse-up commits the refitted spec
+  /// and frame once through `BoardViewModel`, preserving one undo checkpoint per gesture.
+  @GestureState private var vectorControlDrag: VectorControlDragSession?
   /// Text-only side resize: changes the wrapping width while preserving font scale. Corner resize
   /// remains proportional type scaling; the two gestures intentionally solve different jobs.
   @GestureState private var textWidthResize: TextWidthResizeSession?
@@ -73,6 +76,7 @@ struct BoardCardView: View {
   private var isEquationElement: Bool { card.elementKind == .equation }
   private var isGraphElement: Bool { card.elementKind == .graph }
   private var checklistCoordinateSpace: String { "checklist-\(card.id.uuidString)" }
+  private var isVectorPath: Bool { card.elementKind == .vectorPath }
   /// An empty text card is just a place to write, not a placed object — so it shows no chrome.
   private var isEmptyText: Bool { isTextElement && interaction.text.trimmed.isEmpty }
   /// Suppress chrome (ring, handles, delete ✕) on an empty text card ONLY while it's being edited —
@@ -83,6 +87,7 @@ struct BoardCardView: View {
   /// The frame to draw right now — base frame plus any in-flight move or resize.
   private var liveFrame: CGRect {
     if isEditing, let liveTextFrame { return liveTextFrame }
+    if isEditing, let liveVectorPlacement { return liveVectorPlacement.frame }
     if let resize { return applyResize(resize.corner, translation: resize.translation, to: card.frame) }
     if let textWidthResize {
       return textWidthFrame(textWidthResize.edge, translation: textWidthResize.translation, in: card.frame)
@@ -204,7 +209,7 @@ struct BoardCardView: View {
         // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
         // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
         // zoom so the text is laid out at screen size (crisp), not stretched.
-        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: boardTextContext.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id, connectorPoints: liveConnectorPoints, checklistCoordinateSpace: checklistCoordinateSpace)
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: boardTextContext.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id, connectorPoints: liveConnectorPoints, vectorSpec: liveVectorPlacement?.spec, checklistCoordinateSpace: checklistCoordinateSpace)
           .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)
@@ -268,6 +273,10 @@ struct BoardCardView: View {
         onMarkerDragEnded: endMarkerDrag
       )
       .allowsHitTesting(!isEditing && selectable)
+
+      if isEditing, isVectorPath, selectable {
+        vectorNodeEditor
+      }
 
       // Selected graph cards get a live interaction layer ABOVE the catcher: the ✕-legend (its
       // small top-right region claims clicks) and a passive hover crosshair/readout. Plot-area
@@ -668,6 +677,108 @@ struct BoardCardView: View {
     }
   }
 
+  private var liveVectorPlacement: VectorPathPlacement? {
+    guard isEditing,
+          let spec = card.vectorPath,
+          let drag = vectorControlDrag else { return nil }
+    return VectorPathGeometry.moving(
+      drag.control,
+      nodeAt: drag.nodeIndex,
+      by: CGSize(width: drag.translation.width / zoom, height: drag.translation.height / zoom),
+      in: spec,
+      frame: card.frame)
+  }
+
+  @ViewBuilder
+  private var vectorNodeEditor: some View {
+    if let baseSpec = card.vectorPath {
+      let spec = liveVectorPlacement?.spec ?? baseSpec
+      GeometryReader { geo in
+        ZStack {
+          Path { path in
+            for node in spec.nodes {
+              let anchor = vectorPoint(node.anchor, in: geo.size)
+              if let incoming = node.incoming {
+                path.move(to: anchor)
+                path.addLine(to: vectorPoint(incoming, in: geo.size))
+              }
+              if let outgoing = node.outgoing {
+                path.move(to: anchor)
+                path.addLine(to: vectorPoint(outgoing, in: geo.size))
+              }
+            }
+          }
+          .stroke(Theme.Palette.accent.opacity(0.52), lineWidth: 1)
+          .allowsHitTesting(false)
+
+          ForEach(Array(spec.nodes.enumerated()), id: \.offset) { index, node in
+            if let incoming = node.incoming {
+              vectorHandleDot
+                .position(vectorPoint(incoming, in: geo.size))
+                .gesture(vectorControlGesture(nodeIndex: index, control: .incoming))
+                .help("Drag vector handle".localizedUI)
+            }
+            if let outgoing = node.outgoing {
+              vectorHandleDot
+                .position(vectorPoint(outgoing, in: geo.size))
+                .gesture(vectorControlGesture(nodeIndex: index, control: .outgoing))
+                .help("Drag vector handle".localizedUI)
+            }
+            vectorAnchorDot
+              .position(vectorPoint(node.anchor, in: geo.size))
+              .gesture(vectorControlGesture(nodeIndex: index, control: .anchor))
+              .help("Drag vector anchor".localizedUI)
+          }
+        }
+      }
+    }
+  }
+
+  private func vectorPoint(_ point: CanvasPoint, in size: CGSize) -> CGPoint {
+    CGPoint(x: CGFloat(point.x) * size.width, y: CGFloat(point.y) * size.height)
+  }
+
+  private var vectorAnchorDot: some View {
+    Circle()
+      .fill(Theme.Palette.labelChipFill)
+      .frame(width: 10, height: 10)
+      .overlay(Circle().strokeBorder(Theme.Palette.accent, lineWidth: 1.75))
+      .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+      .padding(9)
+      .contentShape(Circle())
+  }
+
+  private var vectorHandleDot: some View {
+    Circle()
+      .fill(Theme.Palette.accent)
+      .frame(width: 8, height: 8)
+      .overlay(Circle().strokeBorder(Theme.Palette.labelChipFill, lineWidth: 1))
+      .shadow(color: .black.opacity(0.22), radius: 1, y: 1)
+      .padding(9)
+      .contentShape(Circle())
+  }
+
+  private func vectorControlGesture(nodeIndex: Int, control: VectorPathControl) -> some Gesture {
+    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+      .updating($vectorControlDrag) { value, state, _ in
+        state = VectorControlDragSession(
+          nodeIndex: nodeIndex,
+          control: control,
+          translation: value.translation)
+      }
+      .onEnded { value in
+        guard let spec = card.vectorPath,
+              let placement = VectorPathGeometry.moving(
+                control,
+                nodeAt: nodeIndex,
+                by: CGSize(width: value.translation.width / zoom,
+                           height: value.translation.height / zoom),
+                in: spec,
+                frame: card.frame) else { return }
+        board.setVectorPath(card.id, placement: placement)
+      }
+  }
+
   /// A small white square with a hairline accent edge and a soft shadow — reads as a crisp,
   /// premium resize handle on the dark glass rather than a flat blue block.
   private var handleDot: some View {
@@ -967,6 +1078,8 @@ private struct CanvasElementContent: View {
   var graphDropTarget: Bool = false
   /// Optional normalized line/arrow endpoints used only for an in-flight endpoint drag preview.
   var connectorPoints: [CanvasPoint]?
+  /// Refitted vector geometry used only during an in-flight node/handle edit preview.
+  var vectorSpec: VectorPathSpec?
   /// Present only for live board cards. Export renderers omit it, so measuring interaction geometry
   /// never changes exported content.
   var checklistCoordinateSpace: String? = nil
@@ -1016,7 +1129,7 @@ private struct CanvasElementContent: View {
         case .freehand:
           FreehandShape(points: card.points ?? CardState.defaultFreehandPoints(), tint: tint)
         case .vectorPath:
-          VectorPathShape(spec: card.vectorPath ?? VectorPathSpec(), tint: tint)
+          VectorPathShape(spec: vectorSpec ?? card.vectorPath ?? VectorPathSpec(), tint: tint)
         case .image:
           ImageObjectPlaceholder(path: card.imagePath)
             .overlay(alignment: .bottomTrailing) {
@@ -2652,6 +2765,12 @@ struct ConnectorEndpointDrag {
 
 private struct ConnectorEndpointDragSession: Equatable {
   let endpoint: ConnectorEndpoint
+  var translation: CGSize
+}
+
+private struct VectorControlDragSession: Equatable {
+  let nodeIndex: Int
+  let control: VectorPathControl
   var translation: CGSize
 }
 
