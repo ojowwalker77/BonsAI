@@ -329,7 +329,7 @@ struct ComposerCanvas: View {
     commandAnchor
       .onReceive(NotificationCenter.default.publisher(for: .composerZoomOut)) { _ in zoom(0.8, anchoredAt: zoomAnchor) }
       .onReceive(NotificationCenter.default.publisher(for: .composerZoomIn)) { _ in zoom(1.25, anchoredAt: zoomAnchor) }
-      .onReceive(NotificationCenter.default.publisher(for: .composerZoomReset)) { _ in withAnimation(Theme.Motion.accessory) { scale = 1 } }
+      .onReceive(NotificationCenter.default.publisher(for: .composerZoomReset)) { _ in resetZoom() }
       .onReceive(NotificationCenter.default.publisher(for: .composerZoomFit)) { note in
         let all = (note.userInfo?["scope"] as? String) == "all"
         withAnimation(Theme.Motion.accessory) { fitBoard(in: lastViewportSize, forceAll: all) }
@@ -1543,7 +1543,7 @@ struct ComposerCanvas: View {
   }
 
   private func zoom(_ factor: CGFloat, anchoredAt point: CGPoint) {
-    guard allowPanZoom() else { return }
+    guard allowViewportTransform() else { return }
     let oldScale = max(scale, 0.01)
     let nextScale = clampZoom(oldScale * factor)
     guard nextScale != scale else { return }
@@ -1605,6 +1605,7 @@ struct ComposerCanvas: View {
   /// selection when there is one (so "Fit" can zoom to what you picked), unless `forceAll` asks for
   /// the whole board — used by the agent's tidy/relayout so it never snaps to a stray selection.
   private func fitBoard(in size: CGSize, forceAll: Bool = false) {
+    guard allowViewportTransform() else { return }
     let selected = forceAll ? [] : board.cards.filter { board.selectedCardIDs.contains($0.id) }
     let target = selected.isEmpty ? board.cards : selected
     guard !target.isEmpty else { scale = 1; pan = .zero; return }
@@ -1618,6 +1619,13 @@ struct ComposerCanvas: View {
     let s = clampZoom(min(avail.width / contentW, avail.height / contentH, 1))
     scale = s
     pan = CGSize(width: margin - CGFloat(minX) * s, height: margin - CGFloat(minY) * s)
+  }
+
+  /// Keyboard and menu reset commands obey the same pointer-ownership gate as wheel/pinch input.
+  /// Otherwise a Pen press could capture one transform for its preview and commit under another.
+  private func resetZoom() {
+    guard allowViewportTransform() else { return }
+    withAnimation(Theme.Motion.accessory) { scale = 1 }
   }
 
 
@@ -1688,6 +1696,9 @@ struct ComposerCanvas: View {
     escapeHandledThisTurn = true
     DispatchQueue.main.async { escapeHandledThisTurn = false }
 
+    let activeEditorKind = board.editingCardID.flatMap { id in
+      board.cards.first(where: { $0.id == id })?.elementKind
+    }
     let target = ComposerEscapeCoordinator.target(for: ComposerEscapeState(
       hasBoardDeletionConfirmation: pendingBoardDeletion != nil,
       hasBoardRename: renamingBoardID != nil,
@@ -1698,6 +1709,7 @@ struct ComposerCanvas: View {
       hasAgent: showAgent,
       hasSettings: store.isSettingsOpen,
       hasActiveEditor: board.editingInteraction != nil,
+      hasActiveVectorEditor: activeEditorKind == .vectorPath,
       hasDrawingDraft: elementDraft != nil || freehandDraft != nil || vectorDraft != nil,
       hasTintPicker: tintPickerOpen,
       hasActiveTool: tool != .select,

@@ -90,5 +90,14 @@ final class CanvasDrawingDraftStateTests: XCTestCase {
 
     XCTAssertNil(appliedScroll)
     XCTAssertNil(appliedZoom)
+
+    // Positive control: prove the delayed callback actually runs once pointer ownership is
+    // released, so the nil assertions above cannot pass merely because the throttle never fired.
+    mode = .maybeTap
+    throttle.enqueueScroll(CGSize(width: 5, height: 5), canApply: canApply) {
+      appliedScroll = $0
+    }
+    try? await Task.sleep(nanoseconds: 30_000_000)
+    XCTAssertEqual(appliedScroll, CGSize(width: 5, height: 5))
   }
 }

@@ -109,6 +109,9 @@ struct ComposerEscapeState: Equatable {
   var hasAgent = false
   var hasSettings = false
   var hasActiveEditor = false
+  /// Vector editing is inline and can coexist with a newly started Pen draft. In that one case the
+  /// live pointer draft owns Escape; text and structured editors still keep their normal priority.
+  var hasActiveVectorEditor = false
   var hasDrawingDraft = false
   var hasTintPicker = false
   var hasActiveTool = false
@@ -127,6 +130,7 @@ enum ComposerEscapeCoordinator {
     // it to true anymore (the history overlay went with the old floating-panel mode), so an
     // Escape priority for it would be unreachable dead state.
     if state.hasAgent || state.hasSettings { return .auxiliaryPanel }
+    if state.hasActiveVectorEditor && state.hasDrawingDraft { return .drawingDraft }
     if state.hasActiveEditor { return .activeEditor }
     if state.hasDrawingDraft { return .drawingDraft }
     if state.hasTintPicker { return .tintPicker }
