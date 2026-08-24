@@ -29,4 +29,24 @@ final class CanvasDrawingDraftStateTests: XCTestCase {
     XCTAssertNil(state.element)
     XCTAssertNil(state.bindTargetID)
   }
+
+  func testLiveDrawingModesFreezeViewportTransform() {
+    let originalScale: CGFloat = 1.75
+    let originalPan = CGSize(width: 92, height: -41)
+
+    for mode in [CanvasViewportDragMode.placing, .drawing, .vectorDrawing] {
+      var scale = originalScale
+      var pan = originalPan
+      if CanvasViewportTransformPolicy.allowsPanOrZoom(during: mode) {
+        scale *= 1.2
+        pan.width += 25
+      }
+      XCTAssertEqual(scale, originalScale, "\(mode) must suppress pinch zoom")
+      XCTAssertEqual(pan, originalPan, "\(mode) must suppress scroll pan")
+    }
+
+    XCTAssertTrue(CanvasViewportTransformPolicy.allowsPanOrZoom(during: .maybeTap))
+    XCTAssertTrue(CanvasViewportTransformPolicy.allowsPanOrZoom(during: .selecting))
+    XCTAssertTrue(CanvasViewportTransformPolicy.allowsPanOrZoom(during: .panning))
+  }
 }

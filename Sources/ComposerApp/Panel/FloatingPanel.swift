@@ -192,6 +192,7 @@ final class FloatingPanel: NSWindow {
   /// resets — mirroring a `keyUp` — the moment focus leaves.
   override func resignKey() {
     super.resignKey()
+    CanvasKeyState.shared.viewportDragMode = .maybeTap
     NotificationCenter.default.post(
       name: .composerSpaceKeyChanged,
       object: nil,

@@ -2445,10 +2445,31 @@ private final class ViewportEventThrottle {
 /// Not `@MainActor`: it's a single `Bool` mutated and read only on the main thread (from
 /// notification handlers and AppKit's `hitTest`/`mouseDown`), and staying nonisolated lets the
 /// AppKit NSView overrides poll it without concurrency ceremony.
+enum CanvasViewportDragMode: Equatable {
+  case maybeTap
+  case selecting
+  case drawing
+  case vectorDrawing
+  case placing
+  case panning
+}
+
+/// A draft's viewport-to-board conversion is captured when its press begins. Pan or zoom during
+/// these three modes would change that transform before commit and separate result from preview.
+enum CanvasViewportTransformPolicy {
+  static func allowsPanOrZoom(during mode: CanvasViewportDragMode) -> Bool {
+    switch mode {
+    case .drawing, .vectorDrawing, .placing: false
+    case .maybeTap, .selecting, .panning: true
+    }
+  }
+}
+
 final class CanvasKeyState: @unchecked Sendable {
   static let shared = CanvasKeyState()
   private init() {}
   var isSpaceDown = false
+  var viewportDragMode: CanvasViewportDragMode = .maybeTap
 }
 
 private struct BoardViewportInput: NSViewRepresentable {
@@ -2529,15 +2550,6 @@ private struct BoardViewportInput: NSViewRepresentable {
       var onZoom: (CGFloat, CGPoint) -> Void = { _, _ in }
     }
 
-    private enum DragMode {
-      case maybeTap
-      case selecting
-      case drawing
-      case vectorDrawing
-      case placing
-      case panning
-    }
-
     var state = State() {
       didSet {
         if state.isSpacePressed != oldValue.isSpacePressed || state.tool != oldValue.tool {
@@ -2549,8 +2561,11 @@ private struct BoardViewportInput: NSViewRepresentable {
     private var dragModifiers: EventModifiers = []
     /// Refresh the cursor whenever the drag mode changes, so the open-hand grab flips to a closed
     /// grab the moment a space-pan actually starts (and back when it ends).
-    private var dragMode: DragMode = .maybeTap {
-      didSet { if dragMode != oldValue { window?.invalidateCursorRects(for: self) } }
+    private var dragMode: CanvasViewportDragMode = .maybeTap {
+      didSet {
+        CanvasKeyState.shared.viewportDragMode = dragMode
+        if dragMode != oldValue { window?.invalidateCursorRects(for: self) }
+      }
     }
     private var dragClickCount = 1
     private var lastPan: CGSize = .zero
@@ -2580,6 +2595,7 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     deinit {
       if let escapeObserver { NotificationCenter.default.removeObserver(escapeObserver) }
+      CanvasKeyState.shared.viewportDragMode = .maybeTap
     }
 
     override func updateTrackingAreas() {
@@ -2782,7 +2798,7 @@ private struct BoardViewportInput: NSViewRepresentable {
       // Panning mid-draw would shift the board out from under a draft whose start point was captured
       // at the old pan, so the committed shape lands away from the preview. Swallow scroll-pan while
       // a shape/freehand drag is live; two-finger pan resumes the moment the draw ends.
-      if dragMode == .placing || dragMode == .drawing || dragMode == .vectorDrawing { return }
+      guard CanvasViewportTransformPolicy.allowsPanOrZoom(during: dragMode) else { return }
       state.onScroll(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY))
     }
 
@@ -2887,6 +2903,11 @@ private struct PinchZoomCatcher: NSViewRepresentable {
       guard monitor == nil else { return }
       monitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
         guard let self, let window = self.window, event.window === window else { return event }
+        // Swallow pinch just like InputView swallows scroll-pan while drawing. The shared drag mode
+        // is updated synchronously by the AppKit input view, so this global monitor cannot zoom the
+        // board out from beneath an in-progress shape, freehand stroke, or vector handle pull.
+        guard CanvasViewportTransformPolicy.allowsPanOrZoom(
+          during: CanvasKeyState.shared.viewportDragMode) else { return nil }
         self.onZoom(1 + event.magnification, self.convert(event.locationInWindow, from: nil))
         return nil   // handled here — don't let any view double-apply it
       }
