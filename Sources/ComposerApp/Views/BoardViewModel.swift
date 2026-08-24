@@ -1785,9 +1785,12 @@ final class BoardViewModel: ObservableObject {
     return CGSize(width: width, height: fittedTextHeight(text, width: width))
   }
 
-  /// A box sized to hold a centered node label (the diagram-node font/padding), wrapping rather
-  /// than truncating. Ellipses/diamonds get extra room so the label fits inside the inscribed area.
-  static func fittedShapeSize(_ text: String, shape: CanvasElementKind = .rectangle, maxWidth: CGFloat = 216) -> CGSize {
+  /// The rectangular label block rendered by `NodeLabel`, including its content padding. Keeping
+  /// this independently visible lets non-rectangular containers apply their real containment math.
+  static func fittedShapeLabelBlockSize(
+    _ text: String,
+    maxWidth: CGFloat = ShapeLabelGeometry.defaultMaximumContainerWidth
+  ) -> CGSize {
     let paragraph = NSMutableParagraphStyle()
     paragraph.alignment = .center
     let attributes: [NSAttributedString.Key: Any] = [.font: ComposerPreferences.appFont(ofSize: 14, weight: .semibold),
@@ -1795,14 +1798,32 @@ final class BoardViewModel: ObservableObject {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     let ns = (trimmed.isEmpty ? " " : trimmed) as NSString
     let natural = ns.size(withAttributes: attributes).width
-    let contentWidth = min(max(natural, 72), maxWidth - 24)   // 12pt horizontal padding each side
+    let contentWidth = min(
+      max(natural, 72),
+      maxWidth - ShapeLabelGeometry.horizontalPadding * 2)
     let measured = ns.boundingRect(with: NSSize(width: contentWidth, height: .greatestFiniteMagnitude),
                                    options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height
-    var width = ceil(contentWidth) + 24
-    var height = max(ceil(measured) + 22, 54)
+    return ShapeLabelGeometry.paddedBlockSize(
+      contentWidth: contentWidth, contentHeight: measured)
+  }
+
+  /// A box sized to hold a centered node label (the diagram-node font/padding), wrapping rather
+  /// than truncating. Ellipses get their established optical inset; diamonds use their exact
+  /// centered-rectangle containment constraint so tall multiline labels cannot cross an edge.
+  static func fittedShapeSize(
+    _ text: String,
+    shape: CanvasElementKind = .rectangle,
+    maxWidth: CGFloat = ShapeLabelGeometry.defaultMaximumContainerWidth
+  ) -> CGSize {
+    let block = fittedShapeLabelBlockSize(text, maxWidth: maxWidth)
+    var width = block.width
+    var height = block.height
     switch shape {
     case .ellipse: width = ceil(width * 1.24); height = ceil(height * 1.35)
-    case .diamond: width = ceil(width * 1.5); height = ceil(height * 1.5)
+    case .diamond:
+      let container = ShapeLabelGeometry.diamondContainerSize(containing: block)
+      width = container.width
+      height = container.height
     default: break
     }
     return CGSize(

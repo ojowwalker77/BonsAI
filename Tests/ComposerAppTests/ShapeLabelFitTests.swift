@@ -116,6 +116,35 @@ final class ShapeLabelFitTests: XCTestCase {
     XCTAssertEqual(board.plainText(for: try card(id, in: board)), "")
   }
 
+  func testCappedEightLineLabelFitsInsideVisibleDiamondPath() throws {
+    let board = makeBoard()
+    let id = board.addElement(.diamond, at: CGPoint(x: 360, y: 240))
+    let before = try card(id, in: board).frame
+    let line = "A deliberately long capped-width decision label"
+    let label = Array(repeating: line, count: 8).joined(separator: "\n")
+
+    board.setText(id, label)
+
+    let block = BoardViewModel.fittedShapeLabelBlockSize(label)
+    let container = BoardViewModel.fittedShapeSize(label, shape: .diamond)
+    XCTAssertEqual(
+      block.width,
+      ShapeLabelGeometry.defaultMaximumContainerWidth,
+      accuracy: 0.5,
+      "each explicit line should exercise the same width cap used by NodeLabel")
+    XCTAssertTrue(ShapeLabelGeometry.diamondContains(paddedBlock: block, in: container))
+    XCTAssertLessThanOrEqual(
+      block.width / (container.width - ShapeLabelGeometry.shapePathInset * 2)
+        + block.height / (container.height - ShapeLabelGeometry.shapePathInset * 2),
+      1.000_001,
+      "all four corners of the measured padded label block must stay inside the diamond")
+
+    let fitted = try card(id, in: board).frame
+    XCTAssertEqual(fitted.size, container)
+    XCTAssertEqual(fitted.midX, before.midX, accuracy: 0.5)
+    XCTAssertEqual(fitted.midY, before.midY, accuracy: 0.5)
+  }
+
   func testShortLabelRespectsShapeMinimum() {
     let size = BoardViewModel.fittedShapeSize("Fit", shape: .rectangle)
 

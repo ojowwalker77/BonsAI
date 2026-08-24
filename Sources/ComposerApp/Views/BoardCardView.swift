@@ -1251,8 +1251,11 @@ private struct NodeLabel: View {
       // on light themes).
       .foregroundStyle(tint ?? Theme.Palette.body)
       .shadow(color: Theme.Palette.elementShadow, radius: 3, y: 1)
-      .padding(.horizontal, 12 * zoom)
-      .padding(.vertical, 8 * zoom)
+      // The sizing seam measures with this same cap. Without it, the larger diamond frame offers
+      // Text extra width, changes its wrap, and invalidates the measured containment block.
+      .frame(maxWidth: ShapeLabelGeometry.defaultMaximumContentWidth * zoom)
+      .padding(.horizontal, ShapeLabelGeometry.horizontalPadding * zoom)
+      .padding(.vertical, ShapeLabelGeometry.verticalPadding * zoom)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .allowsHitTesting(false)
   }
@@ -1417,7 +1420,7 @@ private struct ShapeBox: View {
       .fill(tint.map { $0.opacity(Theme.flavor.isDark ? 0.16 : 0.10) } ?? Theme.Palette.elementFill)
       .overlay(BoxShape(kind: kind).stroke(tint ?? Theme.Palette.elementStroke, lineWidth: 2))
       .shadow(color: Theme.Palette.elementShadow, radius: 10, y: 4)
-      .padding(2)
+      .padding(ShapeLabelGeometry.shapePathInset)
   }
 }
 
