@@ -2,11 +2,11 @@ import AppKit
 import SwiftUI
 
 enum MenuBarStatusClickAction: Equatable {
-  case toggleCapture
-  case showBoard
+  case deferToggleCapture
+  case cancelDeferredToggleAndShowBoard
 
   static func resolve(clickCount: Int) -> Self {
-    clickCount >= 2 ? .showBoard : .toggleCapture
+    clickCount >= 2 ? .cancelDeferredToggleAndShowBoard : .deferToggleCapture
   }
 }
 
@@ -17,10 +17,18 @@ final class MenuBarController: NSObject {
   private var capturePanel: NSPanel?
   private var captureField: NSTextField?
   private let notificationCenter: NotificationCenter
+  private let doubleClickInterval: TimeInterval
+  private var pendingSingleClick: DispatchWorkItem?
 
-  init(notificationCenter: NotificationCenter = .default) {
+  init(
+    notificationCenter: NotificationCenter = .default,
+    doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval
+  ) {
     self.notificationCenter = notificationCenter
+    self.doubleClickInterval = doubleClickInterval
   }
+
+  deinit { pendingSingleClick?.cancel() }
 
   func install() {
     guard statusItem == nil else { return }
@@ -51,14 +59,32 @@ final class MenuBarController: NSObject {
     dispatchStatusClick(clickCount: NSApp.currentEvent?.clickCount ?? 1)
   }
 
-  /// Keep the primary click immediate. AppKit sends the status-button action for every click in a
-  /// multi-click sequence, so the second delivery can replace capture with the board without making
-  /// every ordinary quick capture wait out the system double-click interval.
+  /// AppKit sends the status-button action for every click in a multi-click sequence. Delay the
+  /// single-click toggle by the system interval so a second delivery can cancel it before capture
+  /// activates or takes focus. Once that interval expires, another click starts a fresh sequence
+  /// and retains the documented open/close toggle behavior.
   func dispatchStatusClick(clickCount: Int) {
+    dispatchStatusClick(clickCount: clickCount) { [weak self] in
+      self?.toggleCapturePanel()
+    }
+  }
+
+  /// The explicit action is also the small deterministic seam used to prove that cancelled or
+  /// superseded single-click work never reaches capture.
+  func dispatchStatusClick(clickCount: Int, toggleCapture: @escaping @MainActor () -> Void) {
     switch MenuBarStatusClickAction.resolve(clickCount: clickCount) {
-    case .toggleCapture:
-      toggleCapturePanel()
-    case .showBoard:
+    case .deferToggleCapture:
+      pendingSingleClick?.cancel()
+      let work = DispatchWorkItem { [weak self] in
+        guard let self else { return }
+        self.pendingSingleClick = nil
+        toggleCapture()
+      }
+      pendingSingleClick = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + doubleClickInterval, execute: work)
+    case .cancelDeferredToggleAndShowBoard:
+      pendingSingleClick?.cancel()
+      pendingSingleClick = nil
       // Hide, but do not clear, an in-progress capture. The next single click can resume its draft.
       capturePanel?.orderOut(nil)
       notificationCenter.post(name: .composerShowWindow, object: nil)

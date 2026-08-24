@@ -674,6 +674,7 @@ private struct SettingsContent: View {
         Spacer(minLength: 12)
         Toggle("", isOn: $hideDockIcon)
           .labelsHidden()
+          .accessibilityLabel(Text("Hide Dock icon".localizedUI))
           .toggleStyle(.switch)
           .tint(Theme.Palette.accent)
       }
@@ -704,6 +705,7 @@ private struct SettingsContent: View {
           Spacer(minLength: 12)
           Toggle("", isOn: $continuousDrawingEnabled)
             .labelsHidden()
+            .accessibilityLabel(Text("Continuous drawing".localizedUI))
             .toggleStyle(.switch)
             .tint(Theme.Palette.accent)
         }
@@ -863,6 +865,7 @@ private struct SettingsContent: View {
           Spacer(minLength: 12)
           Toggle("", isOn: $dotGridEnabled)
             .labelsHidden()
+            .accessibilityLabel(Text("Dot grid".localizedUI))
             .toggleStyle(.switch)
             .tint(Theme.Palette.accent)
         }

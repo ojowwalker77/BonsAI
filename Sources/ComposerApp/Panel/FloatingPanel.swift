@@ -189,10 +189,11 @@ final class FloatingPanel: NSWindow {
 
   /// Losing key status mid-press can swallow the space `keyUp`, which would otherwise leave the
   /// board stuck in pan mode (open-hand cursor, cards non-interactive). Clear the space latch so it
-  /// resets — mirroring a `keyUp` — the moment focus leaves.
+  /// resets — mirroring a `keyUp` — the moment focus leaves. The viewport gesture mode remains
+  /// owned by `BoardViewportInput`: clearing it here while that view is still drawing would reopen
+  /// pan and zoom beneath an in-flight draft.
   override func resignKey() {
     super.resignKey()
-    CanvasKeyState.shared.viewportDragMode = .maybeTap
     NotificationCenter.default.post(
       name: .composerSpaceKeyChanged,
       object: nil,

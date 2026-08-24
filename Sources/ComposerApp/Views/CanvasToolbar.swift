@@ -76,6 +76,14 @@ struct CanvasToolbar: View {
   @Binding var continuousDrawingEnabled: Bool
 
   var body: some View {
+    ViewThatFits(in: .horizontal) {
+      fullToolbar
+      compactToolbar
+    }
+  }
+
+  /// Keep every direct tool affordance while the window has room for it.
+  private var fullToolbar: some View {
     HStack(spacing: 5) {
       ToolButton(symbol: "cursorarrow", help: "Select  ·  move & edit cards  1".localizedUI,
                  active: tool == .select, shortcut: 1) { tool = .select }
@@ -111,22 +119,94 @@ struct CanvasToolbar: View {
       .menuIndicator(.hidden)
       .help("More canvas elements".localizedUI)
 
-      if tool.isRepeatableDrawingTool {
-        Button {
-          continuousDrawingEnabled.toggle()
-          Haptics.level()
-        } label: {
-          Image(systemName: continuousDrawingEnabled ? "pin.fill" : "pin.slash")
-            .font(WindowChrome.iconFont)
-            .foregroundStyle(continuousDrawingEnabled ? Theme.Palette.accent : Theme.Palette.chromeGlyph)
-            .frame(width: ToolMetrics.side, height: ToolMetrics.side)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help((continuousDrawingEnabled
-               ? "Drawing tool stays active · click to use once"
-               : "Drawing tool is one-shot · click to keep active").localizedUI)
+      persistenceControl
+    }
+  }
+
+  /// At the window's 640pt minimum the complete command bar cannot fit eleven fixed-width tool
+  /// buttons. Preserve the primary Select/Text actions and group related placement tools into
+  /// discoverable menus; keyboard shortcuts continue to select every tool directly.
+  private var compactToolbar: some View {
+    HStack(spacing: 5) {
+      ToolButton(symbol: "cursorarrow", help: "Select  ·  move & edit cards  1".localizedUI,
+                 active: tool == .select, shortcut: 1) { tool = .select }
+      ToolButton(symbol: "character", help: "Text  ·  click the board, then type  2".localizedUI,
+                 active: tool == .text, shortcut: 2) { tool = .text }
+      toolMenu(
+        symbol: "square.on.circle",
+        help: "Rectangle  ·  drag to draw  3".localizedUI,
+        active: [.rectangle, .ellipse, .diamond].contains(tool)
+      ) {
+        Button("Rectangle  ·  drag to draw  3".localizedUI) { tool = .rectangle }
+        Button("Ellipse  ·  drag to draw  4".localizedUI) { tool = .ellipse }
+        Button("Diamond  ·  drag to draw  5".localizedUI) { tool = .diamond }
       }
+      toolMenu(
+        symbol: "arrow.up.right",
+        help: "Connectors".localizedUI,
+        active: [.line, .arrow].contains(tool)
+      ) {
+        Button("Line  ·  drag to draw  6".localizedUI) { tool = .line }
+        Button("Arrow  ·  drag to draw  7".localizedUI) { tool = .arrow }
+      }
+      toolMenu(
+        symbol: "pencil.and.scribble",
+        help: "Drawing".localizedUI,
+        active: [.freehand, .vectorPen].contains(tool)
+      ) {
+        Button("Freehand stroke  ·  drag to draw  8".localizedUI) { tool = .freehand }
+        Button("Pen  ·  click corners, drag curves, Return commits  P".localizedUI) { tool = .vectorPen }
+      }
+      ToolButton(symbol: "x.squareroot", help: "Equation  ·  click the board, then type LaTeX  9".localizedUI,
+                 active: tool == .equation, shortcut: 9) { tool = .equation }
+      toolMenu(
+        symbol: "plus.square.on.square",
+        help: "More canvas elements".localizedUI,
+        active: [.sticky, .checklist, .table].contains(tool)
+      ) {
+        Button("Sticky note".localizedUI) { tool = .sticky }
+        Button("Checklist".localizedUI) { tool = .checklist }
+        Button("Table".localizedUI) { tool = .table }
+      }
+
+      persistenceControl
+    }
+  }
+
+  private func toolMenu<Content: View>(
+    symbol: String,
+    help: String,
+    active: Bool,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    Menu(content: content) {
+      Image(systemName: symbol)
+        .font(WindowChrome.iconFont)
+        .foregroundStyle(active ? Theme.Palette.accent : Theme.Palette.chromeGlyph)
+        .frame(width: ToolMetrics.side, height: ToolMetrics.side)
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .help(help)
+  }
+
+  @ViewBuilder
+  private var persistenceControl: some View {
+    if tool.isRepeatableDrawingTool {
+      Button {
+        continuousDrawingEnabled.toggle()
+        Haptics.level()
+      } label: {
+        Image(systemName: continuousDrawingEnabled ? "pin.fill" : "pin.slash")
+          .font(WindowChrome.iconFont)
+          .foregroundStyle(continuousDrawingEnabled ? Theme.Palette.accent : Theme.Palette.chromeGlyph)
+          .frame(width: ToolMetrics.side, height: ToolMetrics.side)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help((continuousDrawingEnabled
+             ? "Drawing tool stays active · click to use once"
+             : "Drawing tool is one-shot · click to keep active").localizedUI)
     }
   }
 }

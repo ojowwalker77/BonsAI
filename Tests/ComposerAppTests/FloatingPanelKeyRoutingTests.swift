@@ -108,7 +108,30 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
     panel.contentView?.addSubview(field)
     XCTAssertTrue(panel.makeFirstResponder(field))
+    XCTAssertTrue(
+      panel.firstResponder is NSTextView,
+      "an editing NSTextField must install the field editor — bare-P routing depends on it")
     XCTAssertNil(selectedTool { panel.sendEvent(letterKeyDown("p", in: panel)) })
+  }
+
+  func testResigningKeyDoesNotReopenViewportTransformsDuringAnActiveDraft() {
+    let panel = makePanel()
+    let previousMode = CanvasKeyState.shared.viewportDragMode
+    defer { CanvasKeyState.shared.viewportDragMode = previousMode }
+    CanvasKeyState.shared.viewportDragMode = .drawing
+
+    var releasedSpace = false
+    let observer = NotificationCenter.default.addObserver(
+      forName: .composerSpaceKeyChanged, object: nil, queue: nil
+    ) { note in
+      releasedSpace = note.userInfo?["down"] as? Bool == false
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    panel.resignKey()
+
+    XCTAssertTrue(releasedSpace)
+    XCTAssertEqual(CanvasKeyState.shared.viewportDragMode, .drawing)
   }
 
   func testBackspaceWhileAppKitFieldIsEditingDoesNotDeleteCards() {
@@ -264,6 +287,18 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState()),
       .windowDismissal
+    )
+  }
+
+  func testEscapeCoordinatorCancelsDrawingBeforeClosingAnInlineVectorEditor() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasActiveEditor: true,
+        hasActiveVectorEditor: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true
+      )),
+      .drawingDraft
     )
   }
 
