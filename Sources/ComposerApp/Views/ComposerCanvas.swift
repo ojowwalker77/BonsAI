@@ -617,7 +617,7 @@ struct ComposerCanvas: View {
 
   /// The draft segment changed (viewport space). Store it, and for a line/arrow resolve the card its
   /// live end would bind to — under the CURRENT drag endpoint, converted to board space — so the
-  /// highlight tracks the cursor and matches exactly what `bindArrowIfPossible` will do on commit.
+  /// highlight tracks the cursor and matches exactly what connector finalization does on commit.
   private func onElementDraftChanged(_ start: CGPoint, _ current: CGPoint) {
     if promotion != nil { dismissPromotion() }
     elementDraft = DragSegment(start: start, end: current)

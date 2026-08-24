@@ -479,11 +479,11 @@ final class BoardViewModel: ObservableObject {
       }
       return copy
     }
-    // The live hug resized a card the committed arrow geometry was anchored against, so re-derive
-    // bound arrows ON THE COPY — a mid-edit save/export must not persist the new frame with arrows
+    // The live hug resized a card committed connector geometry was anchored against, so re-derive
+    // bound connectors ON THE COPY — a mid-edit save/export must not persist the new frame with them
     // still aimed at the old one. Done on the snapshot (never the published `cards`) because this
     // runs from the save debounce and the exporter, which must stay side-effect-free.
-    if appliedLiveFrame { Self.refreshBoundArrows(in: &snapshot) }
+    if appliedLiveFrame { snapshot = ConnectorGeometry.refreshing(in: snapshot) }
     return snapshot
   }
 
@@ -653,7 +653,7 @@ final class BoardViewModel: ObservableObject {
     }
     nextZ += 1
     cards.append(card)
-    if kind == .arrow { bindArrowIfPossible(card.id) }
+    if ConnectorGeometry.isConnector(card) { bindConnectorIfPossible(card.id) }
     interactions[card.id] = CardInteraction(card)
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
@@ -686,7 +686,7 @@ final class BoardViewModel: ObservableObject {
       z: nextZ, points: points, whoWrote: nextAuthor, tint: currentTint)
     nextZ += 1
     cards.append(card)
-    if kind == .arrow { bindArrowIfPossible(card.id) }
+    if ConnectorGeometry.isConnector(card) { bindConnectorIfPossible(card.id) }
     interactions[card.id] = CardInteraction(card)
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
@@ -1120,7 +1120,7 @@ final class BoardViewModel: ObservableObject {
     suppressUndo = previousSuppressUndo
 
     guard let targetIndex = index(for: id) else {
-      refreshBoundArrows()
+      refreshBoundConnectors()
       scheduleSave()
       return
     }
@@ -1133,7 +1133,7 @@ final class BoardViewModel: ObservableObject {
     cards[targetIndex].endBindingAnchor = nil
     cards[targetIndex].frame = targetFrame
     if editingCardID == id { editingCardID = nil }
-    refreshBoundArrows()
+    refreshBoundConnectors()
     scheduleSave()
   }
 
@@ -1180,7 +1180,7 @@ final class BoardViewModel: ObservableObject {
     cards[i].whoWrote = nextAuthor
     // Rebuild the interaction from the rewritten card so the label/selection chrome reads the new kind.
     interactions[cards[i].id] = CardInteraction(cards[i])
-    if cards[i].elementKind == .arrow { bindArrowIfPossible(id) }
+    if ConnectorGeometry.isConnector(cards[i]) { bindConnectorIfPossible(id) }
     select(id)
     invalidateBoardTextContext()
     scheduleSave()
@@ -1257,7 +1257,7 @@ final class BoardViewModel: ObservableObject {
     primarySelectedCardID = newIDs.last
     editingCardID = nil
     invalidateBoardTextContext()
-    refreshBoundArrows()
+    refreshBoundConnectors()
     scheduleSave()
   }
 
@@ -1350,19 +1350,27 @@ final class BoardViewModel: ObservableObject {
     return CGSize(width: max(width, CardState.textMinSize.width), height: height)
   }
 
-  /// Draw an arrow bound between two existing cards (its geometry tracks their centers). An
-  /// optional `reason` rides the arrow as its label — the "why" behind the link.
+  /// Draw a line/arrow bound between two existing cards. An optional `reason` rides the connector
+  /// as its label — the "why" behind the link. Arrow remains the default for existing callers.
   @discardableResult
-  func connectCards(from: UUID, to: UUID, reason: String = "") -> UUID? {
-    guard from != to, cards.contains(where: { $0.id == from }), cards.contains(where: { $0.id == to }) else { return nil }
+  func connectCards(from: UUID,
+                    to: UUID,
+                    kind: CanvasElementKind = .arrow,
+                    reason: String = "") -> UUID? {
+    guard let source = cards.first(where: { $0.id == from }),
+          let target = cards.first(where: { $0.id == to }),
+          let card = ConnectorGeometry.makeBoundConnector(
+            kind: kind,
+            text: reason,
+            source: source,
+            target: target,
+            z: nextZ,
+            author: nextAuthor)
+    else { return nil }
     registerUndo()
-    let card = CardState(kind: .arrow, text: reason,
-                         x: 0, y: 0, w: Double(CardState.lineSize.width), h: Double(CardState.lineSize.height),
-                         z: nextZ, startBindingID: from, endBindingID: to, whoWrote: nextAuthor)
     nextZ += 1
     cards.append(card)
     interactions[card.id] = CardInteraction(card)
-    if let index = cards.firstIndex(where: { $0.id == card.id }) { Self.updateBoundArrowGeometry(at: index, in: &cards) }
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     invalidateBoardTextContext()
@@ -1385,7 +1393,7 @@ final class BoardViewModel: ObservableObject {
     guard let old = cards.first(where: { $0.id == oldID }) else { return nil }
     registerUndo()
     suppressUndo = true
-    defer { suppressUndo = false; refreshBoundArrows(); scheduleSave() }
+    defer { suppressUndo = false; refreshBoundConnectors(); scheduleSave() }
     setArchived(oldID, true)
     let newID = insertText(newText, at: CGPoint(x: old.x, y: old.y + old.h + 64))
     _ = connectCards(from: oldID, to: newID, reason: reason)
@@ -1413,7 +1421,7 @@ final class BoardViewModel: ObservableObject {
     defer {
       suppressUndo = false
       endBoardTextContextBatch()
-      refreshBoundArrows()
+      refreshBoundConnectors()
       scheduleSave()
     }
 
@@ -1486,7 +1494,7 @@ final class BoardViewModel: ObservableObject {
 
     registerUndo()
     suppressUndo = true
-    defer { suppressUndo = false; refreshBoundArrows(); scheduleSave() }
+    defer { suppressUndo = false; refreshBoundConnectors(); scheduleSave() }
 
     var config = BoardLayout.Config()
     config.direction = direction
@@ -1523,7 +1531,7 @@ final class BoardViewModel: ObservableObject {
 
     registerUndo()
     suppressUndo = true
-    defer { suppressUndo = false; refreshBoundArrows(); scheduleSave() }
+    defer { suppressUndo = false; refreshBoundConnectors(); scheduleSave() }
 
     var config = BoardLayout.Config()
     config.direction = direction
@@ -1723,19 +1731,6 @@ final class BoardViewModel: ObservableObject {
       height: max(height, CardState.shapeMinSize.height))
   }
 
-  /// The point on `rect`'s edge along the line toward `target`, pushed out by `margin`. Used to land
-  /// a bound arrow on a node's boundary instead of its center.
-  static func boundaryPoint(of rect: CGRect, toward target: CGPoint, margin: CGFloat) -> CGPoint {
-    let c = CGPoint(x: rect.midX, y: rect.midY)
-    let dx = target.x - c.x, dy = target.y - c.y
-    guard dx != 0 || dy != 0 else { return c }
-    let tx = dx != 0 ? (rect.width / 2) / abs(dx) : .greatestFiniteMagnitude
-    let ty = dy != 0 ? (rect.height / 2) / abs(dy) : .greatestFiniteMagnitude
-    let t = Swift.min(tx, ty)
-    let len = hypot(dx, dy)
-    return CGPoint(x: c.x + dx * t + dx / len * margin, y: c.y + dy * t + dy / len * margin)
-  }
-
   /// Commit a moved/resized card frame (board space).
   func setFrame(_ id: UUID, _ frame: CGRect) {
     guard let i = cards.firstIndex(where: { $0.id == id }) else { return }
@@ -1749,14 +1744,14 @@ final class BoardViewModel: ObservableObject {
     )
     guard cards[i].frame != next else { return }
     registerUndo()
-    if cards[i].elementKind == .arrow {
+    if ConnectorGeometry.isConnector(cards[i]) {
       cards[i].startBindingID = nil
       cards[i].endBindingID = nil
       cards[i].startBindingAnchor = nil
       cards[i].endBindingAnchor = nil
     }
     cards[i].frame = next
-    refreshBoundArrows()
+    refreshBoundConnectors()
     scheduleSave()
   }
 
@@ -1773,7 +1768,7 @@ final class BoardViewModel: ObservableObject {
     guard abs(cards[i].w - Double(fitted.width)) > 0.5 || abs(cards[i].h - Double(fitted.height)) > 0.5 else { return }
     cards[i].w = Double(fitted.width)
     cards[i].h = Double(fitted.height)
-    refreshBoundArrows()
+    refreshBoundConnectors()
     scheduleSave()
   }
 
@@ -1797,7 +1792,7 @@ final class BoardViewModel: ObservableObject {
       y: center.y - fitted.height / 2,
       width: fitted.width,
       height: fitted.height)
-    refreshBoundArrows()
+    refreshBoundConnectors()
     scheduleSave()
   }
 
@@ -1811,7 +1806,7 @@ final class BoardViewModel: ObservableObject {
     let committedFrame = CGRect(origin: cards[i].frame.origin, size: frame.size)
     guard cards[i].frame != committedFrame else { return true }
     cards[i].frame = committedFrame
-    refreshBoundArrows()
+    refreshBoundConnectors()
     scheduleSave()
     return true
   }
@@ -1857,7 +1852,7 @@ final class BoardViewModel: ObservableObject {
     cards[i].frame = CGRect(x: frame.minX, y: frame.minY,
                             width: max(frame.width, minSize.width),
                             height: max(frame.height, minSize.height))
-    refreshBoundArrows()
+    refreshBoundConnectors()
     scheduleSave()
   }
 
@@ -1892,7 +1887,7 @@ final class BoardViewModel: ObservableObject {
       selectedCardIDs = [fresh.id]
       primarySelectedCardID = fresh.id
     }
-    refreshBoundArrows()
+    refreshBoundConnectors()
     invalidateBoardTextContext()
     scheduleSave()
   }
@@ -1941,7 +1936,7 @@ final class BoardViewModel: ObservableObject {
       selectedCardIDs = [fresh.id]
       primarySelectedCardID = fresh.id
     }
-    refreshBoundArrows()
+    refreshBoundConnectors()
     invalidateBoardTextContext()
     scheduleSave()
   }
@@ -2007,8 +2002,8 @@ final class BoardViewModel: ObservableObject {
       cards[i].x += Double(delta.width)
       cards[i].y += Double(delta.height)
     }
-    detachMovedArrows(moving)
-    refreshBoundArrows()
+    detachMovedConnectors(moving)
+    refreshBoundConnectors()
     scheduleSave()
   }
 
@@ -2105,8 +2100,8 @@ final class BoardViewModel: ObservableObject {
       cards[i].y += Double(delta.height)
     }
     absorbMovedEquationIntoTopmostGraphIfNeeded(ids)
-    detachMovedArrows(ids)
-    refreshBoundArrows()
+    detachMovedConnectors(ids)
+    refreshBoundConnectors()
     scheduleSave()
   }
 
@@ -2227,8 +2222,8 @@ final class BoardViewModel: ObservableObject {
     if !snapGuides.isEmpty { snapGuides = [] }
   }
 
-  private func detachMovedArrows(_ ids: Set<UUID>) {
-    for i in cards.indices where ids.contains(cards[i].id) && cards[i].elementKind == .arrow {
+  private func detachMovedConnectors(_ ids: Set<UUID>) {
+    for i in cards.indices where ids.contains(cards[i].id) && ConnectorGeometry.isConnector(cards[i]) {
       cards[i].startBindingID = nil
       cards[i].endBindingID = nil
       cards[i].startBindingAnchor = nil
@@ -2236,200 +2231,43 @@ final class BoardViewModel: ObservableObject {
     }
   }
 
-  private func bindArrowIfPossible(_ id: UUID) {
-    guard let i = index(for: id), cards[i].elementKind == .arrow else { return }
-    let endpoints = Self.lineEndpoints(for: cards[i])
-    var excluded: Set<UUID> = [id]
-    if let start = nearestConnectable(to: endpoints.start, excluding: excluded) {
-      cards[i].startBindingID = start.id
-      cards[i].startBindingAnchor = Self.bindingAnchor(on: start.frame, drawn: endpoints.start, otherEnd: endpoints.end)
-      excluded.insert(start.id)
-    }
-    if let end = nearestConnectable(to: endpoints.end, excluding: excluded) {
-      cards[i].endBindingID = end.id
-      cards[i].endBindingAnchor = Self.bindingAnchor(on: end.frame, drawn: endpoints.end, otherEnd: endpoints.start)
-    }
-    if cards[i].startBindingID != nil || cards[i].endBindingID != nil {
-      Self.updateBoundArrowGeometry(at: i, in: &cards)
-    }
+  private func bindConnectorIfPossible(_ id: UUID) {
+    guard let index = index(for: id),
+          let connector = ConnectorGeometry.finalizingDrawn(cards[index], among: cards)
+    else { return }
+    cards[index] = connector
   }
 
-  /// The normalized point on `frame` where a drawn endpoint attaches — the spot the user actually
-  /// aimed at. Inside the frame: where the drawn segment enters the box (so a preview line piercing
-  /// the box clips to its edge, direction intact). Outside (the 16pt edge slop): the nearest
-  /// boundary point. The bound endpoint then LANDS there, and stays there as the card moves — the
-  /// old center-ray re-route ("aim-assist") never touches a hand-drawn arrow again.
-  static func bindingAnchor(on frame: CGRect, drawn: CGPoint, otherEnd: CGPoint) -> CanvasPoint {
-    let point: CGPoint
-    if frame.contains(drawn) {
-      point = segmentEntry(into: frame, from: otherEnd, to: drawn) ?? drawn
-    } else {
-      point = CGPoint(x: min(max(drawn.x, frame.minX), frame.maxX),
-                      y: min(max(drawn.y, frame.minY), frame.maxY))
-    }
-    return CanvasPoint(
-      x: Double((point.x - frame.minX) / max(frame.width, 1)),
-      y: Double((point.y - frame.minY) / max(frame.height, 1)))
-  }
-
-  /// First intersection of the segment `from → to` with `rect` (Liang–Barsky entry point). nil when
-  /// `from` is already inside or the segment misses the rect entirely.
-  private static func segmentEntry(into rect: CGRect, from: CGPoint, to: CGPoint) -> CGPoint? {
-    guard !rect.contains(from) else { return nil }
-    let dx = to.x - from.x, dy = to.y - from.y
-    var tMin: CGFloat = 0, tMax: CGFloat = 1
-    for (p, q) in [(-dx, from.x - rect.minX), (dx, rect.maxX - from.x),
-                   (-dy, from.y - rect.minY), (dy, rect.maxY - from.y)] {
-      if p == 0 {
-        if q < 0 { return nil }
-        continue
-      }
-      let t = q / p
-      if p < 0 { tMin = max(tMin, t) } else { tMax = min(tMax, t) }
-      if tMin > tMax { return nil }
-    }
-    return CGPoint(x: from.x + dx * tMin, y: from.y + dy * tMin)
-  }
-
-  /// A stored binding anchor resolved against the bound card's CURRENT frame.
-  private static func anchoredPoint(_ anchor: CanvasPoint, in frame: CGRect) -> CGPoint {
-    CGPoint(x: frame.minX + CGFloat(anchor.x) * frame.width,
-            y: frame.minY + CGFloat(anchor.y) * frame.height)
-  }
-
-  private func refreshBoundArrows() {
-    var refreshed = cards
-    Self.refreshBoundArrows(in: &refreshed)
+  private func refreshBoundConnectors() {
+    let refreshed = ConnectorGeometry.refreshing(in: cards)
     // Publish only on a real geometry change, so a no-op refresh doesn't rebuild the card layer.
     if refreshed != cards { cards = refreshed }
   }
 
-  /// The pure form of the refresh, shared by the live board (above) and `renderingSnapshot`:
-  /// drops bindings to cards missing from `cards` and re-derives every bound arrow's geometry
-  /// from the frames IN THIS ARRAY. Static on purpose — the snapshot path must never touch the
-  /// published `cards`.
-  private static func refreshBoundArrows(in cards: inout [CardState]) {
-    let existing = Set(cards.map(\.id))
-    for i in cards.indices where cards[i].elementKind == .arrow {
-      if let start = cards[i].startBindingID, !existing.contains(start) {
-        cards[i].startBindingID = nil
-        cards[i].startBindingAnchor = nil
-      }
-      if let end = cards[i].endBindingID, !existing.contains(end) {
-        cards[i].endBindingID = nil
-        cards[i].endBindingAnchor = nil
-      }
-      if cards[i].startBindingID != nil || cards[i].endBindingID != nil {
-        updateBoundArrowGeometry(at: i, in: &cards)
-      }
-    }
-  }
-
-  /// Read-only mirror of `nearestConnectable` returning just the id, so the canvas can preview the
-  /// bind target under the live drag endpoint. Preview and commit share the exact same rule, so what
-  /// the user sees highlighted before releasing is always what actually binds.
+  /// Read-only connector-seam query for the live endpoint preview. Preview and commit share the
+  /// exact same target policy, so what highlights before release is what actually binds.
   func bindCandidate(at boardPoint: CGPoint, excluding: Set<UUID>) -> UUID? {
-    nearestConnectable(to: boardPoint, excluding: excluding)?.id
+    ConnectorGeometry.bindingTarget(at: boardPoint, among: cards, excluding: excluding)
   }
 
-  /// The card an arrow/line endpoint should bind to. Excalidraw-style proximity: an endpoint only
-  /// grabs a node it lands ON or hugs — inside the node's frame, or within `edgeSlop` points of its
-  /// frame rectangle (distance to the RECT, not to the far-off center). This kills the old behavior
-  /// where any card whose center sat within 220pt silently swallowed the endpoint. Among qualifying
-  /// nodes the closest rect wins, tie-broken by nearest center.
-  private func nearestConnectable(to point: CGPoint, excluding excluded: Set<UUID>) -> CardState? {
-    let edgeSlop: CGFloat = 16
-    return cards
-      .filter { card in
-        !excluded.contains(card.id) &&
-        !card.locked &&
-        card.elementKind != .line &&
-        card.elementKind != .arrow &&
-        card.elementKind != .freehand
-      }
-      .compactMap { card -> (card: CardState, rectDistance: CGFloat, centerDistance: CGFloat)? in
-        let rect = card.frame
-        // Distance from the point to the rectangle: 0 when inside, otherwise the hypot of how far
-        // outside each axis it sits (max(0, …) drops the axes the point is already within).
-        let dx = max(rect.minX - point.x, point.x - rect.maxX, 0)
-        let dy = max(rect.minY - point.y, point.y - rect.maxY, 0)
-        let rectDistance = hypot(dx, dy)
-        guard rectDistance <= edgeSlop else { return nil }
-        let center = Self.center(of: card)
-        return (card, rectDistance, hypot(center.x - point.x, center.y - point.y))
-      }
-      .min(by: { lhs, rhs in
-        lhs.rectDistance != rhs.rectDistance
-          ? lhs.rectDistance < rhs.rectDistance
-          : lhs.centerDistance < rhs.centerDistance
-      })?
-      .card
-  }
-
-  private static func updateBoundArrowGeometry(at index: Int, in cards: inout [CardState]) {
-    guard cards.indices.contains(index), cards[index].elementKind == .arrow else { return }
-    let current = lineEndpoints(for: cards[index])
-    let startCard = cards[index].startBindingID.flatMap { id in cards.first { $0.id == id } }
-    let endCard = cards[index].endBindingID.flatMap { id in cards.first { $0.id == id } }
-    let rawStart = startCard.map(center(of:)) ?? current.start
-    let rawEnd = endCard.map(center(of:)) ?? current.end
-    // An anchored binding lands exactly where the user attached (tracking the card's current
-    // frame); only anchor-less bindings (legacy boards, agent connects) take the center-ray
-    // boundary route with the small arrowhead gap.
-    let start = startCard.map { card in
-      cards[index].startBindingAnchor.map { Self.anchoredPoint($0, in: card.frame) }
-        ?? Self.boundaryPoint(of: card.frame, toward: rawEnd, margin: 1)
-    } ?? rawStart
-    let end = endCard.map { card in
-      cards[index].endBindingAnchor.map { Self.anchoredPoint($0, in: card.frame) }
-        ?? Self.boundaryPoint(of: card.frame, toward: rawStart, margin: 7)
-    } ?? rawEnd
-    applyLineGeometry(to: index, in: &cards, start: start, end: end)
-  }
-
-  private static func applyLineGeometry(to index: Int, in cards: inout [CardState], start: CGPoint, end: CGPoint) {
-    let padding: CGFloat = 18
-    var minX = min(start.x, end.x) - padding
-    var minY = min(start.y, end.y) - padding
-    var maxX = max(start.x, end.x) + padding
-    var maxY = max(start.y, end.y) + padding
-    let minSize = cards[index].minimumSize
-    if maxX - minX < minSize.width {
-      let extra = (minSize.width - (maxX - minX)) / 2
-      minX -= extra
-      maxX += extra
-    }
-    if maxY - minY < minSize.height {
-      let extra = (minSize.height - (maxY - minY)) / 2
-      minY -= extra
-      maxY += extra
-    }
-    let frame = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
-    cards[index].frame = frame
-    cards[index].points = [
-      CanvasPoint(
-        x: Double((start.x - frame.minX) / frame.width),
-        y: Double((start.y - frame.minY) / frame.height)
-      ),
-      CanvasPoint(
-        x: Double((end.x - frame.minX) / frame.width),
-        y: Double((end.y - frame.minY) / frame.height)
-      ),
-    ]
-  }
-
-  private static func lineEndpoints(for card: CardState) -> (start: CGPoint, end: CGPoint) {
-    let points = card.points ?? CardState.defaultLinePoints()
-    let start = points.first?.cgPoint ?? CGPoint(x: 0.06, y: 0.88)
-    let end = points.dropFirst().first?.cgPoint ?? CGPoint(x: 0.94, y: 0.12)
-    return (
-      CGPoint(x: card.x + start.x * card.w, y: card.y + start.y * card.h),
-      CGPoint(x: card.x + end.x * card.w, y: card.y + end.y * card.h)
-    )
+  /// Move one endpoint of a selected line/arrow in board space. The geometry module preserves the
+  /// opposite endpoint, detaches/rebinds only the moved end, and rebases normalized points. The
+  /// entire drag commits through this one mutation, so it is exactly one undo step.
+  @discardableResult
+  func setConnectorEndpoint(_ endpoint: ConnectorEndpoint, of id: UUID, to boardPoint: CGPoint) -> Bool {
+    guard let index = index(for: id), !cards[index].locked,
+          let updated = ConnectorGeometry.moving(endpoint, of: cards[index], to: boardPoint, among: cards),
+          updated != cards[index]
+    else { return false }
+    registerUndo()
+    cards[index] = updated
+    scheduleSave()
+    return true
   }
 
   private func lineSegment(for card: CardState) -> (endpoints: (start: CGPoint, end: CGPoint), vector: CGVector, length: CGFloat)? {
-    let endpoints = Self.lineEndpoints(for: card)
+    guard let resolved = ConnectorGeometry.endpoints(of: card) else { return nil }
+    let endpoints = (start: resolved.start, end: resolved.end)
     let vector = CGVector(dx: endpoints.end.x - endpoints.start.x, dy: endpoints.end.y - endpoints.start.y)
     let length = hypot(vector.dx, vector.dy)
     guard length > 0 else { return nil }
