@@ -132,4 +132,29 @@ final class ChecklistInteractionTests: XCTestCase {
       &items, itemID: second.id, to: first.id, placement: .after))
     XCTAssertEqual(items, [first, second])
   }
+
+  func testValidNoOpDropIsAcceptedWithoutMutatingTheDraft() {
+    let first = CardState.ChecklistItem(text: "First")
+    let second = CardState.ChecklistItem(text: "Second")
+    var items = [first, second]
+
+    XCTAssertTrue(ChecklistDropAcceptance.perform(
+      &items, itemID: first.id, targetID: second.id, placement: .before))
+    XCTAssertEqual(items, [first, second])
+
+    XCTAssertFalse(ChecklistDropAcceptance.perform(
+      &items, itemID: UUID(), targetID: second.id, placement: .before))
+    XCTAssertEqual(items, [first, second])
+  }
+
+  func testDragProviderSignalsWhenTheDragSessionReleasesIt() {
+    var sessionEndCount = 0
+    var provider: ChecklistDragItemProvider? = ChecklistDragItemProvider(itemID: UUID()) {
+      sessionEndCount += 1
+    }
+
+    XCTAssertNotNil(provider)
+    provider = nil
+    XCTAssertEqual(sessionEndCount, 1)
+  }
 }
