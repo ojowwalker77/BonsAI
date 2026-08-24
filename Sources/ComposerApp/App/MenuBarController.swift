@@ -1,12 +1,26 @@
 import AppKit
 import SwiftUI
 
+enum MenuBarStatusClickAction: Equatable {
+  case toggleCapture
+  case showBoard
+
+  static func resolve(clickCount: Int) -> Self {
+    clickCount >= 2 ? .showBoard : .toggleCapture
+  }
+}
+
 /// Menu-bar quick capture: one line → a new card on the current board.
 @MainActor
 final class MenuBarController: NSObject {
   private var statusItem: NSStatusItem?
   private var capturePanel: NSPanel?
   private var captureField: NSTextField?
+  private let notificationCenter: NotificationCenter
+
+  init(notificationCenter: NotificationCenter = .default) {
+    self.notificationCenter = notificationCenter
+  }
 
   func install() {
     guard statusItem == nil else { return }
@@ -14,9 +28,9 @@ final class MenuBarController: NSObject {
     if let button = item.button {
       button.image = Self.menuBarIcon()
       button.image?.isTemplate = true
-      button.toolTip = "BonsAI - quick capture".localizedUI
+      button.toolTip = "BonsAI - click to capture, double-click to show the board".localizedUI
       button.target = self
-      button.action = #selector(toggleCapturePanel)
+      button.action = #selector(statusItemClicked)
     }
     statusItem = item
   }
@@ -33,7 +47,25 @@ final class MenuBarController: NSObject {
     return NSImage(systemSymbolName: "leaf.fill", accessibilityDescription: "BonsAI")
   }
 
-  @objc private func toggleCapturePanel() {
+  @objc private func statusItemClicked() {
+    dispatchStatusClick(clickCount: NSApp.currentEvent?.clickCount ?? 1)
+  }
+
+  /// Keep the primary click immediate. AppKit sends the status-button action for every click in a
+  /// multi-click sequence, so the second delivery can replace capture with the board without making
+  /// every ordinary quick capture wait out the system double-click interval.
+  func dispatchStatusClick(clickCount: Int) {
+    switch MenuBarStatusClickAction.resolve(clickCount: clickCount) {
+    case .toggleCapture:
+      toggleCapturePanel()
+    case .showBoard:
+      // Hide, but do not clear, an in-progress capture. The next single click can resume its draft.
+      capturePanel?.orderOut(nil)
+      notificationCenter.post(name: .composerShowWindow, object: nil)
+    }
+  }
+
+  private func toggleCapturePanel() {
     if let panel = capturePanel, panel.isVisible {
       panel.orderOut(nil)
       return

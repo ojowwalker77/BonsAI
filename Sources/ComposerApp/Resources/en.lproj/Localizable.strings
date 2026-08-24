@@ -17,7 +17,7 @@
 "Board" = "Board";
 "Board name" = "Board name";
 "Boards" = "Boards";
-"BonsAI - quick capture" = "BonsAI - quick capture";
+"BonsAI - click to capture, double-click to show the board" = "BonsAI - click to capture, double-click to show the board";
 "BonsAI %@ is ready - click to install" = "BonsAI %@ is ready - click to install";
 "BonsAI checks GitHub for new releases automatically, then downloads and installs them in place." = "BonsAI checks GitHub for new releases automatically, then downloads and installs them in place.";
 "BonsAI could not allocate a bitmap to render the board for export." = "BonsAI could not allocate a bitmap to render the board for export.";

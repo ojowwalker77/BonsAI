@@ -17,7 +17,7 @@
 "Board" = "보드";
 "Board name" = "보드 이름";
 "Boards" = "보드";
-"BonsAI - quick capture" = "BonsAI - 빠른 캡처";
+"BonsAI - click to capture, double-click to show the board" = "BonsAI - 클릭하여 빠른 캡처, 더블 클릭하여 보드 표시";
 "BonsAI %@ is ready - click to install" = "BonsAI %@ 준비됨 - 클릭하여 설치";
 "BonsAI checks GitHub for new releases automatically, then downloads and installs them in place." = "BonsAI는 GitHub에서 새 릴리스를 자동으로 확인한 뒤 다운로드하고 제자리에서 설치합니다.";
 "BonsAI could not allocate a bitmap to render the board for export." = "내보내기용 보드를 렌더링할 비트맵을 할당할 수 없습니다.";

@@ -17,7 +17,7 @@
 "Board" = "画板";
 "Board name" = "画板名称";
 "Boards" = "画板";
-"BonsAI - quick capture" = "BonsAI - 快速捕捉";
+"BonsAI - click to capture, double-click to show the board" = "BonsAI - 单击快速捕捉，双击显示画板";
 "BonsAI %@ is ready - click to install" = "BonsAI %@ 已就绪 - 点击安装";
 "BonsAI checks GitHub for new releases automatically, then downloads and installs them in place." = "BonsAI 会自动在 GitHub 检查新版本，然后下载并原地安装。";
 "BonsAI could not allocate a bitmap to render the board for export." = "BonsAI 无法分配用于导出画板的位图。";

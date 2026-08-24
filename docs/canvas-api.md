@@ -146,7 +146,7 @@ See [canvas-agent.md](canvas-agent.md) for the full tool list.
 
 | Entry point | Usage |
 |-------------|--------|
-| **Menu bar** | Click the leaf → type → ↩ (summons board + new card) |
+| **Menu bar** | Click the leaf → type → ↩ (summons board + new card); double-click → restore and focus the board |
 | **Services** | Select text anywhere → **BonsAI → Send to BonsAI** |
 | **URL** | `open 'bonsai://capture?text=Hello%20world'` |
 
