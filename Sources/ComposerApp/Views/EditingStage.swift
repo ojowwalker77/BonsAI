@@ -438,19 +438,33 @@ struct EditingStage: View {
       } else {
         VStack(spacing: 0) {
           header("Label".localizedUI)
-          HStack(spacing: 8) {
-            TextField("Label".localizedUI, text: $labelDraft)
+          HStack(alignment: .top, spacing: 8) {
+            TextField("Label".localizedUI, text: $labelDraft, axis: .vertical)
               .textFieldStyle(.plain)
+              .lineLimit(1...8)
               .font(ComposerPreferences.appSwiftUIFont(size: 15, weight: .medium))
               .foregroundStyle(tint ?? Theme.Palette.body)
               .multilineTextAlignment(.center)
               .focused($labelFocused)
-              .onSubmit(commitLabel)
+              .onKeyPress(.return, phases: .down) { keyPress in
+                if keyPress.modifiers.contains(.shift) {
+                  if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
+                    editor.insertNewlineIgnoringFieldEditor(nil)
+                  } else {
+                    labelDraft.append("\n")
+                  }
+                } else {
+                  commitLabel()
+                }
+                return .handled
+              }
               .onExitCommand(perform: revertLabel)
               .padding(.horizontal, 10)
-              .frame(height: 34)
+              .padding(.vertical, 8)
+              .frame(minHeight: 34)
               .frame(maxWidth: .infinity)
               .background(labelFieldSurface)
+              .help("Return applies · Shift-Return inserts a new line".localizedUI)
             if canMakeGraph {
               Button(action: openGraphConfig) {
                 Image(systemName: "chart.xyaxis.line")

@@ -225,6 +225,7 @@
 "Checklist" = "チェックリスト";
 "Drag to reorder" = "ドラッグして並べ替え";
 "Edit element" = "要素を編集";
+"Return applies · Shift-Return inserts a new line" = "Return で適用 · Shift-Return で改行";
 "Claude authentication failed: %@. Run `claude auth login`, then retry." = "Claude 認証に失敗しました: %@。`claude auth login` を実行してから再試行してください。";
 "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry." = "Claude 認証が API に拒否されました（HTTP 401: %@）。`claude auth login` を実行してから再試行してください。";
 "Click again to permanently delete" = "もう一度クリックすると完全に削除";

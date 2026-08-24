@@ -95,6 +95,27 @@ final class ShapeLabelFitTests: XCTestCase {
     XCTAssertGreaterThan(long.height, short.height * 3)
   }
 
+  func testExplicitMultilineLabelKeepsEveryLineVisibleAndCentered() throws {
+    let board = makeBoard()
+    let id = board.addElement(.rectangle, at: CGPoint(x: 360, y: 240))
+    let before = try card(id, in: board).frame
+    let label = "Discovery\nDesign\nImplementation\nVerification"
+
+    board.setText(id, label)
+
+    let after = try card(id, in: board).frame
+    let oneLine = BoardViewModel.fittedShapeSize("Discovery", shape: .rectangle)
+    XCTAssertEqual(after.size, BoardViewModel.fittedShapeSize(label, shape: .rectangle))
+    XCTAssertGreaterThan(after.height, oneLine.height)
+    XCTAssertEqual(after.midX, before.midX, accuracy: 0.5)
+    XCTAssertEqual(after.midY, before.midY, accuracy: 0.5)
+    XCTAssertEqual(board.plainText(for: try card(id, in: board)), label)
+
+    board.undo()
+    XCTAssertEqual(try card(id, in: board).frame, before)
+    XCTAssertEqual(board.plainText(for: try card(id, in: board)), "")
+  }
+
   func testShortLabelRespectsShapeMinimum() {
     let size = BoardViewModel.fittedShapeSize("Fit", shape: .rectangle)
 
