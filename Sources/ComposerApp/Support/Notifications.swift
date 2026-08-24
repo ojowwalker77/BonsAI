@@ -86,6 +86,7 @@ extension Notification.Name {
 enum ComposerEscapeTarget: Equatable {
   case boardDeletionConfirmation
   case boardRename
+  case boardPicker
   case commandPalette
   case focusedEditor
   case compiledOverlay
@@ -102,6 +103,7 @@ enum ComposerEscapeTarget: Equatable {
 struct ComposerEscapeState: Equatable {
   var hasBoardDeletionConfirmation = false
   var hasBoardRename = false
+  var hasBoardPicker = false
   var hasCommandPalette = false
   var hasFocusedEditor = false
   var hasCompiledOverlay = false
@@ -122,6 +124,7 @@ enum ComposerEscapeCoordinator {
   static func target(for state: ComposerEscapeState) -> ComposerEscapeTarget {
     if state.hasBoardDeletionConfirmation { return .boardDeletionConfirmation }
     if state.hasBoardRename { return .boardRename }
+    if state.hasBoardPicker { return .boardPicker }
     if state.hasCommandPalette { return .commandPalette }
     if state.hasFocusedEditor { return .focusedEditor }
     if state.hasCompiledOverlay { return .compiledOverlay }

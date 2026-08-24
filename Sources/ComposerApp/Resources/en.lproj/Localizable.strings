@@ -40,6 +40,7 @@
 "Close  Esc" = "Close  Esc";
 "Close  ⌘J" = "Close  ⌘J";
 "Close Settings  ·  Esc" = "Close Settings  ·  Esc";
+"Collapsed" = "Collapsed";
 "Compile board" = "Compile board";
 "Compiling the board" = "Compiling the board";
 "Compiled draft" = "Compiled draft";
@@ -67,6 +68,7 @@
 "Engine" = "Engine";
 "Engine for the agent chat - Claude, Codex, or OpenCode" = "Engine for the agent chat - Claude, Codex, or OpenCode";
 "Equation" = "Equation";
+"Expanded" = "Expanded";
 "Export board" = "Export board";
 "Export Board" = "Export Board";
 "Export board as PNG" = "Export board as PNG";

@@ -247,9 +247,22 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(
         hasBoardRename: true,
+        hasBoardPicker: true,
         hasSelection: true
       )),
       .boardRename
+    )
+  }
+
+  func testEscapeCoordinatorClosesBoardPickerBeforeOtherCanvasSurfaces() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasBoardPicker: true,
+        hasCommandPalette: true,
+        hasActiveEditor: true,
+        hasSelection: true
+      )),
+      .boardPicker
     )
   }
 

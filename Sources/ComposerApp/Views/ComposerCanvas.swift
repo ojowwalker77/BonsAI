@@ -59,15 +59,20 @@ struct ComposerCanvas: View {
   @State private var showPalette = false
   /// The tint swatch row in the bottom bar is expanded.
   @State private var tintPickerOpen = false
+  /// The single board picker expands downward on hover. A grace timer prevents flicker while the
+  /// pointer crosses into its rows; rename and delete-confirmation state pin it open.
+  @State private var boardPickerOpen = false
+  @State private var boardPickerHovering = false
+  @State private var boardPickerCloseWork: DispatchWorkItem?
   /// The export pill grows on hover into a list of export formats (same mechanic as the board
-  /// picker it replaced. Open immediate, close deferred so the glyph→row gap doesn't flicker.
+  /// picker). Open immediate, close deferred so the glyph→row gap doesn't flicker.
   @State private var exportMenuOpen = false
   @State private var exportMenuCloseWork: DispatchWorkItem?
   /// Measured rest-label width of the Export pill; its expanded list pins to this so hovering
   /// only grows the surface downward, never sideways.
   @State private var exportRestWidth: CGFloat = 0
-  /// Board rename stays owned by the canvas so each repeated picker pill can remain plain inline
-  /// SwiftUI instead of introducing another tab/component abstraction.
+  /// Board rename stays owned by the canvas so persistence failures keep the attempted name visible
+  /// and Escape participates in the workspace's single dismissal coordinator.
   @State private var renamingBoardID: PersistentIdentifier?
   @State private var boardNameDraft = ""
   @FocusState private var boardNameFocused: Bool
@@ -178,7 +183,12 @@ struct ComposerCanvas: View {
       "Delete board".localizedUI,
       isPresented: Binding(
         get: { pendingBoardDeletion != nil },
-        set: { if !$0 { pendingBoardDeletion = nil } }
+        set: {
+          if !$0 {
+            pendingBoardDeletion = nil
+            scheduleBoardPickerCloseIfNeeded()
+          }
+        }
       ),
       titleVisibility: .visible,
       presenting: pendingBoardDeletion
@@ -238,7 +248,10 @@ struct ComposerCanvas: View {
       // The promotion chip floats above the cards but below the command bar/pills and the agent dock
       // — it's a whisper over the canvas, not chrome that competes with the tools.
       promotionOverlay(in: inner)
-      boardSwitcherPill(in: proxy.size)
+      if !showPalette {
+        boardSwitcherPill(in: proxy.size)
+          .transition(.opacity)
+      }
       boardActionsPill(in: proxy.size)
       protectedBoardBanner(in: proxy.size)
       bottomCommandBar(fit: inner)
@@ -885,122 +898,166 @@ struct ComposerCanvas: View {
     }
   }
 
-  /// The existing board-picker pill repeated horizontally: board, space, board, space, plus. Each
-  /// board owns its own glass surface; there is deliberately no enclosing tab-bar component.
-  private func boardSwitcherPill(in size: CGSize) -> some View {
-    boardPickerPills(in: size)
+  /// The current board's name rests in one top-left pill. Hovering the same surface expands it
+  /// downward into board management; it never becomes a tab row or changes workspace geometry.
+  private func boardSwitcherPill(in _: CGSize) -> some View {
+    boardPickerMenu
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .padding(.top, WindowChrome.edgeInset)
       .padding(.leading, WindowChrome.trafficLightInset)
-      .zIndex(60)
+      // The protected-board banner sits at 70 below this rest row. An expanded picker must remain
+      // visually and interactively above it, especially at the 640pt window minimum.
+      .zIndex(boardPickerOpen ? 80 : 60)
   }
 
-  private func boardPickerPills(in size: CGSize) -> some View {
-    // Reserve a stable lane for the top-right export / agent controls. The picker row may scroll,
-    // but it never grows underneath those controls or changes the board/dock window geometry.
-    let maxWidth = max(
-      WindowChrome.boardPillWidth + WindowChrome.controlHeight + WindowChrome.edgeInset / 2,
-      size.width - WindowChrome.trafficLightInset - WindowChrome.topRightReservedWidth
-    )
-    let menuShadow = Theme.Shadow.menu
-    let shadowOverflow = CGFloat(menuShadow.radius + abs(menuShadow.y))
-    let rowHeight = WindowChrome.controlHeight + WindowChrome.padV * 2
-    return ScrollViewReader { proxy in
-      ScrollView(.horizontal, showsIndicators: false) {
-        LazyHStack(spacing: WindowChrome.edgeInset / 2) {
-          ForEach(store.dumps, id: \.persistentModelID) { dump in
-            let id = dump.persistentModelID
-            let current = id == store.currentID
-            let displayTitle = boardPillTitle(for: dump)
-            Group {
-              if renamingBoardID == id {
-                TextField("Board name".localizedUI, text: $boardNameDraft)
-                  .textFieldStyle(.plain)
-                  .font(WindowChrome.labelFont)
-                  .foregroundStyle(Theme.Palette.body)
-                  .multilineTextAlignment(.center)
-                  .focused($boardNameFocused)
-                  .onSubmit { _ = commitBoardRename() }
-                  // Escape in the rename field goes through the guarded coordinator like every
-                  // other surface (Agent, Settings, ⌘K): with the rename active the coordinator
-                  // resolves to `.boardRename` → cancel, and `escapeHandledThisTurn` guarantees a
-                  // press that AppKit delivers through more than one route still performs exactly
-                  // one dismissal instead of also firing a lower-priority action.
-                  .onExitCommand(perform: handleEscapeBoard)
-                  .onAppear { DispatchQueue.main.async { boardNameFocused = true } }
-                  .onChange(of: boardNameFocused) { _, focused in
-                    if !focused { _ = commitBoardRename() }
-                  }
-              } else {
-                Button {
-                  guard commitBoardRename() else { return }
-                  if !current { pickBoard(id) }
-                } label: {
-                  Text(displayTitle)
-                    .font(WindowChrome.labelFont)
-                    .foregroundStyle(current ? Theme.Palette.body : Theme.Palette.title)
-                    .lineLimit(1)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                  Button("Rename Board".localizedUI) {
-                    guard commitBoardRename() else { return }
-                    beginBoardRename(id, title: dump.title)
-                  }
-                  if store.dumps.count > 1 {
-                    Button("Delete Board".localizedUI, role: .destructive) {
-                      requestBoardDeletion(id, title: dump.title)
-                    }
-                  }
-                }
-                .help(current ? displayTitle : "Open %@".localizedUI(displayTitle))
-              }
-            }
-            .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
-            .padding(.horizontal, WindowChrome.padH)
-            .padding(.vertical, WindowChrome.padV)
-            .composerPopupSurface()
-            .id(id)
-          }
+  private var currentBoardName: String {
+    let name = store.current?.title.trimmed ?? ""
+    guard !name.isEmpty else { return "Untitled".localizedUI }
+    return name
+  }
 
-          Button(action: newBoard) {
-            Image(systemName: "plus")
-              .font(WindowChrome.iconFont)
-              .foregroundStyle(Theme.Palette.chromeText)
-              .frame(width: WindowChrome.controlHeight, height: WindowChrome.controlHeight)
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .chromePill()
-          .help("New board  ⌘N".localizedUI)
+  /// Fixed-width rest label: the expanded list grows only downward, never sideways.
+  private var boardPickerTitle: String {
+    let name = currentBoardName
+    return name.count > 13 ? String(name.prefix(13)) + "…" : name
+  }
+
+  @ViewBuilder
+  private func currentBoardTitleRow(canDelete: Bool) -> some View {
+    if renamingBoardID == store.currentID {
+      TextField("Board name".localizedUI, text: $boardNameDraft)
+        .textFieldStyle(.plain)
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .multilineTextAlignment(.center)
+        .focused($boardNameFocused)
+        .onSubmit { _ = commitBoardRename() }
+        .onExitCommand(perform: handleEscapeBoard)
+        .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.rowFill))
+        .onAppear { DispatchQueue.main.async { boardNameFocused = true } }
+        .onChange(of: boardNameFocused) { _, focused in
+          if !focused { _ = commitBoardRename() }
         }
-        // Keep the pills at their existing coordinates while giving their shadows real pixels
-        // inside the scroll viewport. The outer frame below preserves the picker's layout width,
-        // so the padded viewport cannot move content into the reserved top-right control lane.
-        .padding(shadowOverflow)
+    } else {
+      Button(action: toggleBoardPicker) {
+        Text(boardPickerTitle)
+          .font(WindowChrome.labelFont)
+          .foregroundStyle(Theme.Palette.body)
+          .lineLimit(1)
+          .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
+          .contentShape(Rectangle())
       }
-      .frame(width: maxWidth + shadowOverflow * 2, height: rowHeight + shadowOverflow * 2)
-      .offset(x: -shadowOverflow, y: -shadowOverflow)
-      .frame(width: maxWidth, height: rowHeight, alignment: .topLeading)
-      // Drawing may overflow this rectangle; interaction must not, or canvas drags below the row
-      // would be swallowed by the horizontal scroller's invisible shadow allowance.
-      .contentShape(.interaction, Rectangle())
-      .onAppear { scrollCurrentBoardPill(using: proxy, animated: false) }
-      .onChange(of: store.currentID) { _, _ in scrollCurrentBoardPill(using: proxy, animated: true) }
+      .buttonStyle(.plain)
+      .help(currentBoardName)
+      .accessibilityLabel(Text(currentBoardName))
+      .accessibilityValue(Text((boardPickerOpen ? "Expanded" : "Collapsed").localizedUI))
+      .accessibilityHint(Text("Switch board".localizedUI))
+      .accessibilityActions {
+        Button("Rename board".localizedUI) {
+          guard let id = store.currentID, commitBoardRename() else { return }
+          beginBoardRename(id, title: store.current?.title ?? "")
+        }
+        if canDelete, let id = store.currentID {
+          Button("Delete board".localizedUI) {
+            requestBoardDeletion(id, title: store.current?.title ?? "")
+          }
+        }
+      }
+      .contextMenu {
+        Button("Rename Board".localizedUI) {
+          guard let id = store.currentID, commitBoardRename() else { return }
+          beginBoardRename(id, title: store.current?.title ?? "")
+        }
+        if canDelete, let id = store.currentID {
+          Button("Delete Board".localizedUI, role: .destructive) {
+            requestBoardDeletion(id, title: store.current?.title ?? "")
+          }
+        }
+      }
     }
   }
 
-  private func boardPillTitle(for dump: Dump) -> String {
-    let title = dump.title.isEmpty ? "Untitled".localizedUI : dump.title
-    return title.count > 13 ? String(title.prefix(13)) + "…" : title
+  /// One glass surface: current board at rest; other boards and New Board below on hover.
+  private var boardPickerMenu: some View {
+    let others = store.dumps.filter { $0.persistentModelID != store.currentID }
+    return VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+      currentBoardTitleRow(canDelete: !others.isEmpty)
+
+      if boardPickerOpen {
+        VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+          Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+
+          if !others.isEmpty {
+            ScrollView {
+              LazyVStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+                ForEach(others, id: \.persistentModelID) { dump in
+                  let id = dump.persistentModelID
+                  BoardPickerRow(
+                    title: dump.title.isEmpty ? "Untitled".localizedUI : dump.title,
+                    isRenaming: renamingBoardID == id,
+                    draftName: $boardNameDraft,
+                    nameFocused: $boardNameFocused,
+                    onPick: {
+                      guard commitBoardRename() else { return }
+                      pickBoard(id)
+                      if store.currentID == id { boardPickerOpen = false }
+                    },
+                    onBeginRename: {
+                      guard commitBoardRename() else { return }
+                      beginBoardRename(id, title: dump.title)
+                    },
+                    onCommitRename: { _ = commitBoardRename() },
+                    onCancelRename: handleEscapeBoard,
+                    onDelete: { requestBoardDeletion(id, title: dump.title) }
+                  )
+                }
+              }
+            }
+            .frame(maxHeight: 320)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+          }
+          newBoardRow
+        }
+        .frame(width: WindowChrome.boardPillWidth)
+      }
+    }
+    .padding(.horizontal, WindowChrome.padH)
+    .padding(.vertical, WindowChrome.padV)
+    .composerPopupSurface()
+    .onHover { setBoardPickerHover($0) }
+    .animation(.easeOut(duration: 0.16), value: boardPickerOpen)
+    .help(boardPickerOpen ? "" : "Switch board".localizedUI)
+  }
+
+  private var newBoardRow: some View {
+    Button {
+      let previousID = store.currentID
+      newBoard()
+      if store.currentID != previousID { boardPickerOpen = false }
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
+        Text("New board".localizedUI).font(WindowChrome.labelFont)
+      }
+      .foregroundStyle(Theme.Palette.body)
+      .frame(maxWidth: .infinity)
+      .frame(height: 30)
+      .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.rowFill))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help("New board  ⌘N".localizedUI)
   }
 
   private func beginBoardRename(_ id: PersistentIdentifier, title: String) {
     boardNameDraft = title.isEmpty ? "Untitled".localizedUI : title
     renamingBoardID = id
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    boardPickerOpen = true
   }
 
   @discardableResult
@@ -1009,10 +1066,12 @@ struct ComposerCanvas: View {
     let name = boardNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !name.isEmpty else {
       renamingBoardID = nil
+      scheduleBoardPickerCloseIfNeeded()
       return true
     }
     if renameBoard(id, to: name) {
       renamingBoardID = nil
+      scheduleBoardPickerCloseIfNeeded()
       return true
     } else {
       // Keep the editor and the attempted value visible so the user can retry after fixing storage.
@@ -1023,17 +1082,56 @@ struct ComposerCanvas: View {
 
   private func cancelBoardRename() {
     renamingBoardID = nil
+    scheduleBoardPickerCloseIfNeeded()
   }
 
-  private func scrollCurrentBoardPill(using proxy: ScrollViewProxy, animated: Bool) {
-    guard let id = store.currentID else { return }
-    DispatchQueue.main.async {
-      if animated {
-        withAnimation(Theme.Motion.accessory) { proxy.scrollTo(id, anchor: .center) }
-      } else {
-        proxy.scrollTo(id, anchor: .center)
-      }
+  private func setBoardPickerHover(_ hovering: Bool) {
+    boardPickerHovering = hovering
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    if hovering {
+      if !boardPickerOpen { Haptics.hover() }
+      boardPickerOpen = true
+    } else {
+      scheduleBoardPickerCloseIfNeeded()
     }
+  }
+
+  private func toggleBoardPicker() {
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    if boardPickerOpen,
+       BoardPickerPresentationPolicy.canClose(
+         isHovering: false,
+         hasActiveRename: renamingBoardID != nil,
+         hasDeleteConfirmation: pendingBoardDeletion != nil
+       ) {
+      boardPickerOpen = false
+    } else {
+      boardPickerOpen = true
+    }
+  }
+
+  private func closeBoardPicker() {
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    withAnimation(.easeOut(duration: 0.16)) { boardPickerOpen = false }
+  }
+
+  private func scheduleBoardPickerCloseIfNeeded() {
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    guard !boardPickerHovering else { return }
+    let work = DispatchWorkItem {
+      guard BoardPickerPresentationPolicy.canClose(
+        isHovering: boardPickerHovering,
+        hasActiveRename: renamingBoardID != nil,
+        hasDeleteConfirmation: pendingBoardDeletion != nil
+      ) else { return }
+      boardPickerOpen = false
+    }
+    boardPickerCloseWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
   }
 
   /// The top-right chrome: an Export pill (hover-expands) to the LEFT of the
@@ -1702,6 +1800,7 @@ struct ComposerCanvas: View {
     let target = ComposerEscapeCoordinator.target(for: ComposerEscapeState(
       hasBoardDeletionConfirmation: pendingBoardDeletion != nil,
       hasBoardRename: renamingBoardID != nil,
+      hasBoardPicker: boardPickerOpen,
       hasCommandPalette: showPalette,
       hasFocusedEditor: focusedCardID != nil,
       hasCompiledOverlay: store.compiledDraft != nil,
@@ -1719,8 +1818,11 @@ struct ComposerCanvas: View {
     switch target {
     case .boardDeletionConfirmation:
       pendingBoardDeletion = nil
+      scheduleBoardPickerCloseIfNeeded()
     case .boardRename:
       cancelBoardRename()
+    case .boardPicker:
+      closeBoardPicker()
     case .commandPalette:
       dismissPalette()
     case .focusedEditor:
@@ -1810,6 +1912,9 @@ struct ComposerCanvas: View {
   private func requestBoardDeletion(_ id: PersistentIdentifier, title: String) {
     guard store.dumps.count > 1,
           store.dumps.contains(where: { $0.persistentModelID == id }) else { return }
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    boardPickerOpen = true
     pendingBoardDeletion = PendingBoardDeletion(
       boardID: id,
       title: title.isEmpty ? "Untitled".localizedUI : title
@@ -1818,6 +1923,7 @@ struct ComposerCanvas: View {
 
   private func confirmBoardDeletion(_ pending: PendingBoardDeletion) {
     pendingBoardDeletion = nil
+    scheduleBoardPickerCloseIfNeeded()
     guard commitBoardRename() else { return }
     let deletingCurrent = pending.boardID == store.currentID
     if deletingCurrent {
@@ -1946,6 +2052,11 @@ struct ComposerCanvas: View {
     if showPalette { dismissPalette(); return }
     // The compiled-draft overlay is a focused modal — dismiss it before opening the palette.
     guard store.compiledDraft == nil else { return }
+    // The picker temporarily sits above the protected-board banner. Collapse it before the palette
+    // claims modal ownership at zIndex 50; a failed rename keeps both its editor and attempted value
+    // visible instead of opening the palette behind it.
+    guard commitBoardRename() else { return }
+    closeBoardPicker()
     store.isHistoryOpen = false
     // Capture the editing card, then end the edit session so its stage (zIndex 70) doesn't sit over
     // the palette (zIndex 50). Cancel hands editing back by reopening the stage on the same card.
@@ -3210,6 +3321,119 @@ struct CanvasDrawingDraftState: Equatable {
     vector = nil
     element = nil
     bindTargetID = nil
+  }
+}
+
+/// A hover exit may close the picker only after every management surface has released it.
+enum BoardPickerPresentationPolicy {
+  static func canClose(
+    isHovering: Bool,
+    hasActiveRename: Bool,
+    hasDeleteConfirmation: Bool
+  ) -> Bool {
+    !isHovering && !hasActiveRename && !hasDeleteConfirmation
+  }
+}
+
+/// One non-current board in the hover picker. Management state stays in `ComposerCanvas`, so a
+/// failed persistence attempt can keep this exact editor visible and Escape follows the global
+/// coordinator instead of being swallowed by row-local state.
+private struct BoardPickerRow: View {
+  let title: String
+  let isRenaming: Bool
+  @Binding var draftName: String
+  var nameFocused: FocusState<Bool>.Binding
+  let onPick: () -> Void
+  let onBeginRename: () -> Void
+  let onCommitRename: () -> Void
+  let onCancelRename: () -> Void
+  let onDelete: () -> Void
+
+  @State private var hovering = false
+
+  var body: some View {
+    Group {
+      if isRenaming { renameRow } else { pickRow }
+    }
+    .onHover { over in
+      hovering = over
+      if over { Haptics.hover() }
+    }
+    .animation(.easeOut(duration: 0.1), value: hovering)
+  }
+
+  private var pickRow: some View {
+    HStack(spacing: 4) {
+      Button(action: onPick) {
+        HStack(spacing: 8) {
+          Circle().fill(Color.clear).frame(width: 5, height: 5)
+          Text(title)
+            .font(WindowChrome.labelFont)
+            .foregroundStyle(Theme.Palette.body)
+            .lineLimit(1)
+          Spacer(minLength: 4)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 30)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help("Open %@".localizedUI(title))
+      .accessibilityLabel(Text(title))
+      .accessibilityAction(named: Text("Rename board".localizedUI), onBeginRename)
+      .accessibilityAction(named: Text("Delete board".localizedUI), onDelete)
+
+      HStack(spacing: 4) {
+        rowIcon("pencil", help: "Rename board".localizedUI, action: onBeginRename)
+        rowIcon("trash", help: "Delete board".localizedUI, tint: .red, action: onDelete)
+      }
+      .frame(width: 52, height: 24)
+      .opacity(hovering ? 1 : 0)
+      .allowsHitTesting(hovering)
+      .accessibilityHidden(!hovering)
+    }
+    .padding(.horizontal, WindowChrome.labelPadH)
+    .frame(height: 30)
+  }
+
+  private var renameRow: some View {
+    HStack(spacing: 8) {
+      Circle().fill(Color.clear).frame(width: 5, height: 5)
+      TextField("Board name".localizedUI, text: $draftName)
+        .textFieldStyle(.plain)
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .focused(nameFocused)
+        .onSubmit(onCommitRename)
+        .onExitCommand(perform: onCancelRename)
+    }
+    .padding(.horizontal, WindowChrome.labelPadH)
+    .frame(height: 30)
+    .background(
+      RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .fill(Theme.Palette.rowFill)
+    )
+    .onAppear { DispatchQueue.main.async { nameFocused.wrappedValue = true } }
+    .onChange(of: nameFocused.wrappedValue) { _, focused in
+      if !focused { onCommitRename() }
+    }
+  }
+
+  private func rowIcon(
+    _ symbol: String,
+    help: String,
+    tint: Color? = nil,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: symbol)
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(tint ?? Theme.Palette.title)
+        .frame(width: 24, height: 24)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(help)
   }
 }
 

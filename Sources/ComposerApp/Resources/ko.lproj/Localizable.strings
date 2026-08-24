@@ -40,6 +40,7 @@
 "Close  Esc" = "닫기  Esc";
 "Close  ⌘J" = "닫기  ⌘J";
 "Close Settings  ·  Esc" = "설정 닫기  ·  Esc";
+"Collapsed" = "접힘";
 "Compile board" = "보드 컴파일";
 "Compiling the board" = "보드 컴파일 중";
 "Compiled draft" = "컴파일된 초안";
@@ -67,6 +68,7 @@
 "Engine" = "엔진";
 "Engine for the agent chat - Claude, Codex, or OpenCode" = "에이전트 채팅 엔진 - Claude, Codex 또는 OpenCode";
 "Equation" = "수식";
+"Expanded" = "펼쳐짐";
 "Export board" = "보드 내보내기";
 "Export Board" = "보드 내보내기";
 "Export board as PNG" = "보드를 PNG로 내보내기";

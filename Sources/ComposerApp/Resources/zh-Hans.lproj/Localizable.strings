@@ -40,6 +40,7 @@
 "Close  Esc" = "关闭  Esc";
 "Close  ⌘J" = "关闭  ⌘J";
 "Close Settings  ·  Esc" = "关闭设置  ·  Esc";
+"Collapsed" = "已折叠";
 "Compile board" = "编译画板";
 "Compiling the board" = "正在编译画板";
 "Compiled draft" = "已编译草稿";
@@ -67,6 +68,7 @@
 "Engine" = "引擎";
 "Engine for the agent chat - Claude, Codex, or OpenCode" = "代理聊天使用的引擎 - Claude、Codex 或 OpenCode";
 "Equation" = "方程";
+"Expanded" = "已展开";
 "Export board" = "导出画板";
 "Export Board" = "导出画板";
 "Export board as PNG" = "将画板导出为 PNG";

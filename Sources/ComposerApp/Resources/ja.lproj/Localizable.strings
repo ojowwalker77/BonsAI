@@ -40,6 +40,7 @@
 "Close  Esc" = "閉じる  Esc";
 "Close  ⌘J" = "閉じる  ⌘J";
 "Close Settings  ·  Esc" = "設定を閉じる  ·  Esc";
+"Collapsed" = "折りたたみ";
 "Compile board" = "ボードをコンパイル";
 "Compiling the board" = "ボードをコンパイル中";
 "Compiled draft" = "コンパイル済みドラフト";
@@ -67,6 +68,7 @@
 "Engine" = "エンジン";
 "Engine for the agent chat - Claude, Codex, or OpenCode" = "エージェントチャットのエンジン - Claude、Codex、OpenCode";
 "Equation" = "方程式";
+"Expanded" = "展開";
 "Export board" = "ボードをエクスポート";
 "Export Board" = "ボードを書き出す";
 "Export board as PNG" = "ボードを PNG として書き出す";
