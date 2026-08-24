@@ -341,8 +341,25 @@ final class BoardExporterRenderTests: XCTestCase {
     }
 
     let painted = try XCTUnwrap(redBounds, "solid-red fixture should render inside the image card")
-    let expectedWidth = card.frame.width * BoardExporter.renderScale
-    let expectedHeight = card.frame.height * BoardExporter.renderScale
+    let bounds = try XCTUnwrap(BoardExporter.exportBounds(of: [card]))
+    let scale = BoardExporter.renderScale
+    // Board/SwiftUI coordinates grow down from the export's top edge, while NSBitmapImageRep's
+    // `colorAt` coordinates grow up from its bottom edge. Flip Y through the export bounds so the
+    // expected rect and scanned pixel bounds share one bitmap coordinate space.
+    let expectedCardRect = CGRect(
+      x: (card.frame.minX - bounds.minX) * scale,
+      y: (bounds.maxY - card.frame.maxY) * scale,
+      width: card.frame.width * scale,
+      height: card.frame.height * scale)
+    let antialiasingTolerance: CGFloat = 2
+    XCTAssertTrue(
+      expectedCardRect.insetBy(
+        dx: -antialiasingTolerance,
+        dy: -antialiasingTolerance).contains(painted),
+      "aspect-fill pixels \(painted) must stay inside exported card rect \(expectedCardRect)")
+
+    let expectedWidth = card.frame.width * scale
+    let expectedHeight = card.frame.height * scale
     // The one-point hairline and rounded-corner antialiasing can consume a few edge pixels, but
     // the solid fixture must otherwise cover the card and may never extend beyond it.
     XCTAssertGreaterThanOrEqual(
