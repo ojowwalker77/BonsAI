@@ -95,6 +95,17 @@ final class ConnectorGeometryTests: XCTestCase {
     XCTAssertEqual(lineEnds.end.x, target.frame.minX - 1, accuracy: 0.001)
     XCTAssertEqual(arrowEnds.end.x, target.frame.minX - 7, accuracy: 0.001)
   }
+
+  func testDirectionalPeerFrameKeepsDeterministicEdgeGap() {
+    let source = CGRect(x: 100, y: 200, width: 180, height: 100)
+    let peer = ConnectorGeometry.peerFrame(
+      from: source,
+      peerSize: CGSize(width: 120, height: 80),
+      direction: .left)
+
+    XCTAssertEqual(source.minX - peer.maxX, 96, accuracy: 0.001)
+    XCTAssertEqual(peer.midY, source.midY, accuracy: 0.001)
+  }
 }
 
 @MainActor
@@ -163,5 +174,74 @@ final class ConnectorMutationTests: XCTestCase {
     XCTAssertEqual(changed.startBindingID, sourceID)
     XCTAssertNil(changed.endBindingID)
     XCTAssertNil(changed.endBindingAnchor)
+  }
+
+  func testQuickConnectCreatesSameKindPeerAndBoundArrowInOneUndo() throws {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let sourceID = board.addElement(.diamond, at: CGPoint(x: 300, y: 300))
+    let source = try XCTUnwrap(board.cards.first { $0.id == sourceID })
+    let before = board.cards
+
+    let result = try XCTUnwrap(board.quickConnect(from: sourceID, direction: .right))
+    let peer = try XCTUnwrap(board.cards.first { $0.id == result.targetID })
+    let connector = try XCTUnwrap(board.cards.first { $0.id == result.connectorID })
+
+    XCTAssertTrue(result.createdPeer)
+    XCTAssertEqual(peer.elementKind, .diamond)
+    XCTAssertEqual(peer.frame.minX - source.frame.maxX, 96, accuracy: 0.001)
+    XCTAssertEqual(peer.frame.midY, source.frame.midY, accuracy: 0.001)
+    XCTAssertEqual(connector.elementKind, .arrow)
+    XCTAssertEqual(connector.startBindingID, sourceID)
+    XCTAssertEqual(connector.endBindingID, peer.id)
+
+    board.undo()
+    XCTAssertEqual(board.cards, before)
+  }
+
+  func testQuickConnectCanUseLineAndExistingTargetWithoutCreatingPeer() throws {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let sourceID = board.addElement(.rectangle, at: CGPoint(x: 200, y: 200))
+    let targetID = board.addElement(.ellipse, at: CGPoint(x: 600, y: 200))
+    let countBefore = board.cards.count
+
+    let result = try XCTUnwrap(board.quickConnect(
+      from: sourceID,
+      direction: .right,
+      kind: .line,
+      to: targetID))
+    let connector = try XCTUnwrap(board.cards.first { $0.id == result.connectorID })
+
+    XCTAssertFalse(result.createdPeer)
+    XCTAssertEqual(board.cards.count, countBefore + 1)
+    XCTAssertEqual(connector.elementKind, .line)
+    XCTAssertEqual(connector.startBindingID, sourceID)
+    XCTAssertEqual(connector.endBindingID, targetID)
+  }
+
+  func testQuickConnectedArrowTracksPeerMovement() throws {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let sourceID = board.addElement(.rectangle, at: CGPoint(x: 200, y: 200))
+    let result = try XCTUnwrap(board.quickConnect(from: sourceID, direction: .down))
+    let before = try endpoints(try XCTUnwrap(board.cards.first { $0.id == result.connectorID }))
+    let peer = try XCTUnwrap(board.cards.first { $0.id == result.targetID })
+
+    let movedPeerFrame = peer.frame.offsetBy(dx: 55, dy: 30)
+    board.setFrame(result.targetID, movedPeerFrame)
+
+    let movedConnector = try XCTUnwrap(board.cards.first { $0.id == result.connectorID })
+    let after = try endpoints(movedConnector)
+    let dx = max(movedPeerFrame.minX - after.end.x, after.end.x - movedPeerFrame.maxX, 0)
+    let dy = max(movedPeerFrame.minY - after.end.y, after.end.y - movedPeerFrame.maxY, 0)
+    XCTAssertEqual(movedConnector.endBindingID, result.targetID)
+    XCTAssertNotEqual(after.end, before.end)
+    XCTAssertEqual(hypot(dx, dy), 7, accuracy: 0.2)
+  }
+
+  func testQuickConnectRejectsLockedSource() {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let sourceID = board.addElement(.rectangle, at: CGPoint(x: 200, y: 200))
+    board.lockSelection(true)
+
+    XCTAssertNil(board.quickConnect(from: sourceID, direction: .down))
   }
 }

@@ -531,6 +531,8 @@
 "%@: macOS Keychain access failed. Check Keychain Access and try again." = "%@: macOSキーチェーンへのアクセスに失敗しました。キーチェーンアクセスを確認して、もう一度お試しください。";
 "%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again." = "%@: BonsAIは従来のコネクタトークンファイルを更新できませんでした。Application Supportのアクセス権を確認して、もう一度お試しください。";
 "Drag connector endpoint" = "コネクタの端点をドラッグ";
+"Create linked line" = "線でつながった図形を作成";
+"Click to create a linked shape; drag to connect; hold Option for a line" = "クリックで接続図形を作成、ドラッグで接続、Optionキーで線に変更";
 "Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI." = "コネクタトークンの移行を検証できませんでした。トークンが失われないよう従来のファイルは保持されています。キーチェーンアクセスを確認し、BonsAIを再起動してから再試行してください。";
 "Application" = "アプリケーション";
 "Choose how BonsAI appears in macOS." = "BonsAI の macOS での表示方法を選択します。";

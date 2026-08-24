@@ -119,7 +119,7 @@ bonsai_request POST /canvas '{"op":"capture","text":"Fix the race in BoardViewMo
 | `create_diagram` | Nodes + edges (`nodes`, `edges`, optional `direction`) |
 | `relayout` | Tidy layout (`direction`: `TB` or `LR`) |
 | `update_text` | Replace card text (`id`, `text`) |
-| `connect` | Arrow between cards (`from`, `to`, optional `reason`) |
+| `connect` | Connector between cards (`from`, `to`, optional `reason`; `kind` is `arrow` by default or `line`) |
 | `supersede` | Evolve an idea (`oldId`, `text`, `reason`) |
 
 Full tool catalog and graph conventions: [canvas-agent.md](canvas-agent.md).

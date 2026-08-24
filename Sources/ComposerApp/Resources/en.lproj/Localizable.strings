@@ -534,3 +534,5 @@
 "Hide Dock icon" = "Hide Dock icon";
 "Keep BonsAI in the menu bar and use the global shortcut to restore the board." = "Keep BonsAI in the menu bar and use the global shortcut to restore the board.";
 "Drag connector endpoint" = "Drag connector endpoint";
+"Create linked line" = "Create linked line";
+"Click to create a linked shape; drag to connect; hold Option for a line" = "Click to create a linked shape; drag to connect; hold Option for a line";

@@ -9,6 +9,13 @@ enum ConnectorEndpoint: CaseIterable, Hashable {
   case end
 }
 
+enum ConnectorDirection: CaseIterable, Hashable {
+  case up
+  case right
+  case down
+  case left
+}
+
 /// Pure connector geometry and binding policy.
 ///
 /// The interface accepts and returns `CardState` values; callers never need to know how endpoints
@@ -32,6 +39,42 @@ enum ConnectorGeometry {
 
   static func isConnector(_ card: CardState) -> Bool {
     card.elementKind == .line || card.elementKind == .arrow
+  }
+
+  static func isEligibleTarget(_ card: CardState, excluding: Set<UUID> = []) -> Bool {
+    !excluding.contains(card.id) &&
+    !card.locked &&
+    !isConnector(card) &&
+    card.elementKind != .freehand
+  }
+
+  /// Deterministic placement for a directional quick-connect peer. The edge-to-edge gap remains
+  /// stable regardless of the source's or peer's dimensions.
+  static func peerFrame(from source: CGRect,
+                        peerSize: CGSize,
+                        direction: ConnectorDirection,
+                        gap: CGFloat = 96) -> CGRect {
+    let origin: CGPoint
+    switch direction {
+    case .up:
+      origin = CGPoint(x: source.midX - peerSize.width / 2, y: source.minY - gap - peerSize.height)
+    case .right:
+      origin = CGPoint(x: source.maxX + gap, y: source.midY - peerSize.height / 2)
+    case .down:
+      origin = CGPoint(x: source.midX - peerSize.width / 2, y: source.maxY + gap)
+    case .left:
+      origin = CGPoint(x: source.minX - gap - peerSize.width, y: source.midY - peerSize.height / 2)
+    }
+    return CGRect(origin: origin, size: peerSize)
+  }
+
+  static func port(on frame: CGRect, direction: ConnectorDirection) -> CGPoint {
+    switch direction {
+    case .up: CGPoint(x: frame.midX, y: frame.minY)
+    case .right: CGPoint(x: frame.maxX, y: frame.midY)
+    case .down: CGPoint(x: frame.midX, y: frame.maxY)
+    case .left: CGPoint(x: frame.minX, y: frame.midY)
+    }
   }
 
   /// Resolve a connector's stored normalized points into board space.
@@ -214,10 +257,7 @@ enum ConnectorGeometry {
     let edgeSlop: CGFloat = 16
     return cards
       .filter { card in
-        !excluded.contains(card.id) &&
-        !card.locked &&
-        !isConnector(card) &&
-        card.elementKind != .freehand
+        isEligibleTarget(card, excluding: excluded)
       }
       .compactMap { card -> (card: CardState, rectDistance: CGFloat, centerDistance: CGFloat)? in
         let rect = card.frame

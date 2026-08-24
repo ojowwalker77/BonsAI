@@ -219,7 +219,18 @@ final class CanvasBridge {
 
     case "connect":
       guard let from = uuid(op["from"]), let to = uuid(op["to"]) else { return fail("bad \"from\"/\"to\"") }
-      guard let id = board.connectCards(from: from, to: to, reason: string(op["reason"]) ?? "") else { return fail("could not connect") }
+      let connectorKind: CanvasElementKind
+      switch string(op["kind"]) {
+      case nil, "arrow": connectorKind = .arrow
+      case "line": connectorKind = .line
+      default: return fail("bad \"kind\" (expected \"arrow\" or \"line\")")
+      }
+      guard let id = board.connectCards(
+        from: from,
+        to: to,
+        kind: connectorKind,
+        reason: string(op["reason"]) ?? "")
+      else { return fail("could not connect") }
       return ok(["id": id.uuidString])
 
     case "set_archived":

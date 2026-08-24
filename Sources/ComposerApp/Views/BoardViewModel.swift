@@ -1380,6 +1380,82 @@ final class BoardViewModel: ObservableObject {
     return card.id
   }
 
+  struct QuickConnectResult: Equatable {
+    let connectorID: UUID
+    let targetID: UUID
+    let createdPeer: Bool
+  }
+
+  /// Complete a directional quick-connect as one model transaction. With no target, this creates a
+  /// blank peer of the source's box kind at a deterministic gap; with a target, it only creates the
+  /// connector. Selection advances to the target so repeated clicks can grow a diagram fluidly.
+  @discardableResult
+  func quickConnect(from sourceID: UUID,
+                    direction: ConnectorDirection,
+                    kind: CanvasElementKind = .arrow,
+                    to existingTargetID: UUID? = nil) -> QuickConnectResult? {
+    guard kind == .arrow || kind == .line,
+          let source = cards.first(where: { $0.id == sourceID }),
+          !source.locked,
+          [.rectangle, .ellipse, .diamond].contains(source.elementKind)
+    else { return nil }
+
+    let target: CardState
+    let createdPeer: Bool
+    if let existingTargetID {
+      guard let existing = cards.first(where: { $0.id == existingTargetID }),
+            ConnectorGeometry.isEligibleTarget(existing, excluding: [sourceID])
+      else { return nil }
+      target = existing
+      createdPeer = false
+    } else {
+      let frame = ConnectorGeometry.peerFrame(
+        from: source.frame,
+        peerSize: source.frame.size,
+        direction: direction)
+      target = CardState(
+        kind: source.elementKind,
+        text: "",
+        x: frame.minX,
+        y: frame.minY,
+        w: frame.width,
+        h: frame.height,
+        z: nextZ,
+        whoWrote: nextAuthor,
+        tint: source.tint)
+      createdPeer = true
+    }
+
+    let connectorZ = nextZ + (createdPeer ? 1 : 0)
+    guard let connector = ConnectorGeometry.makeBoundConnector(
+      kind: kind,
+      text: "",
+      source: source,
+      target: target,
+      z: connectorZ,
+      author: nextAuthor,
+      tint: source.tint)
+    else { return nil }
+
+    registerUndo()
+    if createdPeer {
+      cards.append(target)
+      interactions[target.id] = CardInteraction(target)
+      nextZ += 1
+    }
+    cards.append(connector)
+    interactions[connector.id] = CardInteraction(connector)
+    nextZ += 1
+    selectedCardIDs = [target.id]
+    primarySelectedCardID = target.id
+    invalidateBoardTextContext()
+    scheduleSave()
+    return QuickConnectResult(
+      connectorID: connector.id,
+      targetID: target.id,
+      createdPeer: createdPeer)
+  }
+
   /// Mark a card superseded (faded) or active again.
   func setArchived(_ id: UUID, _ value: Bool) {
     guard let i = cards.firstIndex(where: { $0.id == id }), cards[i].isArchived != value else { return }

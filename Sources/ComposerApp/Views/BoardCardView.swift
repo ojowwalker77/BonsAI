@@ -578,6 +578,22 @@ struct BoardCardView: View {
                       if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
                     }
                     .help("Drag to change text wrapping width".localizedUI)
+                  }
+              }
+              if isQuickConnectSource {
+                ForEach(ConnectorDirection.allCases, id: \.self) { direction in
+                  quickConnectHandle(direction)
+                    .position(quickConnectHandlePoint(direction, in: geo.size))
+                    .gesture(quickConnectGesture(direction))
+                    .onHover { inside in
+                      if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                    }
+                    .contextMenu {
+                      Button("Create linked line".localizedUI) {
+                        board.quickConnect(from: card.id, direction: direction, kind: .line)
+                      }
+                    }
+                    .help("Click to create a linked shape; drag to connect; hold Option for a line".localizedUI)
                 }
               }
             }
@@ -598,6 +614,25 @@ struct BoardCardView: View {
 
   private func textWidthHandlePoint(_ edge: HorizontalEdge, in size: CGSize) -> CGPoint {
     CGPoint(x: edge == .leading ? -selectionGap : size.width + selectionGap, y: size.height / 2)
+  }
+
+  private var isQuickConnectSource: Bool {
+    isSelected &&
+    board.selectedCardIDs.count == 1 &&
+    !card.locked &&
+    [.rectangle, .ellipse, .diamond].contains(card.elementKind)
+  }
+
+  private func quickConnectHandlePoint(_ direction: ConnectorDirection, in size: CGSize) -> CGPoint {
+    // Keep a sliver of the padded hit target inside the card's bounds so SwiftUI routes drags that
+    // begin on the outward-facing control, while the visible 15pt circle stays outside the ring.
+    let offset = selectionGap + 9
+    return switch direction {
+    case .up: CGPoint(x: size.width / 2, y: -offset)
+    case .right: CGPoint(x: size.width + offset, y: size.height / 2)
+    case .down: CGPoint(x: size.width / 2, y: size.height + offset)
+    case .left: CGPoint(x: -offset, y: size.height / 2)
+    }
   }
 
   /// Actual stored endpoints, expressed in the card's current screen-space layout. In particular,
@@ -647,6 +682,18 @@ struct BoardCardView: View {
       .overlay(Circle().strokeBorder(Theme.Palette.accent, lineWidth: 1.5))
       .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
       .padding(9)
+      .contentShape(Circle())
+  }
+
+  private func quickConnectHandle(_ direction: ConnectorDirection) -> some View {
+    Image(systemName: direction.symbolName)
+      .font(.system(size: 8, weight: .semibold))
+      .foregroundStyle(Theme.Palette.accent)
+      .frame(width: 15, height: 15)
+      .background(Circle().fill(Theme.Palette.windowCanvas.opacity(0.94)))
+      .overlay(Circle().strokeBorder(Theme.Palette.accent.opacity(0.62), lineWidth: 1))
+      .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+      .padding(7)
       .contentShape(Circle())
   }
 
@@ -702,6 +749,29 @@ struct BoardCardView: View {
         let destination = ConnectorEndpointDrag.boardPoint(
           from: endpoints[endpoint], translation: value.translation, zoom: zoom)
         board.setConnectorEndpoint(endpoint, of: card.id, to: destination)
+      }
+  }
+
+  private func quickConnectGesture(_ direction: ConnectorDirection) -> some Gesture {
+    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+      .onEnded { value in
+        let connectorKind: CanvasElementKind = NSEvent.modifierFlags.contains(.option) ? .line : .arrow
+        let distance = hypot(value.translation.width, value.translation.height)
+        if distance <= 4 {
+          board.quickConnect(from: card.id, direction: direction, kind: connectorKind)
+          return
+        }
+        let origin = ConnectorGeometry.port(on: card.frame, direction: direction)
+        let destination = ConnectorEndpointDrag.boardPoint(
+          from: origin,
+          translation: value.translation,
+          zoom: zoom)
+        guard let targetID = board.bindCandidate(at: destination, excluding: [card.id]) else { return }
+        board.quickConnect(
+          from: card.id,
+          direction: direction,
+          kind: connectorKind,
+          to: targetID)
       }
   }
 
@@ -2515,6 +2585,17 @@ private enum HorizontalEdge: CaseIterable, Hashable {
 private struct TextWidthResizeSession: Equatable {
   let edge: HorizontalEdge
   var translation: CGSize
+}
+
+private extension ConnectorDirection {
+  var symbolName: String {
+    switch self {
+    case .up: "arrow.up"
+    case .right: "arrow.right"
+    case .down: "arrow.down"
+    case .left: "arrow.left"
+    }
+  }
 }
 
 private extension EventModifiers {
