@@ -66,7 +66,7 @@ enum VectorPathControlDrag {
     // DragGesture(minimumDistance: 0) also ends for a bare control click. Do not feed that through
     // normalization/refitting: an imported or legacy path may not be tightly fitted, so a zero
     // translation could otherwise move it and consume an undo step despite no pointer motion.
-    guard screenTranslation.width != 0 || screenTranslation.height != 0 else { return nil }
+    guard hypot(screenTranslation.width, screenTranslation.height) > 0.5 else { return nil }
     return VectorPathGeometry.moving(
       control,
       nodeAt: index,

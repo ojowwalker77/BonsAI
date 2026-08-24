@@ -209,6 +209,14 @@ final class VectorPathBoardTests: XCTestCase {
       frame: before.frame)
 
     XCTAssertNil(clickPlacement)
+    XCTAssertNil(VectorPathControlDrag.placement(
+      .anchor,
+      nodeAt: 0,
+      screenTranslation: CGSize(width: 0.3, height: -0.4),
+      zoom: 2.25,
+      in: try XCTUnwrap(before.vectorPath),
+      frame: before.frame),
+      "subpixel pointer jitter must behave like a bare click")
     XCTAssertEqual(board.cards.first(where: { $0.id == id }), before)
     board.undo()
     XCTAssertFalse(
