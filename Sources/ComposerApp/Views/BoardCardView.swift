@@ -1120,11 +1120,11 @@ private struct CanvasElementContent: View {
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .rectangle:
-          ShapeBox(kind: .rectangle, tint: tint)
+          ShapeBox(kind: .rectangle, tint: tint, zoom: zoom)
         case .ellipse:
-          ShapeBox(kind: .ellipse, tint: tint)
+          ShapeBox(kind: .ellipse, tint: tint, zoom: zoom)
         case .diamond:
-          ShapeBox(kind: .diamond, tint: tint)
+          ShapeBox(kind: .diamond, tint: tint, zoom: zoom)
         case .line:
           LineShape(arrow: false, points: connectorPoints ?? card.points ?? CardState.defaultLinePoints(), tint: tint)
         case .arrow:
@@ -1532,13 +1532,14 @@ private struct CanvasLabel: View {
 private struct ShapeBox: View {
   let kind: BoxShapeKind
   var tint: Color?
+  var zoom: CGFloat = 1
 
   var body: some View {
     BoxShape(kind: kind)
       .fill(tint.map { $0.opacity(Theme.flavor.isDark ? 0.16 : 0.10) } ?? Theme.Palette.elementFill)
       .overlay(BoxShape(kind: kind).stroke(tint ?? Theme.Palette.elementStroke, lineWidth: 2))
       .shadow(color: Theme.Palette.elementShadow, radius: 10, y: 4)
-      .padding(ShapeLabelGeometry.shapePathInset)
+      .padding(ShapeLabelGeometry.renderedShapePathInset(at: zoom))
   }
 }
 

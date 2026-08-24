@@ -145,6 +145,25 @@ final class ShapeLabelFitTests: XCTestCase {
     XCTAssertEqual(fitted.midY, before.midY, accuracy: 0.5)
   }
 
+  func testFittedDiamondContainmentIsStableWhenZoomedOut() {
+    let label = Array(repeating: "Zoomed decision label", count: 6).joined(separator: "\n")
+    let block = BoardViewModel.fittedShapeLabelBlockSize(label)
+    let container = BoardViewModel.fittedShapeSize(label, shape: .diamond)
+
+    for zoom: CGFloat in [0.1, 0.25, 0.5, 0.9, 1, 2] {
+      let inset = ShapeLabelGeometry.renderedShapePathInset(at: zoom)
+      let screenInteriorWidth = container.width * zoom - inset * 2
+      let screenInteriorHeight = container.height * zoom - inset * 2
+      let containment = block.width * zoom / screenInteriorWidth
+        + block.height * zoom / screenInteriorHeight
+
+      XCTAssertLessThanOrEqual(
+        containment,
+        1.000_001,
+        "zoom \(zoom) must preserve the board-space diamond containment constraint")
+    }
+  }
+
   func testShortLabelRespectsShapeMinimum() {
     let size = BoardViewModel.fittedShapeSize("Fit", shape: .rectangle)
 

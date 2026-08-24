@@ -11,6 +11,13 @@ enum ShapeLabelGeometry {
   /// `ShapeBox` draws its path after a 2pt inset on every edge.
   static let shapePathInset: CGFloat = 2
 
+  /// `ShapeBox` is laid out after the card frame has been converted from board units to screen
+  /// points. Keep its padding in that same conversion so zooming out does not make the fixed
+  /// screen-space inset consume a progressively larger share of a fitted diamond.
+  static func renderedShapePathInset(at zoom: CGFloat) -> CGFloat {
+    shapePathInset * max(zoom, 0)
+  }
+
   static var defaultMaximumContentWidth: CGFloat {
     defaultMaximumContainerWidth - horizontalPadding * 2
   }
