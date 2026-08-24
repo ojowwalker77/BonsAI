@@ -6,7 +6,7 @@ final class CanvasElementEditingTests: XCTestCase {
   func testEditingCapabilityMatchesAvailableSurfaces() {
     let editable: [CanvasElementKind] = [
       .text, .rectangle, .ellipse, .diamond, .line, .arrow, .equation, .graph,
-      .sticky, .checklist, .table,
+      .sticky, .checklist, .table, .vectorPath,
     ]
     for kind in editable { XCTAssertTrue(kind.supportsEditing, "\(kind) should advertise editing") }
     XCTAssertFalse(CanvasElementKind.freehand.supportsEditing)

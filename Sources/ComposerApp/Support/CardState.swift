@@ -9,6 +9,7 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
   case line
   case arrow
   case freehand
+  case vectorPath
   case image
   case equation
   case graph
@@ -380,7 +381,7 @@ struct CardState: Codable, Identifiable, Equatable {
       CGSize(width: 240, height: 120)
     case .rectangle, .ellipse, .diamond, .image:
       CardState.shapeMinSize
-    case .line, .arrow, .freehand:
+    case .line, .arrow, .freehand, .vectorPath:
       CardState.lineMinSize
     }
   }

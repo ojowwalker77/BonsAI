@@ -615,7 +615,7 @@ final class BoardViewModel: ObservableObject {
     registerUndo()
     let size: CGSize = {
       switch kind {
-      case .line, .arrow, .freehand: CardState.lineSize
+      case .line, .arrow, .freehand, .vectorPath: CardState.lineSize
       case .equation: CardState.equationSize
       case .graph: CardState.graphSize
       case .sticky: CardState.stickySize
@@ -632,7 +632,7 @@ final class BoardViewModel: ObservableObject {
         return CardState.defaultLinePoints()
       case .freehand:
         return CardState.defaultFreehandPoints()
-      case .text, .rectangle, .ellipse, .diamond, .image, .equation, .graph, .sticky, .checklist, .table:
+      case .text, .rectangle, .ellipse, .diamond, .vectorPath, .image, .equation, .graph, .sticky, .checklist, .table:
         return nil
       }
     }()
@@ -1768,7 +1768,7 @@ final class BoardViewModel: ObservableObject {
   private static func isLayoutNode(_ card: CardState) -> Bool {
     switch card.elementKind {
     case .text, .rectangle, .ellipse, .diamond, .image, .equation, .graph, .sticky, .checklist, .table: return true
-    case .line, .arrow, .freehand: return false
+    case .line, .arrow, .freehand, .vectorPath: return false
     }
   }
 

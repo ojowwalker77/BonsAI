@@ -110,7 +110,7 @@ struct EditingStage: View {
       checklistStage
     case .table:
       tableStage
-    case .freehand, .image:
+    case .freehand, .vectorPath, .image:
       // These kinds have no edit session; the canvas guards against opening a stage for them, so
       // this branch is unreachable. Render nothing rather than an empty glass panel.
       EmptyView()

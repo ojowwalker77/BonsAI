@@ -1015,6 +1015,8 @@ private struct CanvasElementContent: View {
           LineShape(arrow: true, points: connectorPoints ?? card.points ?? CardState.defaultLinePoints(), tint: tint)
         case .freehand:
           FreehandShape(points: card.points ?? CardState.defaultFreehandPoints(), tint: tint)
+        case .vectorPath:
+          EmptyView()
         case .image:
           ImageObjectPlaceholder(path: card.imagePath)
             .overlay(alignment: .bottomTrailing) {
