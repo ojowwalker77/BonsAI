@@ -248,6 +248,7 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(
         hasBoardRename: true,
         hasBoardPicker: true,
+        hasDrawingDraft: true,
         hasSelection: true
       )),
       .boardRename
@@ -266,11 +267,49 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     )
   }
 
+  func testEscapeCoordinatorCancelsDrawingDraftBeforeClosingBoardPicker() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasBoardPicker: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true,
+        hasSelection: true
+      )),
+      .drawingDraft
+    )
+  }
+
+  func testEscapeCoordinatorCancelsVectorDraftBeforePickerAndInlineVectorEditor() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasBoardPicker: true,
+        hasActiveEditor: true,
+        hasActiveVectorEditor: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true
+      )),
+      .drawingDraft
+    )
+  }
+
+  func testEscapeCoordinatorKeepsCommandPaletteAheadOfDrawingWithoutPicker() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasCommandPalette: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true
+      )),
+      .commandPalette
+    )
+  }
+
   func testEscapeCoordinatorClosesDeleteConfirmationBeforeBoardRename() {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(
         hasBoardDeletionConfirmation: true,
-        hasBoardRename: true
+        hasBoardRename: true,
+        hasBoardPicker: true,
+        hasDrawingDraft: true
       )),
       .boardDeletionConfirmation
     )
