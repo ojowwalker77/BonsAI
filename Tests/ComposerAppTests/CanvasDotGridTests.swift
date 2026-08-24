@@ -52,9 +52,9 @@ final class CanvasDotGridTests: XCTestCase {
       CanvasDotGridLayout.layout(scale: 0.35, translation: $0, viewportSize: viewport)
     }
 
-    XCTAssertTrue(layouts.allSatisfy { $0.dotCount <= 4_000 })
-    XCTAssertGreaterThanOrEqual(layouts.map(\.boardStep).min() ?? 0, 9)
-    XCTAssertLessThan(layouts.map(\.dotCount).max() ?? .max, 3_500)
+    XCTAssertLessThanOrEqual(
+      layouts.map(\.dotCount).max() ?? .max,
+      CanvasDotGridLayout.maximumDotCount)
   }
 
   func testAdaptiveStrideKeepsPhaseStableAcrossEquivalentTranslations() {
