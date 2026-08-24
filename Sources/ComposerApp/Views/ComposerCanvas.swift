@@ -900,8 +900,8 @@ struct ComposerCanvas: View {
 
   /// The current board's name rests in one top-left pill. Hovering the same surface expands it
   /// downward into board management; it never becomes a tab row or changes workspace geometry.
-  private func boardSwitcherPill(in _: CGSize) -> some View {
-    boardPickerMenu
+  private func boardSwitcherPill(in size: CGSize) -> some View {
+    boardPickerMenu(viewportWidth: size.width)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .padding(.top, WindowChrome.edgeInset)
       .padding(.leading, WindowChrome.trafficLightInset)
@@ -923,7 +923,7 @@ struct ComposerCanvas: View {
   }
 
   @ViewBuilder
-  private func currentBoardTitleRow(canDelete: Bool) -> some View {
+  private func currentBoardTitleRow(canDelete: Bool, contentWidth: CGFloat) -> some View {
     if renamingBoardID == store.currentID {
       TextField("Board name".localizedUI, text: $boardNameDraft)
         .textFieldStyle(.plain)
@@ -933,7 +933,7 @@ struct ComposerCanvas: View {
         .focused($boardNameFocused)
         .onSubmit { _ = commitBoardRename() }
         .onExitCommand(perform: handleEscapeBoard)
-        .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
+        .frame(width: contentWidth, height: WindowChrome.controlHeight)
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.rowFill))
         .onAppear { DispatchQueue.main.async { boardNameFocused = true } }
         .onChange(of: boardNameFocused) { _, focused in
@@ -941,11 +941,11 @@ struct ComposerCanvas: View {
         }
     } else {
       Button(action: toggleBoardPicker) {
-        Text(boardPickerTitle)
+        Text(boardPickerOpen ? currentBoardName : boardPickerTitle)
           .font(WindowChrome.labelFont)
           .foregroundStyle(Theme.Palette.body)
           .lineLimit(1)
-          .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
+          .frame(width: contentWidth, height: WindowChrome.controlHeight)
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -979,10 +979,13 @@ struct ComposerCanvas: View {
   }
 
   /// One glass surface: current board at rest; other boards and New Board below on hover.
-  private var boardPickerMenu: some View {
+  private func boardPickerMenu(viewportWidth: CGFloat) -> some View {
     let others = store.dumps.filter { $0.persistentModelID != store.currentID }
+    let expandedContentWidth = BoardPickerLayoutPolicy.expandedContentWidth(
+      viewportWidth: viewportWidth)
+    let contentWidth = boardPickerOpen ? expandedContentWidth : WindowChrome.boardPillWidth
     return VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
-      currentBoardTitleRow(canDelete: !others.isEmpty)
+      currentBoardTitleRow(canDelete: !others.isEmpty, contentWidth: contentWidth)
 
       if boardPickerOpen {
         VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
@@ -1021,9 +1024,10 @@ struct ComposerCanvas: View {
           }
           newBoardRow
         }
-        .frame(width: WindowChrome.boardPillWidth)
+        .frame(width: expandedContentWidth)
       }
     }
+    .frame(width: contentWidth, alignment: .leading)
     .padding(.horizontal, WindowChrome.padH)
     .padding(.vertical, WindowChrome.padV)
     .composerPopupSurface()
@@ -1041,8 +1045,10 @@ struct ComposerCanvas: View {
       HStack(spacing: 6) {
         Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
         Text("New board".localizedUI).font(WindowChrome.labelFont)
+        Spacer(minLength: 0)
       }
       .foregroundStyle(Theme.Palette.body)
+      .padding(.horizontal, WindowChrome.labelPadH)
       .frame(maxWidth: .infinity)
       .frame(height: 30)
       .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.rowFill))
@@ -3334,6 +3340,46 @@ enum BoardPickerPresentationPolicy {
   }
 }
 
+/// The compact identity pill keeps its established footprint; only the open manager grows. Values
+/// name the actual popup surface width (including chrome padding) and the resulting row text budget
+/// so future action affordances cannot silently squeeze board titles back to an ellipsis.
+enum BoardPickerLayoutPolicy {
+  static let preferredExpandedSurfaceWidth: CGFloat = 232
+  static let actionSlotWidth: CGFloat = 52
+  static let rowSpacing: CGFloat = 4
+  static let leadingIndicatorWidth: CGFloat = 5
+  static let leadingIndicatorSpacing: CGFloat = 8
+  static let trailingTextSpacing: CGFloat = 4
+
+  static var collapsedSurfaceWidth: CGFloat {
+    WindowChrome.boardPillWidth + WindowChrome.padH * 2
+  }
+
+  static func expandedSurfaceWidth(viewportWidth: CGFloat) -> CGFloat {
+    min(
+      preferredExpandedSurfaceWidth,
+      max(
+        collapsedSurfaceWidth,
+        viewportWidth - WindowChrome.trafficLightInset - WindowChrome.topRightReservedWidth
+      )
+    )
+  }
+
+  static func expandedContentWidth(viewportWidth: CGFloat) -> CGFloat {
+    expandedSurfaceWidth(viewportWidth: viewportWidth) - WindowChrome.padH * 2
+  }
+
+  static func expandedTextBudget(viewportWidth: CGFloat) -> CGFloat {
+    expandedContentWidth(viewportWidth: viewportWidth)
+      - WindowChrome.labelPadH * 2
+      - actionSlotWidth
+      - rowSpacing
+      - leadingIndicatorWidth
+      - leadingIndicatorSpacing
+      - trailingTextSpacing
+  }
+}
+
 /// One non-current board in the hover picker. Management state stays in `ComposerCanvas`, so a
 /// failed persistence attempt can keep this exact editor visible and Escape follows the global
 /// coordinator instead of being swallowed by row-local state.
@@ -3362,15 +3408,17 @@ private struct BoardPickerRow: View {
   }
 
   private var pickRow: some View {
-    HStack(spacing: 4) {
+    HStack(spacing: BoardPickerLayoutPolicy.rowSpacing) {
       Button(action: onPick) {
-        HStack(spacing: 8) {
-          Circle().fill(Color.clear).frame(width: 5, height: 5)
+        HStack(spacing: BoardPickerLayoutPolicy.leadingIndicatorSpacing) {
+          Circle().fill(Color.clear)
+            .frame(width: BoardPickerLayoutPolicy.leadingIndicatorWidth,
+                   height: BoardPickerLayoutPolicy.leadingIndicatorWidth)
           Text(title)
             .font(WindowChrome.labelFont)
             .foregroundStyle(Theme.Palette.body)
             .lineLimit(1)
-          Spacer(minLength: 4)
+          Spacer(minLength: BoardPickerLayoutPolicy.trailingTextSpacing)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 30)
@@ -3386,7 +3434,7 @@ private struct BoardPickerRow: View {
         rowIcon("pencil", help: "Rename board".localizedUI, action: onBeginRename)
         rowIcon("trash", help: "Delete board".localizedUI, tint: .red, action: onDelete)
       }
-      .frame(width: 52, height: 24)
+      .frame(width: BoardPickerLayoutPolicy.actionSlotWidth, height: 24)
       .opacity(hovering ? 1 : 0)
       .allowsHitTesting(hovering)
       .accessibilityHidden(!hovering)
