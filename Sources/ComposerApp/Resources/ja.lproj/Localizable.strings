@@ -384,7 +384,7 @@
 "Line  ·  drag to draw  6" = "線  ·  ドラッグして描画  6";
 "Arrow  ·  drag to draw  7" = "矢印  ·  ドラッグして描画  7";
 "Freehand stroke  ·  drag to draw  8" = "フリーハンド  ·  ドラッグして描画  8";
-"Pen  ·  click corners, drag curves, Return commits" = "ペン  ·  クリックで角、ドラッグで曲線、Return で確定";
+"Pen  ·  click corners, drag curves, Return commits  P" = "ペン  ·  クリックで角、ドラッグで曲線、Return で確定  P";
 "Equation  ·  click the board, then type LaTeX  9" = "方程式  ·  ボードをクリックして LaTeX を入力  9";
 "Heading  ·  cycles # / ## / ###" = "見出し  ·  # / ## / ### を切り替え";
 "Bold  ·  **text**" = "太字  ·  **text**";

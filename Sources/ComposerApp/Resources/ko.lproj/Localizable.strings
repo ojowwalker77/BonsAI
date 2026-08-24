@@ -384,7 +384,7 @@
 "Line  ·  drag to draw  6" = "선  ·  드래그하여 그리기  6";
 "Arrow  ·  drag to draw  7" = "화살표  ·  드래그하여 그리기  7";
 "Freehand stroke  ·  drag to draw  8" = "자유 곡선  ·  드래그하여 그리기  8";
-"Pen  ·  click corners, drag curves, Return commits" = "펜  ·  클릭으로 모서리, 드래그로 곡선, Return으로 완료";
+"Pen  ·  click corners, drag curves, Return commits  P" = "펜  ·  클릭으로 모서리, 드래그로 곡선, Return으로 완료  P";
 "Equation  ·  click the board, then type LaTeX  9" = "수식  ·  보드를 클릭한 뒤 LaTeX 입력  9";
 "Heading  ·  cycles # / ## / ###" = "제목  ·  # / ## / ### 순환";
 "Bold  ·  **text**" = "굵게  ·  **text**";

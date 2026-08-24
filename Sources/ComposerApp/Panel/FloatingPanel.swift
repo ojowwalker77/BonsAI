@@ -352,6 +352,17 @@ final class FloatingPanel: NSWindow {
       NotificationCenter.default.post(name: .composerDeleteSelection, object: nil)
       return
     }
+    // Bare P selects the vector pen. Keep this beside the bare number routing so it inherits the
+    // same exact-modifier and NSTextView guards: typing a p in any editor remains text input.
+    if !textIsEditing,
+       event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+       raw?.lowercased() == "p" {
+      NotificationCenter.default.post(
+        name: .composerSelectTool,
+        object: nil,
+        userInfo: ["tool": CanvasTool.vectorPen])
+      return
+    }
     // Bare 1–9 picks a tool (Excalidraw/Figma style) — switching must be one keypress, which is
     // what makes one-shot tools livable (issue #78; a "keep tool selected" mode was tried and
     // pulled). Requires no modifiers so ⇧1 stays "!" for anything that wants it, and the

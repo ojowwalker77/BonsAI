@@ -385,7 +385,7 @@
 "Line  ·  drag to draw  6" = "Line  ·  drag to draw  6";
 "Arrow  ·  drag to draw  7" = "Arrow  ·  drag to draw  7";
 "Freehand stroke  ·  drag to draw  8" = "Freehand stroke  ·  drag to draw  8";
-"Pen  ·  click corners, drag curves, Return commits" = "Pen  ·  click corners, drag curves, Return commits";
+"Pen  ·  click corners, drag curves, Return commits  P" = "Pen  ·  click corners, drag curves, Return commits  P";
 "Equation  ·  click the board, then type LaTeX  9" = "Equation  ·  click the board, then type LaTeX  9";
 "Heading  ·  cycles # / ## / ###" = "Heading  ·  cycles # / ## / ###";
 "Bold  ·  **text**" = "Bold  ·  **text**";

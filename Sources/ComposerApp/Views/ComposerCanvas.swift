@@ -356,7 +356,11 @@ struct ComposerCanvas: View {
         quickCaptureRevealCardID = nil
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerSelectTool)) { note in
-        if let index = note.userInfo?["index"] as? Int { selectTool(index: index) }
+        if let selectedTool = note.userInfo?["tool"] as? CanvasTool {
+          tool = selectedTool
+        } else if let index = note.userInfo?["index"] as? Int {
+          selectTool(index: index)
+        }
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerToggleAgent)) { _ in
         toggleAgent()

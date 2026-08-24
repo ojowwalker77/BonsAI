@@ -41,7 +41,7 @@ extension Notification.Name {
   /// The active AppKit editor reported a new live hug. The quick-capture flow uses this one-shot
   /// signal to reveal the card again after its final rendered frame replaces the insertion estimate.
   static let composerTextCardLiveFrameChanged = Notification.Name("composerTextCardLiveFrameChanged")
-  /// ⌘1–⌘8 pick a canvas tool; userInfo["index"] is 1-based (1 = select, 2 = text, …).
+  /// Number shortcuts use a 1-based `index`; named shortcuts such as P carry a `CanvasTool`.
   static let composerSelectTool = Notification.Name("composerSelectTool")
   /// ⌘K "Add point to graph…": the graph card whose id matches `object` (a UUID) opens its Point
   /// Composer seeded at the middle of its axis ranges.

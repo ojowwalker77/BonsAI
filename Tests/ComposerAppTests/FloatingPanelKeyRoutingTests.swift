@@ -45,6 +45,26 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
       characters: escape, charactersIgnoringModifiers: escape, isARepeat: false, keyCode: 53)!
   }
 
+  private func letterKeyDown(_ letter: String, in panel: NSWindow) -> NSEvent {
+    NSEvent.keyEvent(
+      with: .keyDown, location: .zero, modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: panel.windowNumber, context: nil,
+      characters: letter, charactersIgnoringModifiers: letter, isARepeat: false, keyCode: 35)!
+  }
+
+  private func selectedTool(during body: () -> Void) -> CanvasTool? {
+    var selected: CanvasTool?
+    let observer = NotificationCenter.default.addObserver(
+      forName: .composerSelectTool, object: nil, queue: nil
+    ) { note in
+      selected = note.userInfo?["tool"] as? CanvasTool
+    }
+    body()
+    NotificationCenter.default.removeObserver(observer)
+    return selected
+  }
+
   private func deleteSelectionFired(during body: () -> Void) -> Bool {
     var fired = false
     let observer = NotificationCenter.default.addObserver(
@@ -74,6 +94,21 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     let fired = deleteSelectionFired { panel.sendEvent(backspaceKeyDown(in: panel)) }
 
     XCTAssertTrue(fired, "with no text input editing, Backspace must delete the selected cards")
+  }
+
+  func testBarePSelectsVectorPenOutsideTextEditing() {
+    let panel = makePanel()
+    XCTAssertEqual(
+      selectedTool { panel.sendEvent(letterKeyDown("p", in: panel)) },
+      .vectorPen)
+  }
+
+  func testBarePRemainsTextInputWhileAFieldIsEditing() {
+    let panel = makePanel()
+    let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
+    panel.contentView?.addSubview(field)
+    XCTAssertTrue(panel.makeFirstResponder(field))
+    XCTAssertNil(selectedTool { panel.sendEvent(letterKeyDown("p", in: panel)) })
   }
 
   func testBackspaceWhileAppKitFieldIsEditingDoesNotDeleteCards() {

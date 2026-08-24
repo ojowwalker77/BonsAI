@@ -93,7 +93,7 @@ struct CanvasToolbar: View {
                  active: tool == .arrow, shortcut: 7) { tool = .arrow }
       ToolButton(symbol: "scribble.variable", help: "Freehand stroke  ·  drag to draw  8".localizedUI,
                  active: tool == .freehand, shortcut: 8) { tool = .freehand }
-      ToolButton(symbol: "pencil.tip", help: "Pen  ·  click corners, drag curves, Return commits".localizedUI,
+      ToolButton(symbol: "pencil.tip", help: "Pen  ·  click corners, drag curves, Return commits  P".localizedUI,
                  active: tool == .vectorPen) { tool = .vectorPen }
       ToolButton(symbol: "x.squareroot", help: "Equation  ·  click the board, then type LaTeX  9".localizedUI,
                  active: tool == .equation, shortcut: 9) { tool = .equation }

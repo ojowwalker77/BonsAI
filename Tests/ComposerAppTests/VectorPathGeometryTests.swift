@@ -79,6 +79,38 @@ final class VectorPathGeometryTests: XCTestCase {
     XCTAssertEqual(incoming.y + outgoing.y, anchor.y * 2, accuracy: 0.001)
   }
 
+  func testClosedPathUsesCubicHandlesOnFinalSegment() {
+    let frame = CGRect(x: 20, y: 30, width: 200, height: 100)
+    let spec = VectorPathSpec(nodes: [
+      VectorPathNode(
+        anchor: CanvasPoint(x: 0.12, y: 0.15),
+        incoming: CanvasPoint(x: 0.02, y: 0.38)),
+      VectorPathNode(anchor: CanvasPoint(x: 0.50, y: 0.08)),
+      VectorPathNode(
+        anchor: CanvasPoint(x: 0.86, y: 0.74),
+        outgoing: CanvasPoint(x: 0.82, y: 0.92)),
+    ], isClosed: true)
+    var elementTypes: [CGPathElementType] = []
+    var curves: [(CGPoint, CGPoint, CGPoint)] = []
+
+    VectorPathGeometry.path(for: spec, in: frame).applyWithBlock { pointer in
+      let element = pointer.pointee
+      elementTypes.append(element.type)
+      if element.type == .addCurveToPoint {
+        curves.append((element.points[0], element.points[1], element.points[2]))
+      }
+    }
+
+    XCTAssertEqual(Array(elementTypes.suffix(2)), [.addCurveToPoint, .closeSubpath])
+    XCTAssertEqual(curves.count, 1)
+    XCTAssertEqual(curves[0].0.x, 184, accuracy: 0.001)
+    XCTAssertEqual(curves[0].0.y, 122, accuracy: 0.001)
+    XCTAssertEqual(curves[0].1.x, 24, accuracy: 0.001)
+    XCTAssertEqual(curves[0].1.y, 68, accuracy: 0.001)
+    XCTAssertEqual(curves[0].2.x, 44, accuracy: 0.001)
+    XCTAssertEqual(curves[0].2.y, 45, accuracy: 0.001)
+  }
+
   func testMissingClosedFlagDecodesAsOpen() throws {
     let data = Data(#"{"nodes":[]}"#.utf8)
     XCTAssertFalse(try JSONDecoder().decode(VectorPathSpec.self, from: data).isClosed)

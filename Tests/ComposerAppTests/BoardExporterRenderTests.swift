@@ -195,6 +195,41 @@ final class BoardExporterRenderTests: XCTestCase {
     XCTAssertGreaterThan(drawnSamples, 100, "vector stroke/fill should be present in PNG rendering")
   }
 
+  func testWholeBoardRenderIncludesOpenVectorPathStroke() throws {
+    let vector = CardState(
+      kind: .vectorPath,
+      x: 100,
+      y: 100,
+      w: 260,
+      h: 180,
+      z: 1,
+      vectorPath: VectorPathSpec(nodes: [
+        VectorPathNode(anchor: CanvasPoint(x: 0.08, y: 0.82)),
+        VectorPathNode(
+          anchor: CanvasPoint(x: 0.50, y: 0.12),
+          incoming: CanvasPoint(x: 0.28, y: 0.10),
+          outgoing: CanvasPoint(x: 0.72, y: 0.14)),
+        VectorPathNode(anchor: CanvasPoint(x: 0.92, y: 0.78)),
+      ], isClosed: false))
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let id = try XCTUnwrap(board.insertCopies([vector], offset: .zero).first)
+    let card = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    guard let image = BoardExporter.renderBoardImage(cards: [card], board: board),
+          let rep = bitmapRep(of: image) else {
+      return XCTFail("open vector export failed")
+    }
+
+    let canvas = BoardExporter.resolvedCanvasColor()
+    var drawnSamples = 0
+    for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
+      for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
+        guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+        if !colorsClose(color, canvas, tolerance: 0.03) { drawnSamples += 1 }
+      }
+    }
+    XCTAssertGreaterThan(drawnSamples, 40, "open vector stroke should be present in PNG rendering")
+  }
+
   func testStoredAttachmentFilenameLoadsThroughAssetStore() throws {
     let filename = try writeStoredTestImage()
     defer { try? FileManager.default.removeItem(at: AssetStore.storeDirectory.appendingPathComponent(filename)) }

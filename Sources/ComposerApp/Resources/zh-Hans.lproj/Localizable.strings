@@ -384,7 +384,7 @@
 "Line  ·  drag to draw  6" = "线条  ·  拖动绘制  6";
 "Arrow  ·  drag to draw  7" = "箭头  ·  拖动绘制  7";
 "Freehand stroke  ·  drag to draw  8" = "手绘笔画  ·  拖动绘制  8";
-"Pen  ·  click corners, drag curves, Return commits" = "钢笔  ·  点击创建角点，拖动创建曲线，Return 提交";
+"Pen  ·  click corners, drag curves, Return commits  P" = "钢笔  ·  点击创建角点，拖动创建曲线，Return 提交  P";
 "Equation  ·  click the board, then type LaTeX  9" = "方程  ·  点击画板后输入 LaTeX  9";
 "Heading  ·  cycles # / ## / ###" = "标题  ·  循环切换 # / ## / ###";
 "Bold  ·  **text**" = "粗体  ·  **text**";
