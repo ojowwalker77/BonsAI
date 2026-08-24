@@ -2334,11 +2334,12 @@ final class BoardViewModel: ObservableObject {
   /// index — nil restores the default ink. Image cards are untouched.
   func setTintForSelection(_ tint: Int?) {
     let tintable = cards.contains {
-      selectedCardIDs.contains($0.id) && $0.elementKind != .image && $0.tint != tint
+      selectedCardIDs.contains($0.id) && !$0.locked && $0.elementKind != .image && $0.tint != tint
     }
     guard tintable else { return }
     registerUndo()
-    for i in cards.indices where selectedCardIDs.contains(cards[i].id) && cards[i].elementKind != .image {
+    for i in cards.indices where selectedCardIDs.contains(cards[i].id) &&
+      !cards[i].locked && cards[i].elementKind != .image {
       cards[i].tint = tint
     }
     scheduleSave()
@@ -2346,7 +2347,9 @@ final class BoardViewModel: ObservableObject {
 
   /// Tint one card (the text-selection action bar's color control targets the editing card).
   func setTint(_ tint: Int?, for id: UUID) {
-    guard let index = cards.firstIndex(where: { $0.id == id }), cards[index].tint != tint else { return }
+    guard let index = cards.firstIndex(where: { $0.id == id }),
+          !cards[index].locked,
+          cards[index].tint != tint else { return }
     registerUndo()
     cards[index].tint = tint
     scheduleSave()

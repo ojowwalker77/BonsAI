@@ -63,7 +63,11 @@ enum VectorPathControlDrag {
                         zoom: CGFloat,
                         in spec: VectorPathSpec,
                         frame: CGRect) -> VectorPathPlacement? {
-    VectorPathGeometry.moving(
+    // DragGesture(minimumDistance: 0) also ends for a bare control click. Do not feed that through
+    // normalization/refitting: an imported or legacy path may not be tightly fitted, so a zero
+    // translation could otherwise move it and consume an undo step despite no pointer motion.
+    guard screenTranslation.width != 0 || screenTranslation.height != 0 else { return nil }
+    return VectorPathGeometry.moving(
       control,
       nodeAt: index,
       by: boardTranslation(from: screenTranslation, zoom: zoom),

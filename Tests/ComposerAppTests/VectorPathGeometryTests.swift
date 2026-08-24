@@ -184,6 +184,64 @@ final class VectorPathBoardTests: XCTestCase {
     XCTAssertEqual(handleAfter.y, handleBefore.y + boardTranslation.height, accuracy: 0.001)
   }
 
+  func testZeroMotionControlClickDoesNotRefitOrAddUndo() throws {
+    // Deliberately loose legacy/import geometry: refitting these reviewer coordinates would change
+    // both frame and normalization even though a control click has no pointer translation.
+    let original = VectorPathPlacement(
+      frame: CGRect(x: 37, y: 91, width: 311, height: 173),
+      spec: VectorPathSpec(nodes: [
+        VectorPathNode(anchor: CanvasPoint(x: 0.19, y: 0.28)),
+        VectorPathNode(
+          anchor: CanvasPoint(x: 0.76, y: 0.67),
+          incoming: CanvasPoint(x: 0.62, y: 0.49),
+          outgoing: CanvasPoint(x: 0.90, y: 0.85)),
+      ]))
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let id = try XCTUnwrap(board.addVectorPath(original))
+    let before = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+
+    let clickPlacement = VectorPathControlDrag.placement(
+      .anchor,
+      nodeAt: 0,
+      screenTranslation: .zero,
+      zoom: 2.25,
+      in: try XCTUnwrap(before.vectorPath),
+      frame: before.frame)
+
+    XCTAssertNil(clickPlacement)
+    XCTAssertEqual(board.cards.first(where: { $0.id == id }), before)
+    board.undo()
+    XCTAssertFalse(
+      board.cards.contains(where: { $0.id == id }),
+      "one undo must remove the insertion; a zero-motion click must not add an undo checkpoint")
+  }
+
+  func testLockedVectorRejectsGeometryAndTintWithoutAddingUndo() throws {
+    let (board, id, _) = try makeEditingVectorBoard()
+    board.lockSelection(true)
+    let locked = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    let spec = try XCTUnwrap(locked.vectorPath)
+    let moved = try XCTUnwrap(VectorPathControlDrag.placement(
+      .anchor,
+      nodeAt: 0,
+      screenTranslation: CGSize(width: 30, height: -18),
+      zoom: 1.5,
+      in: spec,
+      frame: locked.frame))
+
+    XCTAssertFalse(board.setVectorPath(id, placement: moved))
+    board.setTint(3, for: id)
+    board.setTintForSelection(2)
+    XCTAssertEqual(board.cards.first(where: { $0.id == id }), locked)
+
+    board.undo()
+    let unlocked = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    XCTAssertFalse(unlocked.locked, "one undo must reach the lock action; rejected edits add none")
+    XCTAssertEqual(unlocked.frame, locked.frame)
+    XCTAssertEqual(unlocked.vectorPath, locked.vectorPath)
+    XCTAssertEqual(unlocked.tint, locked.tint)
+  }
+
   private func makeEditingVectorBoard() throws -> (BoardViewModel, UUID, CardState) {
     var draft = VectorPathDraft()
     XCTAssertNil(draft.finish(
