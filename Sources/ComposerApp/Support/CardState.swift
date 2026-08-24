@@ -104,6 +104,9 @@ struct CardState: Codable, Identifiable, Equatable {
   var z: Int
   /// Freehand points are normalized into the element's local 0...1 frame.
   var points: [CanvasPoint]?
+  /// Cubic pen geometry, normalized into the element's local 0...1 frame. Optional so every board
+  /// written before vector paths existed decodes unchanged.
+  var vectorPath: VectorPathSpec?
   /// Reserved for arrow/line binding. Kept optional so the first shape slice stays
   /// backward-compatible while the model can already persist bindings.
   var startBindingID: UUID?
@@ -285,6 +288,7 @@ struct CardState: Codable, Identifiable, Equatable {
        h: Double = Double(CardState.defaultSize.height),
        z: Int = 0,
        points: [CanvasPoint]? = nil,
+       vectorPath: VectorPathSpec? = nil,
        startBindingID: UUID? = nil,
        endBindingID: UUID? = nil,
        groupID: UUID? = nil,
@@ -310,6 +314,7 @@ struct CardState: Codable, Identifiable, Equatable {
     self.h = h
     self.z = z
     self.points = points
+    self.vectorPath = vectorPath
     self.startBindingID = startBindingID
     self.endBindingID = endBindingID
     self.groupID = groupID

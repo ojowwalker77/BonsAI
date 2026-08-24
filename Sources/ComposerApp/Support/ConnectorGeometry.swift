@@ -45,7 +45,8 @@ enum ConnectorGeometry {
     !excluding.contains(card.id) &&
     !card.locked &&
     !isConnector(card) &&
-    card.elementKind != .freehand
+    card.elementKind != .freehand &&
+    card.elementKind != .vectorPath
   }
 
   /// Deterministic placement for a directional quick-connect peer. The edge-to-edge gap remains

@@ -22,6 +22,25 @@ final class NewCanvasElementsTests: XCTestCase {
     XCTAssertNil(card.checklist)
     XCTAssertNil(card.table)
     XCTAssertNil(card.stickyTitle)
+    XCTAssertNil(card.vectorPath)
+  }
+
+  func testVectorPathRoundTripsThroughCardAndBoardPayload() throws {
+    let spec = VectorPathSpec(nodes: [
+      VectorPathNode(anchor: CanvasPoint(x: 0.1, y: 0.8)),
+      VectorPathNode(
+        anchor: CanvasPoint(x: 0.5, y: 0.1),
+        incoming: CanvasPoint(x: 0.3, y: 0.3),
+        outgoing: CanvasPoint(x: 0.7, y: -0.1)),
+      VectorPathNode(anchor: CanvasPoint(x: 0.9, y: 0.8)),
+    ], isClosed: true)
+    let card = CardState(kind: .vectorPath, x: 10, y: 20, w: 240, h: 160, vectorPath: spec)
+
+    let encoded = try BoardPayload.encode(cards: [card])
+    let decoded = try BoardPayload.decode(encoded)
+
+    XCTAssertEqual(decoded.cards, [card])
+    XCTAssertTrue(decoded.opaqueCards.isEmpty)
   }
 
   func testStickyTitleAndBodyEditAsOneUndoStep() {

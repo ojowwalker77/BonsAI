@@ -1016,7 +1016,7 @@ private struct CanvasElementContent: View {
         case .freehand:
           FreehandShape(points: card.points ?? CardState.defaultFreehandPoints(), tint: tint)
         case .vectorPath:
-          EmptyView()
+          VectorPathShape(spec: card.vectorPath ?? VectorPathSpec(), tint: tint)
         case .image:
           ImageObjectPlaceholder(path: card.imagePath)
             .overlay(alignment: .bottomTrailing) {
@@ -1499,6 +1499,29 @@ private struct FreehandShape: View {
         for point in mapped.dropFirst() { path.addLine(to: point) }
       }
       .stroke(tint ?? Theme.Palette.elementStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
+    }
+  }
+}
+
+private struct VectorPathShape: View {
+  let spec: VectorPathSpec
+  var tint: Color?
+
+  var body: some View {
+    GeometryReader { geo in
+      let path = Path(VectorPathGeometry.path(
+        for: spec,
+        in: CGRect(origin: .zero, size: geo.size)))
+      ZStack {
+        if spec.isClosed {
+          path.fill(tint.map { $0.opacity(Theme.flavor.isDark ? 0.13 : 0.08) }
+                    ?? Theme.Palette.elementFill)
+        }
+        path.stroke(
+          tint ?? Theme.Palette.elementStroke,
+          style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      }
       .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
     }
   }

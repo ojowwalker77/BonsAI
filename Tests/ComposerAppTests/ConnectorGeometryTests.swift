@@ -3,6 +3,25 @@ import XCTest
 @testable import ComposerApp
 
 final class ConnectorGeometryTests: XCTestCase {
+  func testVectorPathsAreNeverConnectorBindingTargets() {
+    let vector = CardState(
+      kind: .vectorPath,
+      x: 20,
+      y: 30,
+      w: 200,
+      h: 120,
+      vectorPath: VectorPathSpec(nodes: [
+        VectorPathNode(anchor: CanvasPoint(x: 0.1, y: 0.9)),
+        VectorPathNode(anchor: CanvasPoint(x: 0.5, y: 0.1)),
+        VectorPathNode(anchor: CanvasPoint(x: 0.9, y: 0.9)),
+      ], isClosed: true))
+
+    XCTAssertNil(ConnectorGeometry.bindingTarget(
+      at: CGPoint(x: vector.frame.midX, y: vector.frame.midY),
+      among: [vector],
+      excluding: []))
+  }
+
   func testEndpointDragTranslationIsConvertedFromScreenToBoardAtZoom() {
     let moved = ConnectorEndpointDrag.boardPoint(
       from: CGPoint(x: 80, y: 120),
