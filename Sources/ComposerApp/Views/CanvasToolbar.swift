@@ -11,6 +11,7 @@ enum CanvasTool: Equatable {
   case line
   case arrow
   case freehand
+  case vectorPen
   case equation
   case image
   case sticky
@@ -27,6 +28,7 @@ enum CanvasTool: Equatable {
     case .line: .line
     case .arrow: .arrow
     case .freehand: .freehand
+    case .vectorPen: .vectorPath
     case .equation: .equation
     case .image: .image
     case .sticky: .sticky
@@ -51,11 +53,11 @@ enum CanvasTool: Equatable {
   var constrainsToAxis: Bool { elementKind?.constrainsToAxis ?? false }
 
   /// Tools that naturally create a run of peer elements. Text, equations, images, and structured
-  /// cards open an editor/chooser and remain one-shot. Add a future pen tool here to inherit the
-  /// same visible latch and post-commit policy.
+  /// cards open an editor/chooser and remain one-shot. Pen crosses this same policy after its
+  /// multi-click draft commits.
   var isRepeatableDrawingTool: Bool {
     switch self {
-    case .rectangle, .ellipse, .diamond, .line, .arrow, .freehand: true
+    case .rectangle, .ellipse, .diamond, .line, .arrow, .freehand, .vectorPen: true
     default: false
     }
   }
@@ -91,6 +93,8 @@ struct CanvasToolbar: View {
                  active: tool == .arrow, shortcut: 7) { tool = .arrow }
       ToolButton(symbol: "scribble.variable", help: "Freehand stroke  ·  drag to draw  8".localizedUI,
                  active: tool == .freehand, shortcut: 8) { tool = .freehand }
+      ToolButton(symbol: "pencil.tip", help: "Pen  ·  click corners, drag curves, Return commits".localizedUI,
+                 active: tool == .vectorPen) { tool = .vectorPen }
       ToolButton(symbol: "x.squareroot", help: "Equation  ·  click the board, then type LaTeX  9".localizedUI,
                  active: tool == .equation, shortcut: 9) { tool = .equation }
       Menu {

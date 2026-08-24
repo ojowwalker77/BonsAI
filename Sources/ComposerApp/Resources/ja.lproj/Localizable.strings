@@ -382,6 +382,7 @@
 "Line  ·  drag to draw  6" = "線  ·  ドラッグして描画  6";
 "Arrow  ·  drag to draw  7" = "矢印  ·  ドラッグして描画  7";
 "Freehand stroke  ·  drag to draw  8" = "フリーハンド  ·  ドラッグして描画  8";
+"Pen  ·  click corners, drag curves, Return commits" = "ペン  ·  クリックで角、ドラッグで曲線、Return で確定";
 "Equation  ·  click the board, then type LaTeX  9" = "方程式  ·  ボードをクリックして LaTeX を入力  9";
 "Heading  ·  cycles # / ## / ###" = "見出し  ·  # / ## / ### を切り替え";
 "Bold  ·  **text**" = "太字  ·  **text**";
@@ -521,7 +522,7 @@
 "Drawing" = "描画";
 "How the board behaves while you draw." = "描画中のボードの動作を設定します。";
 "Continuous drawing" = "連続描画";
-"Keep shape, line, and freehand tools active after drawing. Esc returns to Select." = "図形、線、フリーハンドの描画後もツールを選択したままにします。Esc で選択ツールに戻ります。";
+"Keep shape, line, freehand, and pen tools active after drawing. Esc returns to Select." = "図形、線、フリーハンド、ペンの描画後もツールを選択したままにします。Esc で選択ツールに戻ります。";
 "Drawing tool stays active · click to use once" = "描画ツールを固定中 · クリックして1回だけ使用";
 "Drawing tool is one-shot · click to keep active" = "描画ツールは1回だけ · クリックして固定";
 "Snap sketches into shapes" = "スケッチを図形にスナップ";

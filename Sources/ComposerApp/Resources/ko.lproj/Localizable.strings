@@ -382,6 +382,7 @@
 "Line  ·  drag to draw  6" = "선  ·  드래그하여 그리기  6";
 "Arrow  ·  drag to draw  7" = "화살표  ·  드래그하여 그리기  7";
 "Freehand stroke  ·  drag to draw  8" = "자유 곡선  ·  드래그하여 그리기  8";
+"Pen  ·  click corners, drag curves, Return commits" = "펜  ·  클릭으로 모서리, 드래그로 곡선, Return으로 완료";
 "Equation  ·  click the board, then type LaTeX  9" = "수식  ·  보드를 클릭한 뒤 LaTeX 입력  9";
 "Heading  ·  cycles # / ## / ###" = "제목  ·  # / ## / ### 순환";
 "Bold  ·  **text**" = "굵게  ·  **text**";
@@ -521,7 +522,7 @@
 "Drawing" = "그리기";
 "How the board behaves while you draw." = "그리는 동안 보드의 동작 방식을 설정합니다.";
 "Continuous drawing" = "연속 그리기";
-"Keep shape, line, and freehand tools active after drawing. Esc returns to Select." = "도형, 선, 자유형 도구를 그린 뒤에도 활성 상태로 유지합니다. Esc를 누르면 선택 도구로 돌아갑니다.";
+"Keep shape, line, freehand, and pen tools active after drawing. Esc returns to Select." = "도형, 선, 자유형, 펜 도구를 그린 뒤에도 활성 상태로 유지합니다. Esc를 누르면 선택 도구로 돌아갑니다.";
 "Drawing tool stays active · click to use once" = "그리기 도구 고정됨 · 클릭하여 한 번만 사용";
 "Drawing tool is one-shot · click to keep active" = "그리기 도구 한 번만 사용 · 클릭하여 고정";
 "Snap sketches into shapes" = "스케치를 도형으로 스냅";

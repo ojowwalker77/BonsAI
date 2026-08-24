@@ -669,7 +669,8 @@ final class BoardViewModel: ObservableObject {
   /// keep the two points as their endpoints; boxes use the bounding frame. Clamped to a minimum.
   @discardableResult
   func addDrawnElement(_ kind: CanvasElementKind, from start: CGPoint, to end: CGPoint) -> UUID? {
-    guard kind != .text, kind != .freehand, kind != .image, kind != .equation, kind != .graph else { return nil }
+    guard kind != .text, kind != .freehand, kind != .vectorPath, kind != .image,
+          kind != .equation, kind != .graph else { return nil }
     registerUndo()
     let isLine = (kind == .line || kind == .arrow)
     let minSize = isLine ? CardState.lineMinSize : CardState.shapeMinSize
@@ -721,6 +722,36 @@ final class BoardViewModel: ObservableObject {
       whoWrote: nextAuthor,
       tint: currentTint
     )
+    nextZ += 1
+    cards.append(card)
+    interactions[card.id] = CardInteraction(card)
+    selectedCardIDs = [card.id]
+    primarySelectedCardID = card.id
+    editingCardID = nil
+    invalidateBoardTextContext()
+    scheduleSave()
+    return card.id
+  }
+
+  @discardableResult
+  func addVectorPath(_ placement: VectorPathPlacement) -> UUID? {
+    let minimumNodes = placement.spec.isClosed ? 3 : 2
+    guard placement.spec.nodes.count >= minimumNodes,
+          placement.frame.width.isFinite,
+          placement.frame.height.isFinite,
+          placement.frame.width > 0,
+          placement.frame.height > 0 else { return nil }
+    registerUndo()
+    let card = CardState(
+      kind: .vectorPath,
+      x: placement.frame.minX,
+      y: placement.frame.minY,
+      w: placement.frame.width,
+      h: placement.frame.height,
+      z: nextZ,
+      vectorPath: placement.spec,
+      whoWrote: nextAuthor,
+      tint: currentTint)
     nextZ += 1
     cards.append(card)
     interactions[card.id] = CardInteraction(card)

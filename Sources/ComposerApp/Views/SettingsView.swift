@@ -697,7 +697,7 @@ private struct SettingsContent: View {
             Text("Continuous drawing".localizedUI)
               .font(.callout.weight(.semibold))
               .foregroundStyle(Theme.Palette.body)
-            Text("Keep shape, line, and freehand tools active after drawing. Esc returns to Select.".localizedUI)
+            Text("Keep shape, line, freehand, and pen tools active after drawing. Esc returns to Select.".localizedUI)
               .font(.caption)
               .foregroundStyle(Theme.Palette.menuDesc)
           }

@@ -231,4 +231,12 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
       .windowDismissal
     )
   }
+
+  func testEscapeCancelsInProgressVectorDraftBeforeLeavingTheTool() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasDrawingDraft: true,
+        hasActiveTool: true)),
+      .drawingDraft)
+  }
 }

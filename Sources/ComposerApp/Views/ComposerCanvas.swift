@@ -39,6 +39,7 @@ struct ComposerCanvas: View {
   /// fires for external content).
   @State private var isImageDropTargeted = false
   @State private var freehandDraft: [CGPoint]?
+  @State private var vectorDraft: VectorPathDraft?
   @State private var elementDraft: DragSegment?
   /// While drawing a line/arrow, the card its live end will bind to on release — highlighted so the
   /// bind is visible before commit. Shares `board.bindCandidate` with the commit path, so the
@@ -227,7 +228,10 @@ struct ComposerCanvas: View {
     }
     .onChange(of: inner) { _, value in lastViewportSize = value }
     // Promotion lifecycle: a tool change starts a fresh intent, so any live chip is stale.
-    .onChange(of: tool) { _, _ in dismissPromotion() }
+    .onChange(of: tool) { _, selectedTool in
+      dismissPromotion()
+      if selectedTool != .vectorPen { vectorDraft = nil }
+    }
     // Editing a card owns the screen; while a stage is open the chip must not hover behind it. When
     // a text card's edit session ENDS (editingCardID → nil), evaluate it for a text promotion.
     .onChange(of: board.editingCardID) { previous, current in
@@ -381,6 +385,10 @@ struct ComposerCanvas: View {
         onSelectionEnded: selectCards(inViewportRect:modifiers:),
         onFreehandChanged: { freehandDraft = $0; if promotion != nil { dismissPromotion() } },
         onFreehandEnded: commitFreehandDraft,
+        onVectorNodeChanged: updateVectorNode,
+        onVectorNodeEnded: finishVectorNode,
+        onVectorHoverChanged: updateVectorHover,
+        onVectorCommitOpen: commitOpenVectorDraft,
         onElementDraftChanged: onElementDraftChanged,
         onElementDraftEnded: commitElementDraft,
         onElementDraftCancelled: { elementDraft = nil; bindTargetID = nil },
@@ -431,6 +439,7 @@ struct ComposerCanvas: View {
 
       selectionRectView
       freehandDraftView
+      vectorDraftView
       elementDraftView
       snapGuidesOverlay
 
@@ -585,6 +594,38 @@ struct ComposerCanvas: View {
     }
   }
 
+  @ViewBuilder
+  private var vectorDraftView: some View {
+    if let draft = vectorDraft {
+      let transform = CGAffineTransform(
+        a: effectiveScale,
+        b: 0,
+        c: 0,
+        d: effectiveScale,
+        tx: pan.width + panLive.width,
+        ty: pan.height + panLive.height)
+      Path(draft.previewPath)
+        .applying(transform)
+        .stroke(
+          currentTintColor ?? Theme.Palette.inkStroke,
+          style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+        .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
+        .allowsHitTesting(false)
+
+      ForEach(Array(draft.anchorPoints.enumerated()), id: \.offset) { index, point in
+        Circle()
+          .fill(index == 0 ? Theme.Palette.accent : Theme.Palette.labelChipFill)
+          .overlay(Circle().strokeBorder(Theme.Palette.accent, lineWidth: 1.5))
+          .frame(width: index == 0 && draft.nodeCount >= 3 ? 10 : 8,
+                 height: index == 0 && draft.nodeCount >= 3 ? 10 : 8)
+          .position(
+            x: point.x * effectiveScale + pan.width + panLive.width,
+            y: point.y * effectiveScale + pan.height + panLive.height)
+          .allowsHitTesting(false)
+      }
+    }
+  }
+
   /// The active tint resolved against the current flavor (nil = default ink).
   private var currentTintColor: Color? {
     guard let slot = board.currentTint, Theme.flavor.tints.indices.contains(slot) else { return nil }
@@ -602,7 +643,7 @@ struct ComposerCanvas: View {
     // A bare click with a line/arrow/freehand tool places nothing (no default diagonal shape drops
     // out of nowhere) and keeps the tool active so the next drag draws. Only box shapes and text
     // are click-to-place; lines are drawn by dragging start→end.
-    if kind == .line || kind == .arrow || kind == .freehand { return }
+    if kind == .line || kind == .arrow || kind == .freehand || kind == .vectorPath { return }
     let boardPoint = CGPoint(x: (point.x - pan.width) / effectiveScale,
                              y: (point.y - pan.height) / effectiveScale)
     let id = board.addElement(kind, at: boardPoint)
@@ -697,6 +738,45 @@ struct ComposerCanvas: View {
         offerFreehandPromotion(id, boardPoints: boardPoints)
       }
     }
+  }
+
+  private func updateVectorNode(_ viewportAnchor: CGPoint, _ viewportDrag: CGPoint) {
+    if promotion != nil { dismissPromotion() }
+    var draft = vectorDraft ?? VectorPathDraft()
+    draft.update(
+      anchor: boardPoint(forViewport: viewportAnchor),
+      drag: boardPoint(forViewport: viewportDrag))
+    vectorDraft = draft
+  }
+
+  private func finishVectorNode(_ viewportAnchor: CGPoint, _ viewportDrag: CGPoint) {
+    guard var draft = vectorDraft else { return }
+    let placement = draft.finish(
+      anchor: boardPoint(forViewport: viewportAnchor),
+      drag: boardPoint(forViewport: viewportDrag),
+      closeTolerance: 10 / max(effectiveScale, 0.01))
+    if let placement {
+      commitVectorPlacement(placement)
+    } else {
+      vectorDraft = draft
+    }
+  }
+
+  private func updateVectorHover(_ viewportPoint: CGPoint?) {
+    guard var draft = vectorDraft else { return }
+    draft.hover(at: viewportPoint.map(boardPoint(forViewport:)))
+    vectorDraft = draft
+  }
+
+  private func commitOpenVectorDraft() {
+    guard let placement = vectorDraft?.commitOpen() else { return }
+    commitVectorPlacement(placement)
+  }
+
+  private func commitVectorPlacement(_ placement: VectorPathPlacement) {
+    vectorDraft = nil
+    guard board.addVectorPath(placement) != nil else { return }
+    tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
   }
 
   private func selectCards(inViewportRect rect: CGRect, modifiers: EventModifiers) {
@@ -1555,7 +1635,7 @@ struct ComposerCanvas: View {
       hasAgent: showAgent,
       hasSettings: store.isSettingsOpen,
       hasActiveEditor: board.editingInteraction != nil,
-      hasDrawingDraft: elementDraft != nil || freehandDraft != nil,
+      hasDrawingDraft: elementDraft != nil || freehandDraft != nil || vectorDraft != nil,
       hasTintPicker: tintPickerOpen,
       hasActiveTool: tool != .select,
       hasSelection: !board.selectedCardIDs.isEmpty
@@ -1585,6 +1665,7 @@ struct ComposerCanvas: View {
       // commit after this preview state is cleared.
       elementDraft = nil
       freehandDraft = nil
+      vectorDraft = nil
       bindTargetID = nil
       tool = .select
     case .tintPicker:
@@ -2327,6 +2408,10 @@ private struct BoardViewportInput: NSViewRepresentable {
   let onSelectionEnded: (CGRect, EventModifiers) -> Void
   let onFreehandChanged: ([CGPoint]?) -> Void
   let onFreehandEnded: ([CGPoint]) -> Void
+  let onVectorNodeChanged: (CGPoint, CGPoint) -> Void
+  let onVectorNodeEnded: (CGPoint, CGPoint) -> Void
+  let onVectorHoverChanged: (CGPoint?) -> Void
+  let onVectorCommitOpen: () -> Void
   let onElementDraftChanged: (CGPoint, CGPoint) -> Void
   let onElementDraftEnded: (CGPoint, CGPoint) -> Void
   let onElementDraftCancelled: () -> Void
@@ -2355,6 +2440,10 @@ private struct BoardViewportInput: NSViewRepresentable {
       onSelectionEnded: onSelectionEnded,
       onFreehandChanged: onFreehandChanged,
       onFreehandEnded: onFreehandEnded,
+      onVectorNodeChanged: onVectorNodeChanged,
+      onVectorNodeEnded: onVectorNodeEnded,
+      onVectorHoverChanged: onVectorHoverChanged,
+      onVectorCommitOpen: onVectorCommitOpen,
       onElementDraftChanged: onElementDraftChanged,
       onElementDraftEnded: onElementDraftEnded,
       onElementDraftCancelled: onElementDraftCancelled,
@@ -2375,6 +2464,10 @@ private struct BoardViewportInput: NSViewRepresentable {
       var onSelectionEnded: (CGRect, EventModifiers) -> Void = { _, _ in }
       var onFreehandChanged: ([CGPoint]?) -> Void = { _ in }
       var onFreehandEnded: ([CGPoint]) -> Void = { _ in }
+      var onVectorNodeChanged: (CGPoint, CGPoint) -> Void = { _, _ in }
+      var onVectorNodeEnded: (CGPoint, CGPoint) -> Void = { _, _ in }
+      var onVectorHoverChanged: (CGPoint?) -> Void = { _ in }
+      var onVectorCommitOpen: () -> Void = {}
       var onElementDraftChanged: (CGPoint, CGPoint) -> Void = { _, _ in }
       var onElementDraftEnded: (CGPoint, CGPoint) -> Void = { _, _ in }
       var onElementDraftCancelled: () -> Void = {}
@@ -2388,6 +2481,7 @@ private struct BoardViewportInput: NSViewRepresentable {
       case maybeTap
       case selecting
       case drawing
+      case vectorDrawing
       case placing
       case panning
     }
@@ -2416,6 +2510,7 @@ private struct BoardViewportInput: NSViewRepresentable {
     /// preview and the pending mouse-up commits nothing. Reset on the next `mouseDown`.
     private var draftCancelled = false
     private var escapeObserver: NSObjectProtocol?
+    private var pointerTrackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
       super.init(frame: frameRect)
@@ -2435,10 +2530,22 @@ private struct BoardViewportInput: NSViewRepresentable {
       if let escapeObserver { NotificationCenter.default.removeObserver(escapeObserver) }
     }
 
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      if let pointerTrackingArea { removeTrackingArea(pointerTrackingArea) }
+      let area = NSTrackingArea(
+        rect: .zero,
+        options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+        owner: self,
+        userInfo: nil)
+      addTrackingArea(area)
+      pointerTrackingArea = area
+    }
+
     /// Abandon a placing/freehand drag in progress (Esc). Leaves the mode intact so the eventual
     /// mouse-up still tears the gesture down cleanly, but flags it so nothing is committed.
     private func cancelActiveDraft() {
-      guard dragMode == .placing || dragMode == .drawing else { return }
+      guard dragMode == .placing || dragMode == .drawing || dragMode == .vectorDrawing else { return }
       draftCancelled = true
       freehandPoints = []
       state.onFreehandChanged(nil)
@@ -2447,6 +2554,15 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+
+    override func mouseMoved(with event: NSEvent) {
+      guard state.tool == .vectorPen, !state.isSpacePressed else { return }
+      state.onVectorHoverChanged(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+      if state.tool == .vectorPen { state.onVectorHoverChanged(nil) }
+    }
 
     // Cursor feedback for the current mode: a closed grab while actually panning (space + drag), an
     // open grab while space is merely held (pan is armed), and a crosshair for every drawing tool so
@@ -2472,6 +2588,9 @@ private struct BoardViewportInput: NSViewRepresentable {
       state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
       state.onElementDraftCancelled()
+      if state.tool == .vectorPen, !state.isSpacePressed {
+        state.onVectorNodeChanged(point, point)
+      }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -2489,6 +2608,8 @@ private struct BoardViewportInput: NSViewRepresentable {
           dragMode = .drawing
           freehandPoints = [start]
           state.onFreehandChanged(freehandPoints)
+        } else if state.tool == .vectorPen {
+          dragMode = .vectorDrawing
         } else if state.tool.placesByDragging {
           dragMode = .placing
         } else {
@@ -2506,6 +2627,8 @@ private struct BoardViewportInput: NSViewRepresentable {
           freehandPoints.append(point)
           state.onFreehandChanged(freehandPoints)
         }
+      case .vectorDrawing:
+        state.onVectorNodeChanged(start, point)
       case .placing:
         state.onElementDraftChanged(start, constrained(point, from: start, flags: event.modifierFlags))
       case .panning:
@@ -2556,7 +2679,13 @@ private struct BoardViewportInput: NSViewRepresentable {
 
       switch dragMode {
       case .maybeTap:
-        if dragClickCount >= 2 { state.onDoubleTap(start) } else { state.onTap(start, dragModifiers) }
+        if state.tool == .vectorPen {
+          state.onVectorNodeEnded(start, start)
+        } else if dragClickCount >= 2 {
+          state.onDoubleTap(start)
+        } else {
+          state.onTap(start, dragModifiers)
+        }
       case .selecting:
         if distance < 5 {
           state.onSelectionChanged(nil)
@@ -2567,6 +2696,8 @@ private struct BoardViewportInput: NSViewRepresentable {
       case .drawing:
         if freehandPoints.last != point { freehandPoints.append(point) }
         state.onFreehandEnded(freehandPoints)
+      case .vectorDrawing:
+        state.onVectorNodeEnded(start, point)
       case .placing:
         if distance < 5 {
           // A bare click (no real drag). `onTap` → `handleTap` decides per tool whether to place:
@@ -2599,8 +2730,16 @@ private struct BoardViewportInput: NSViewRepresentable {
       // Panning mid-draw would shift the board out from under a draft whose start point was captured
       // at the old pan, so the committed shape lands away from the preview. Swallow scroll-pan while
       // a shape/freehand drag is live; two-finger pan resumes the moment the draw ends.
-      if dragMode == .placing || dragMode == .drawing { return }
+      if dragMode == .placing || dragMode == .drawing || dragMode == .vectorDrawing { return }
       state.onScroll(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY))
+    }
+
+    override func keyDown(with event: NSEvent) {
+      if state.tool == .vectorPen, event.keyCode == 36 {
+        state.onVectorCommitOpen()
+        return
+      }
+      super.keyDown(with: event)
     }
 
     private static func normalizedRect(from start: CGPoint, to end: CGPoint) -> CGRect {

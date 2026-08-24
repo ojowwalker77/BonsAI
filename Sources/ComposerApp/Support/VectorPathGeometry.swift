@@ -64,6 +64,12 @@ struct VectorPathDraft: Equatable {
     preview = VectorPathGeometry.node(anchor: anchor, drag: drag)
   }
 
+  /// Track the pointer between clicks so the unfinished final segment rubber-bands from the last
+  /// committed node. Before the first node (or after leaving the canvas) there is no preview.
+  mutating func hover(at point: CGPoint?) {
+    preview = nodes.isEmpty ? nil : point.map { VectorPathGeometry.node(anchor: $0, drag: $0) }
+  }
+
   /// Finish one pointer gesture. Clicking the first anchor closes when at least three committed
   /// nodes exist; otherwise the new corner/smooth node becomes part of the open draft.
   mutating func finish(anchor: CGPoint,

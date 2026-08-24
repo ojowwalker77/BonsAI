@@ -32,6 +32,20 @@ final class VectorPathGeometryTests: XCTestCase {
     XCTAssertEqual(closed.spec.nodes.count, 3)
   }
 
+  func testHoverRubberBandsFromLastCommittedNode() {
+    var draft = VectorPathDraft()
+    XCTAssertNil(draft.finish(anchor: CGPoint(x: 20, y: 30), drag: CGPoint(x: 20, y: 30), closeTolerance: 8))
+    draft.hover(at: CGPoint(x: 90, y: 75))
+
+    XCTAssertEqual(draft.previewPath.currentPoint.x, 90, accuracy: 0.001)
+    XCTAssertEqual(draft.previewPath.currentPoint.y, 75, accuracy: 0.001)
+    XCTAssertEqual(draft.anchorPoints.last, CGPoint(x: 90, y: 75))
+
+    draft.hover(at: nil)
+    XCTAssertEqual(draft.previewPath.currentPoint.x, 20, accuracy: 0.001)
+    XCTAssertEqual(draft.previewPath.currentPoint.y, 30, accuracy: 0.001)
+  }
+
   func testPlacementNormalizesEveryAnchorAndHandle() throws {
     var draft = VectorPathDraft()
     XCTAssertNil(draft.finish(anchor: CGPoint(x: -40, y: 12), drag: CGPoint(x: -55, y: 30), closeTolerance: 8))
@@ -68,5 +82,27 @@ final class VectorPathGeometryTests: XCTestCase {
   func testMissingClosedFlagDecodesAsOpen() throws {
     let data = Data(#"{"nodes":[]}"#.utf8)
     XCTAssertFalse(try JSONDecoder().decode(VectorPathSpec.self, from: data).isClosed)
+  }
+}
+
+@MainActor
+final class VectorPathBoardTests: XCTestCase {
+  func testPlacementUsesCurrentTintAndUndoesAsOneInsertion() throws {
+    var draft = VectorPathDraft()
+    XCTAssertNil(draft.finish(anchor: CGPoint(x: 10, y: 20), drag: CGPoint(x: 10, y: 20), closeTolerance: 8))
+    XCTAssertNil(draft.finish(anchor: CGPoint(x: 150, y: 90), drag: CGPoint(x: 170, y: 100), closeTolerance: 8))
+    let placement = try XCTUnwrap(draft.commitOpen())
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    board.currentTint = 2
+
+    let id = try XCTUnwrap(board.addVectorPath(placement))
+
+    let card = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    XCTAssertEqual(card.elementKind, .vectorPath)
+    XCTAssertEqual(card.vectorPath, placement.spec)
+    XCTAssertEqual(card.tint, 2)
+    XCTAssertEqual(board.selectedCardIDs, [id])
+    board.undo()
+    XCTAssertFalse(board.cards.contains(where: { $0.id == id }))
   }
 }

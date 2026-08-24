@@ -7,7 +7,7 @@ final class CanvasToolPersistenceTests: XCTestCase {
   }
 
   func testOnlyRepeatableDrawingToolsCanStayActive() {
-    let repeatable: [CanvasTool] = [.rectangle, .ellipse, .diamond, .line, .arrow, .freehand]
+    let repeatable: [CanvasTool] = [.rectangle, .ellipse, .diamond, .line, .arrow, .freehand, .vectorPen]
     let oneShot: [CanvasTool] = [.select, .text, .equation, .image, .sticky, .checklist, .table]
 
     for tool in repeatable {
