@@ -125,15 +125,13 @@ enum ConnectorGeometry {
     var anchoredConnector = connector
     let opposite = endpoint.opposite
     // Programmatic connectors intentionally start anchor-less so they route center-to-center. Once
-    // a user edits one endpoint, freeze the untouched end at its current boundary spot; otherwise
-    // changing the segment direction would visibly slide both ends during a one-handle gesture.
+    // a user edits one endpoint, freeze the untouched end at its exact resolved point — including
+    // the arrow-tip clearance outside the target boundary. A normalized anchor may therefore sit
+    // just outside 0...1; clamping here would move an untouched arrow end by seven points.
     if bindingAnchor(opposite, on: anchoredConnector) == nil,
        let targetID = bindingID(opposite, on: anchoredConnector),
        let target = cards.first(where: { $0.id == targetID }) {
-      let frozen = bindingAnchor(
-        on: target.frame,
-        drawn: resolved[opposite],
-        otherEnd: boardPoint)
+      let frozen = preservingAnchor(on: target.frame, at: resolved[opposite])
       setBinding(targetID, anchor: frozen, endpoint: opposite, on: &anchoredConnector)
     }
     resolved[endpoint] = boardPoint
@@ -286,6 +284,14 @@ enum ConnectorGeometry {
         y: min(max(drawn.y, frame.minY), frame.maxY))
     }
     return CanvasPoint(
+      x: Double((point.x - frame.minX) / max(frame.width, 1)),
+      y: Double((point.y - frame.minY) / max(frame.height, 1)))
+  }
+
+  /// Encode an already-resolved endpoint without projecting it back onto the target. Unlike a newly
+  /// drawn binding anchor, this may be slightly outside 0...1 to retain line/arrow clearance.
+  private static func preservingAnchor(on frame: CGRect, at point: CGPoint) -> CanvasPoint {
+    CanvasPoint(
       x: Double((point.x - frame.minX) / max(frame.width, 1)),
       y: Double((point.y - frame.minY) / max(frame.height, 1)))
   }

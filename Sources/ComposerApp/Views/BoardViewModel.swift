@@ -2044,17 +2044,37 @@ final class BoardViewModel: ObservableObject {
       if a.y != b.y { return a.y < b.y }
       return a.x < b.x
     }
-    for original in ordered {
+    // Build the whole plan before materializing any card so connectors can remap bindings regardless
+    // of z-order. Keep a distinct new id per occurrence (bulk callers may repeat a seed card), while
+    // bindings resolve to the first copied occurrence of their target's old id. References to targets
+    // outside `source` are deliberately detached: this same seam serves cross-board paste, where
+    // retaining an old UUID could silently bind to unrelated data.
+    let copyPlan = ordered.map { (original: $0, copiedID: UUID()) }
+    var firstCopiedID: [UUID: UUID] = [:]
+    for item in copyPlan where firstCopiedID[item.original.id] == nil {
+      firstCopiedID[item.original.id] = item.copiedID
+    }
+    for item in copyPlan {
+      let original = item.original
       var copy = original
-      copy.id = UUID()
+      copy.id = item.copiedID
       copy.x += Double(offset.width)
       copy.y += Double(offset.height)
       copy.z = nextZ
       copy.whoWrote = nextAuthor
-      copy.startBindingID = nil
-      copy.endBindingID = nil
-      copy.startBindingAnchor = nil
-      copy.endBindingAnchor = nil
+      if let target = original.startBindingID, let copiedTarget = firstCopiedID[target] {
+        copy.startBindingID = copiedTarget
+        // The normalized anchor remains valid because every copied target preserves its size.
+      } else {
+        copy.startBindingID = nil
+        copy.startBindingAnchor = nil
+      }
+      if let target = original.endBindingID, let copiedTarget = firstCopiedID[target] {
+        copy.endBindingID = copiedTarget
+      } else {
+        copy.endBindingID = nil
+        copy.endBindingAnchor = nil
+      }
       if copy.elementKind == .image, let path = copy.imagePath {
         copy.imagePath = Self.storedImagePath(for: path)
       }
@@ -2063,6 +2083,7 @@ final class BoardViewModel: ObservableObject {
       interactions[copy.id] = CardInteraction(copy)
       ids.append(copy.id)
     }
+    refreshBoundConnectors()
     selectedCardIDs = Set(ids)
     primarySelectedCardID = ids.last
     editingCardID = nil
@@ -2080,7 +2101,7 @@ final class BoardViewModel: ObservableObject {
       cards[i].x += Double(delta.width)
       cards[i].y += Double(delta.height)
     }
-    detachMovedConnectors(moving)
+    detachBindingsWhoseTargetsDidNotMove(with: moving)
     refreshBoundConnectors()
     scheduleSave()
   }
@@ -2178,7 +2199,7 @@ final class BoardViewModel: ObservableObject {
       cards[i].y += Double(delta.height)
     }
     absorbMovedEquationIntoTopmostGraphIfNeeded(ids)
-    detachMovedConnectors(ids)
+    detachBindingsWhoseTargetsDidNotMove(with: ids)
     refreshBoundConnectors()
     scheduleSave()
   }
@@ -2300,12 +2321,19 @@ final class BoardViewModel: ObservableObject {
     if !snapGuides.isEmpty { snapGuides = [] }
   }
 
-  private func detachMovedConnectors(_ ids: Set<UUID>) {
+  /// A connector translated independently of a bound target must detach from that target; otherwise
+  /// refresh would snap it back. When the target moved in the same rigid selection, retain the
+  /// binding so the translated diagram stays a live graph rather than becoming loose strokes.
+  private func detachBindingsWhoseTargetsDidNotMove(with ids: Set<UUID>) {
     for i in cards.indices where ids.contains(cards[i].id) && ConnectorGeometry.isConnector(cards[i]) {
-      cards[i].startBindingID = nil
-      cards[i].endBindingID = nil
-      cards[i].startBindingAnchor = nil
-      cards[i].endBindingAnchor = nil
+      if let target = cards[i].startBindingID, !ids.contains(target) {
+        cards[i].startBindingID = nil
+        cards[i].startBindingAnchor = nil
+      }
+      if let target = cards[i].endBindingID, !ids.contains(target) {
+        cards[i].endBindingID = nil
+        cards[i].endBindingAnchor = nil
+      }
     }
   }
 

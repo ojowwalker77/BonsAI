@@ -96,6 +96,26 @@ final class ConnectorGeometryTests: XCTestCase {
     XCTAssertEqual(arrowEnds.end.x, target.frame.minX - 7, accuracy: 0.001)
   }
 
+  func testMovingProgrammaticArrowStartPreservesUntouchedTipExactly() throws {
+    let source = shape(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+    let target = shape(frame: CGRect(x: 300, y: 0, width: 100, height: 100))
+    let arrow = try XCTUnwrap(ConnectorGeometry.makeBoundConnector(
+      kind: .arrow, text: "", source: source, target: target, z: 1, author: nil))
+    let before = try XCTUnwrap(ConnectorGeometry.endpoints(of: arrow))
+
+    let moved = try XCTUnwrap(ConnectorGeometry.moving(
+      .start,
+      of: arrow,
+      to: CGPoint(x: -80, y: 190),
+      among: [source, target, arrow]))
+    let after = try XCTUnwrap(ConnectorGeometry.endpoints(of: moved))
+
+    XCTAssertEqual(after.end.x, before.end.x, accuracy: 0.001)
+    XCTAssertEqual(after.end.y, before.end.y, accuracy: 0.001)
+    XCTAssertEqual(moved.endBindingID, target.id)
+    XCTAssertNotNil(moved.endBindingAnchor)
+  }
+
   func testDirectionalPeerFrameKeepsDeterministicEdgeGap() {
     let source = CGRect(x: 100, y: 200, width: 180, height: 100)
     let peer = ConnectorGeometry.peerFrame(
@@ -152,11 +172,8 @@ final class ConnectorMutationTests: XCTestCase {
     let changedEndpoints = try endpoints(changed)
     XCTAssertEqual(changed.startBindingID, sourceID)
     XCTAssertEqual(changed.endBindingID, nextTargetID)
-    // The old anchor-less center route freezes to the same boundary spot when endpoint editing
-    // begins. Its former 1pt outside margin collapses onto that boundary, but the handle does not
-    // jump to another side of the source card as the segment direction changes.
-    XCTAssertEqual(changedEndpoints.start.x, originalEndpoints.start.x, accuracy: 1.01)
-    XCTAssertEqual(changedEndpoints.start.y, originalEndpoints.start.y, accuracy: 1.01)
+    XCTAssertEqual(changedEndpoints.start.x, originalEndpoints.start.x, accuracy: 0.001)
+    XCTAssertEqual(changedEndpoints.start.y, originalEndpoints.start.y, accuracy: 0.001)
 
     board.undo()
     XCTAssertEqual(board.cards.first { $0.id == connectorID }, original)
@@ -243,5 +260,124 @@ final class ConnectorMutationTests: XCTestCase {
     board.lockSelection(true)
 
     XCTAssertNil(board.quickConnect(from: sourceID, direction: .down))
+  }
+
+  func testGroupDragPreservesBindingsUndoAndLaterReanchoring() throws {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let sourceID = board.addElement(.rectangle, at: CGPoint(x: 200, y: 200))
+    let targetID = board.addElement(.ellipse, at: CGPoint(x: 600, y: 200))
+    let connectorID = try XCTUnwrap(board.connectCards(from: sourceID, to: targetID))
+    let originalCards = board.cards
+    let originalEndpoints = try endpoints(try XCTUnwrap(board.cards.first { $0.id == connectorID }))
+    board.selectAll()
+
+    let delta = CGSize(width: 37, height: 23)
+    board.updateMovePreview(by: delta)
+    board.finishMovePreview(commit: true)
+
+    let moved = try XCTUnwrap(board.cards.first { $0.id == connectorID })
+    let movedEndpoints = try endpoints(moved)
+    XCTAssertEqual(moved.startBindingID, sourceID)
+    XCTAssertEqual(moved.endBindingID, targetID)
+    XCTAssertEqual(movedEndpoints.start.x - originalEndpoints.start.x, delta.width, accuracy: 0.001)
+    XCTAssertEqual(movedEndpoints.start.y - originalEndpoints.start.y, delta.height, accuracy: 0.001)
+    XCTAssertEqual(movedEndpoints.end.x - originalEndpoints.end.x, delta.width, accuracy: 0.001)
+    XCTAssertEqual(movedEndpoints.end.y - originalEndpoints.end.y, delta.height, accuracy: 0.001)
+
+    board.undo()
+    XCTAssertEqual(board.cards, originalCards)
+    board.redo()
+
+    let target = try XCTUnwrap(board.cards.first { $0.id == targetID })
+    let beforeTargetMove = try endpoints(try XCTUnwrap(board.cards.first { $0.id == connectorID }))
+    board.setFrame(targetID, target.frame.offsetBy(dx: 45, dy: 0))
+    let afterTargetMove = try endpoints(try XCTUnwrap(board.cards.first { $0.id == connectorID }))
+    XCTAssertEqual(board.cards.first { $0.id == connectorID }?.endBindingID, targetID)
+    XCTAssertNotEqual(afterTargetMove.end, beforeTargetMove.end)
+  }
+
+  func testMoveSelectedPreservesBindingsWhenWholeSubgraphMoves() throws {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let sourceID = board.addElement(.rectangle, at: CGPoint(x: 200, y: 200))
+    let targetID = board.addElement(.diamond, at: CGPoint(x: 600, y: 200))
+    let connectorID = try XCTUnwrap(board.connectCards(from: sourceID, to: targetID, kind: .line))
+    let before = board.cards
+    board.selectAll()
+
+    board.moveSelected(by: CGSize(width: -25, height: 40))
+
+    let moved = try XCTUnwrap(board.cards.first { $0.id == connectorID })
+    XCTAssertEqual(moved.startBindingID, sourceID)
+    XCTAssertEqual(moved.endBindingID, targetID)
+    board.undo()
+    XCTAssertEqual(board.cards, before)
+  }
+
+  func testBatchCopyRemapsBindingsToCopiedNodesAndUndoesOnce() throws {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let sourceID = board.addElement(.rectangle, at: CGPoint(x: 200, y: 200))
+    let targetID = board.addElement(.ellipse, at: CGPoint(x: 600, y: 200))
+    _ = try XCTUnwrap(board.connectCards(from: sourceID, to: targetID))
+    let before = board.cards
+    let oldIDs = Set(before.map(\.id))
+
+    let copiedIDs = Set(board.insertCopies(before, offset: CGSize(width: 80, height: 70)))
+    let copiedCards = board.cards.filter { copiedIDs.contains($0.id) }
+    let copiedConnector = try XCTUnwrap(copiedCards.first { ConnectorGeometry.isConnector($0) })
+    let copiedNodeIDs = Set(copiedCards.filter { !ConnectorGeometry.isConnector($0) }.map(\.id))
+
+    XCTAssertTrue(oldIDs.isDisjoint(with: copiedIDs))
+    XCTAssertTrue(copiedNodeIDs.contains(try XCTUnwrap(copiedConnector.startBindingID)))
+    XCTAssertTrue(copiedNodeIDs.contains(try XCTUnwrap(copiedConnector.endBindingID)))
+    board.undo()
+    XCTAssertEqual(board.cards, before)
+  }
+
+  func testCopyDetachesExternalBindingButRetainsInternalAnchor() throws {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let sourceID = board.addElement(.rectangle, at: CGPoint(x: 200, y: 200))
+    let targetID = board.addElement(.ellipse, at: CGPoint(x: 600, y: 200))
+    let source = try XCTUnwrap(board.cards.first { $0.id == sourceID })
+    let target = try XCTUnwrap(board.cards.first { $0.id == targetID })
+    let connectorID = try XCTUnwrap(board.addDrawnElement(
+      .arrow,
+      from: CGPoint(x: source.frame.maxX - 2, y: source.frame.midY),
+      to: CGPoint(x: target.frame.minX + 2, y: target.frame.midY)))
+    let originalConnector = try XCTUnwrap(board.cards.first { $0.id == connectorID })
+
+    let copiedIDs = Set(board.insertCopies(
+      [originalConnector, target],
+      offset: CGSize(width: 60, height: 60)))
+    let copiedCards = board.cards.filter { copiedIDs.contains($0.id) }
+    let copiedConnector = try XCTUnwrap(copiedCards.first { ConnectorGeometry.isConnector($0) })
+    let copiedTarget = try XCTUnwrap(copiedCards.first { !ConnectorGeometry.isConnector($0) })
+
+    XCTAssertNil(copiedConnector.startBindingID)
+    XCTAssertNil(copiedConnector.startBindingAnchor)
+    XCTAssertEqual(copiedConnector.endBindingID, copiedTarget.id)
+    XCTAssertEqual(copiedConnector.endBindingAnchor, originalConnector.endBindingAnchor)
+  }
+
+  func testOptionDragCopiesBoundSubgraphAndFoldsMoveIntoOneUndo() throws {
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let sourceID = board.addElement(.rectangle, at: CGPoint(x: 200, y: 200))
+    let targetID = board.addElement(.ellipse, at: CGPoint(x: 600, y: 200))
+    _ = try XCTUnwrap(board.connectCards(from: sourceID, to: targetID))
+    let before = board.cards
+    let oldIDs = Set(before.map(\.id))
+    board.selectAll()
+
+    board.beginDragDuplicate()
+    board.updateMovePreview(by: CGSize(width: 90, height: 55))
+    board.finishMovePreview(commit: true)
+
+    let copies = board.cards.filter { !oldIDs.contains($0.id) }
+    let copiedConnector = try XCTUnwrap(copies.first { ConnectorGeometry.isConnector($0) })
+    let copiedNodeIDs = Set(copies.filter { !ConnectorGeometry.isConnector($0) }.map(\.id))
+    XCTAssertTrue(copiedNodeIDs.contains(try XCTUnwrap(copiedConnector.startBindingID)))
+    XCTAssertTrue(copiedNodeIDs.contains(try XCTUnwrap(copiedConnector.endBindingID)))
+
+    board.undo()
+    XCTAssertEqual(board.cards, before)
   }
 }

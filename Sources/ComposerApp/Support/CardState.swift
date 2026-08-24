@@ -92,10 +92,10 @@ struct CardState: Codable, Identifiable, Equatable {
   /// backward-compatible while the model can already persist bindings.
   var startBindingID: UUID?
   var endBindingID: UUID?
-  /// WHERE on the bound card this arrow attaches, normalized into that card's frame (0…1 per
-  /// axis). Captured from the drawn stroke, so the arrow lands where it was aimed and keeps that
-  /// attachment as the card moves — instead of re-routing through the card's center ("aim-assist",
-  /// pulled after 1.4.5 feedback). nil (legacy boards, agent connects) = center-ray routing.
+  /// WHERE on the bound card this arrow attaches, normalized into that card's frame. Drawn anchors
+  /// lie on its 0…1 boundary; an endpoint edit may preserve an existing arrow-clearance point just
+  /// outside that range so moving the other handle cannot shift the untouched tip. nil (legacy
+  /// boards, agent connects) = center-ray routing.
   var startBindingAnchor: CanvasPoint?
   var endBindingAnchor: CanvasPoint?
   var groupID: UUID?
