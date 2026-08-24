@@ -125,8 +125,13 @@ enum ComposerEscapeCoordinator {
     if state.hasBoardDeletionConfirmation { return .boardDeletionConfirmation }
     if state.hasBoardRename { return .boardRename }
     // A hover-open picker must not conceal a live Pen/vector gesture from Escape. Cancel the draft
-    // first; with the preview gone, a second press can dismiss the picker in its normal position.
-    if state.hasBoardPicker && state.hasDrawingDraft { return .drawingDraft }
+    // first when the canvas owns it outright, or when it coexists with the inline vector editor.
+    // Text and structured editors retain their established priority over incidental draft state.
+    if state.hasBoardPicker,
+       state.hasDrawingDraft,
+       !state.hasActiveEditor || state.hasActiveVectorEditor {
+      return .drawingDraft
+    }
     if state.hasBoardPicker { return .boardPicker }
     if state.hasCommandPalette { return .commandPalette }
     if state.hasFocusedEditor { return .focusedEditor }

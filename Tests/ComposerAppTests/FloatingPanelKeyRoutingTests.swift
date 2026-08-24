@@ -292,6 +292,18 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     )
   }
 
+  func testEscapeCoordinatorKeepsPickerAheadOfDraftDuringOrdinaryEditing() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasBoardPicker: true,
+        hasActiveEditor: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true
+      )),
+      .boardPicker
+    )
+  }
+
   func testEscapeCoordinatorKeepsCommandPaletteAheadOfDrawingWithoutPicker() {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(
