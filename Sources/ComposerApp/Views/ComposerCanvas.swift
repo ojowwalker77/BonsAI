@@ -1559,17 +1559,29 @@ struct ComposerCanvas: View {
   }
 
   private func handleScroll(_ delta: CGSize) {
-    guard allowPanZoom() else { return }
-    viewportThrottle.enqueueScroll(delta) { applied in
+    guard allowViewportTransform() else { return }
+    viewportThrottle.enqueueScroll(delta, canApply: allowViewportTransform) { applied in
       pan.width += applied.width
       pan.height += applied.height
     }
   }
 
   private func handleZoom(_ factor: CGFloat, anchoredAt point: CGPoint) {
-    viewportThrottle.enqueueZoom(factor, anchoredAt: point) { appliedFactor, anchor in
+    guard allowViewportTransform() else { return }
+    viewportThrottle.enqueueZoom(
+      factor, anchoredAt: point, canApply: allowViewportTransform
+    ) { appliedFactor, anchor in
       zoom(appliedFactor, anchoredAt: anchor)
     }
+  }
+
+  /// Checks both modal editing and pointer ownership. The throttle calls this again immediately
+  /// before applying deferred work: an event accepted just before a drawing press must not move the
+  /// captured viewport transform after that press begins.
+  private func allowViewportTransform() -> Bool {
+    guard CanvasViewportTransformPolicy.allowsPanOrZoom(
+      during: CanvasKeyState.shared.viewportDragMode) else { return false }
+    return allowPanZoom()
   }
 
   private func visibleCards(in viewportSize: CGSize) -> [CardState] {
@@ -2397,7 +2409,7 @@ private struct CanvasDotGrid: View {
 }
 
 @MainActor
-private final class ViewportEventThrottle {
+final class ViewportEventThrottle {
   private var pendingScroll: CGSize = .zero
   private var scrollScheduled = false
   private var pendingZoomFactor: CGFloat = 1
@@ -2405,7 +2417,11 @@ private final class ViewportEventThrottle {
   private var zoomScheduled = false
   private let interval: TimeInterval = 1.0 / 120.0
 
-  func enqueueScroll(_ delta: CGSize, apply: @escaping (CGSize) -> Void) {
+  func enqueueScroll(
+    _ delta: CGSize,
+    canApply: @escaping () -> Bool = { true },
+    apply: @escaping (CGSize) -> Void
+  ) {
     pendingScroll.width += delta.width
     pendingScroll.height += delta.height
     guard !scrollScheduled else { return }
@@ -2415,12 +2431,17 @@ private final class ViewportEventThrottle {
       let value = pendingScroll
       pendingScroll = .zero
       scrollScheduled = false
-      guard value != .zero else { return }
+      guard value != .zero, canApply() else { return }
       apply(value)
     }
   }
 
-  func enqueueZoom(_ factor: CGFloat, anchoredAt point: CGPoint, apply: @escaping (CGFloat, CGPoint) -> Void) {
+  func enqueueZoom(
+    _ factor: CGFloat,
+    anchoredAt point: CGPoint,
+    canApply: @escaping () -> Bool = { true },
+    apply: @escaping (CGFloat, CGPoint) -> Void
+  ) {
     pendingZoomFactor *= factor
     latestZoomAnchor = point
     guard !zoomScheduled else { return }
@@ -2431,7 +2452,7 @@ private final class ViewportEventThrottle {
       let anchor = latestZoomAnchor
       pendingZoomFactor = 1
       zoomScheduled = false
-      guard factor != 1 else { return }
+      guard factor != 1, canApply() else { return }
       apply(factor, anchor)
     }
   }
@@ -2453,19 +2474,31 @@ enum CanvasViewportDragMode: Equatable {
   case maybeTap
   case selecting
   case drawing
+  case vectorPress
   case vectorDrawing
   case placing
   case panning
 }
 
 /// A draft's viewport-to-board conversion is captured when its press begins. Pan or zoom during
-/// these three modes would change that transform before commit and separate result from preview.
+/// these modes would change that transform before commit and separate result from preview.
 enum CanvasViewportTransformPolicy {
   static func allowsPanOrZoom(during mode: CanvasViewportDragMode) -> Bool {
     switch mode {
-    case .drawing, .vectorDrawing, .placing: false
+    case .drawing, .vectorPress, .vectorDrawing, .placing: false
     case .maybeTap, .selecting, .panning: true
     }
+  }
+}
+
+/// Resolves pointer ownership synchronously at mouse-down, before any preview callback fires.
+/// Pen clicks are real vector drafts even when they never cross AppKit's drag threshold, so they
+/// freeze the viewport for the entire press rather than briefly masquerading as a generic tap.
+enum CanvasPointerPressMode {
+  static func resolve(tool: CanvasTool, isSpacePressed: Bool) -> CanvasViewportDragMode {
+    if isSpacePressed { return .panning }
+    if tool == .vectorPen { return .vectorPress }
+    return .maybeTap
   }
 }
 
@@ -2617,7 +2650,8 @@ private struct BoardViewportInput: NSViewRepresentable {
     /// Abandon a placing/freehand drag in progress (Esc). Leaves the mode intact so the eventual
     /// mouse-up still tears the gesture down cleanly, but flags it so nothing is committed.
     private func cancelActiveDraft() {
-      guard dragMode == .placing || dragMode == .drawing || dragMode == .vectorDrawing else { return }
+      guard dragMode == .placing || dragMode == .drawing || dragMode == .vectorPress
+              || dragMode == .vectorDrawing else { return }
       draftCancelled = true
       freehandPoints = []
       state.onFreehandChanged(nil)
@@ -2656,7 +2690,8 @@ private struct BoardViewportInput: NSViewRepresentable {
       lastPan = .zero
       freehandPoints = []
       draftCancelled = false
-      dragMode = state.isSpacePressed ? .panning : .maybeTap
+      dragMode = CanvasPointerPressMode.resolve(
+        tool: state.tool, isSpacePressed: state.isSpacePressed)
       state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
       state.onElementDraftCancelled()
@@ -2673,7 +2708,7 @@ private struct BoardViewportInput: NSViewRepresentable {
       let delta = CGSize(width: point.x - start.x, height: point.y - start.y)
       let distance = hypot(delta.width, delta.height)
 
-      if dragMode == .maybeTap, distance >= 4 {
+      if (dragMode == .maybeTap || dragMode == .vectorPress), distance >= 4 {
         if state.tool == .select {
           dragMode = .selecting
         } else if state.tool == .freehand {
@@ -2690,7 +2725,7 @@ private struct BoardViewportInput: NSViewRepresentable {
       }
 
       switch dragMode {
-      case .maybeTap:
+      case .maybeTap, .vectorPress:
         break
       case .selecting:
         state.onSelectionChanged(Self.normalizedRect(from: start, to: point))
@@ -2750,7 +2785,7 @@ private struct BoardViewportInput: NSViewRepresentable {
       }
 
       switch dragMode {
-      case .maybeTap:
+      case .maybeTap, .vectorPress:
         if state.tool == .vectorPen {
           state.onVectorNodeEnded(start, start)
         } else if dragClickCount >= 2 {

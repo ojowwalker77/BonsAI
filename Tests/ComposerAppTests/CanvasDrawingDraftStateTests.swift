@@ -34,7 +34,9 @@ final class CanvasDrawingDraftStateTests: XCTestCase {
     let originalScale: CGFloat = 1.75
     let originalPan = CGSize(width: 92, height: -41)
 
-    for mode in [CanvasViewportDragMode.placing, .drawing, .vectorDrawing] {
+    for mode in [
+      CanvasViewportDragMode.placing, .drawing, .vectorPress, .vectorDrawing,
+    ] {
       var scale = originalScale
       var pan = originalPan
       if CanvasViewportTransformPolicy.allowsPanOrZoom(during: mode) {
@@ -48,5 +50,45 @@ final class CanvasDrawingDraftStateTests: XCTestCase {
     XCTAssertTrue(CanvasViewportTransformPolicy.allowsPanOrZoom(during: .maybeTap))
     XCTAssertTrue(CanvasViewportTransformPolicy.allowsPanOrZoom(during: .selecting))
     XCTAssertTrue(CanvasViewportTransformPolicy.allowsPanOrZoom(during: .panning))
+  }
+
+  func testClickCreatedVectorNodeFreezesScrollFromMouseDownThroughMouseUp() {
+    let mode = CanvasPointerPressMode.resolve(tool: .vectorPen, isSpacePressed: false)
+    var pan = CGSize(width: 37, height: -12)
+
+    if CanvasViewportTransformPolicy.allowsPanOrZoom(during: mode) {
+      pan.width += 24
+    }
+
+    XCTAssertEqual(mode, .vectorPress)
+    XCTAssertEqual(pan, CGSize(width: 37, height: -12))
+    XCTAssertEqual(
+      CanvasPointerPressMode.resolve(tool: .vectorPen, isSpacePressed: true),
+      .panning,
+      "Space-pan must retain pointer ownership over the selected drawing tool")
+  }
+
+  @MainActor
+  func testQueuedViewportCallbacksAreDroppedWhenVectorPressBegins() async {
+    let throttle = ViewportEventThrottle()
+    var mode = CanvasViewportDragMode.maybeTap
+    var appliedScroll: CGSize?
+    var appliedZoom: (CGFloat, CGPoint)?
+    let canApply = { CanvasViewportTransformPolicy.allowsPanOrZoom(during: mode) }
+
+    throttle.enqueueScroll(CGSize(width: 10, height: -4), canApply: canApply) {
+      appliedScroll = $0
+    }
+    throttle.enqueueZoom(1.2, anchoredAt: CGPoint(x: 40, y: 60), canApply: canApply) {
+      appliedZoom = ($0, $1)
+    }
+
+    // Model the mouse-down that arrives after the events were accepted but before their throttled
+    // callbacks run. Both callbacks must re-check the now-frozen pointer mode.
+    mode = CanvasPointerPressMode.resolve(tool: .vectorPen, isSpacePressed: false)
+    try? await Task.sleep(nanoseconds: 30_000_000)
+
+    XCTAssertNil(appliedScroll)
+    XCTAssertNil(appliedZoom)
   }
 }
