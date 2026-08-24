@@ -3,6 +3,15 @@ import XCTest
 @testable import ComposerApp
 
 final class BoardPickerPresentationTests: XCTestCase {
+  func testChromeTokensPreservePickerRowAndActionGeometry() {
+    XCTAssertEqual(WindowChrome.boardPickerExpandedWidth, 232)
+    XCTAssertEqual(WindowChrome.boardPickerRowHeight, 30)
+    XCTAssertEqual(
+      WindowChrome.boardPickerActionSlotWidth,
+      WindowChrome.rowIconSide * 2 + WindowChrome.itemSpacing)
+    XCTAssertLessThanOrEqual(WindowChrome.rowIconSide, WindowChrome.boardPickerRowHeight)
+  }
+
   func testRowActionsStayVisibleAndEnabledForTheWholeHoverLifetime() {
     var state = BoardPickerRowInteractionState()
     XCTAssertFalse(state.showsActions)
@@ -34,6 +43,9 @@ final class BoardPickerPresentationTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(
       BoardPickerLayoutPolicy.expandedTextBudget(viewportWidth: normalViewportWidth),
       120)
+    XCTAssertEqual(
+      BoardPickerLayoutPolicy.expandedTextBudget(viewportWidth: normalViewportWidth),
+      127)
   }
 
   func testExpandedPickerStaysOutOfReservedActionsAtMinimumWindowWidth() {
@@ -47,6 +59,9 @@ final class BoardPickerPresentationTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(
       BoardPickerLayoutPolicy.expandedTextBudget(viewportWidth: viewportWidth),
       96)
+    XCTAssertEqual(
+      BoardPickerLayoutPolicy.expandedTextBudget(viewportWidth: viewportWidth),
+      103)
   }
 
   func testPickerClosesOnlyAfterPointerAndManagementReleaseIt() {

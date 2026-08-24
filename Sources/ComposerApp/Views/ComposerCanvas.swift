@@ -1050,7 +1050,7 @@ struct ComposerCanvas: View {
       .foregroundStyle(Theme.Palette.body)
       .padding(.horizontal, WindowChrome.labelPadH)
       .frame(maxWidth: .infinity)
-      .frame(height: 30)
+      .frame(height: WindowChrome.boardPickerRowHeight)
       .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.rowFill))
       .contentShape(Rectangle())
     }
@@ -3344,20 +3344,13 @@ enum BoardPickerPresentationPolicy {
 /// name the actual popup surface width (including chrome padding) and the resulting row text budget
 /// so future action affordances cannot silently squeeze board titles back to an ellipsis.
 enum BoardPickerLayoutPolicy {
-  static let preferredExpandedSurfaceWidth: CGFloat = 232
-  static let actionSlotWidth: CGFloat = 52
-  static let rowSpacing: CGFloat = 4
-  static let leadingIndicatorWidth: CGFloat = 5
-  static let leadingIndicatorSpacing: CGFloat = 8
-  static let trailingTextSpacing: CGFloat = 4
-
   static var collapsedSurfaceWidth: CGFloat {
     WindowChrome.boardPillWidth + WindowChrome.padH * 2
   }
 
   static func expandedSurfaceWidth(viewportWidth: CGFloat) -> CGFloat {
     min(
-      preferredExpandedSurfaceWidth,
+      WindowChrome.boardPickerExpandedWidth,
       max(
         collapsedSurfaceWidth,
         viewportWidth - WindowChrome.trafficLightInset - WindowChrome.topRightReservedWidth
@@ -3372,11 +3365,11 @@ enum BoardPickerLayoutPolicy {
   static func expandedTextBudget(viewportWidth: CGFloat) -> CGFloat {
     expandedContentWidth(viewportWidth: viewportWidth)
       - WindowChrome.labelPadH * 2
-      - actionSlotWidth
-      - rowSpacing
-      - leadingIndicatorWidth
-      - leadingIndicatorSpacing
-      - trailingTextSpacing
+      - WindowChrome.boardPickerActionSlotWidth
+      - WindowChrome.itemSpacing
+      - WindowChrome.boardPickerIndicatorWidth
+      - WindowChrome.boardPickerIndicatorSpacing
+      - WindowChrome.itemSpacing
   }
 }
 
@@ -3420,20 +3413,20 @@ private struct BoardPickerRow: View {
   }
 
   private var pickRow: some View {
-    HStack(spacing: BoardPickerLayoutPolicy.rowSpacing) {
+    HStack(spacing: WindowChrome.itemSpacing) {
       Button(action: onPick) {
-        HStack(spacing: BoardPickerLayoutPolicy.leadingIndicatorSpacing) {
+        HStack(spacing: WindowChrome.boardPickerIndicatorSpacing) {
           Circle().fill(Color.clear)
-            .frame(width: BoardPickerLayoutPolicy.leadingIndicatorWidth,
-                   height: BoardPickerLayoutPolicy.leadingIndicatorWidth)
+            .frame(width: WindowChrome.boardPickerIndicatorWidth,
+                   height: WindowChrome.boardPickerIndicatorWidth)
           Text(title)
             .font(WindowChrome.labelFont)
             .foregroundStyle(Theme.Palette.body)
             .lineLimit(1)
-          Spacer(minLength: BoardPickerLayoutPolicy.trailingTextSpacing)
+          Spacer(minLength: WindowChrome.itemSpacing)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 30)
+        .frame(height: WindowChrome.boardPickerRowHeight)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -3442,11 +3435,13 @@ private struct BoardPickerRow: View {
       .accessibilityAction(named: Text("Rename board".localizedUI), onBeginRename)
       .accessibilityAction(named: Text("Delete board".localizedUI), onDelete)
 
-      HStack(spacing: 4) {
+      HStack(spacing: WindowChrome.itemSpacing) {
         rowIcon("pencil", help: "Rename board".localizedUI, action: onBeginRename)
         rowIcon("trash", help: "Delete board".localizedUI, tint: .red, action: onDelete)
       }
-      .frame(width: BoardPickerLayoutPolicy.actionSlotWidth, height: 24)
+      .frame(
+        width: WindowChrome.boardPickerActionSlotWidth,
+        height: WindowChrome.rowIconSide)
       .opacity(interaction.showsActions ? 1 : 0)
       // Keep the reserved slot in the row's hover region even while its controls are invisible.
       // Disabling prevents invisible activation without making the pointer fall through and fire a
@@ -3455,7 +3450,7 @@ private struct BoardPickerRow: View {
       .accessibilityHidden(!interaction.showsActions)
     }
     .padding(.horizontal, WindowChrome.labelPadH)
-    .frame(height: 30)
+    .frame(height: WindowChrome.boardPickerRowHeight)
     .contentShape(.interaction, Rectangle())
     .onHover { over in
       if interaction.setHovered(over) { Haptics.hover() }
@@ -3463,8 +3458,11 @@ private struct BoardPickerRow: View {
   }
 
   private var renameRow: some View {
-    HStack(spacing: 8) {
-      Circle().fill(Color.clear).frame(width: 5, height: 5)
+    HStack(spacing: WindowChrome.boardPickerIndicatorSpacing) {
+      Circle().fill(Color.clear)
+        .frame(
+          width: WindowChrome.boardPickerIndicatorWidth,
+          height: WindowChrome.boardPickerIndicatorWidth)
       TextField("Board name".localizedUI, text: $draftName)
         .textFieldStyle(.plain)
         .font(WindowChrome.labelFont)
@@ -3474,7 +3472,7 @@ private struct BoardPickerRow: View {
         .onExitCommand(perform: onCancelRename)
     }
     .padding(.horizontal, WindowChrome.labelPadH)
-    .frame(height: 30)
+    .frame(height: WindowChrome.boardPickerRowHeight)
     .background(
       RoundedRectangle(cornerRadius: 7, style: .continuous)
         .fill(Theme.Palette.rowFill)
@@ -3493,9 +3491,9 @@ private struct BoardPickerRow: View {
   ) -> some View {
     Button(action: action) {
       Image(systemName: symbol)
-        .font(.system(size: 10.5, weight: .semibold))
+        .font(WindowChrome.rowIconFont)
         .foregroundStyle(tint ?? Theme.Palette.title)
-        .frame(width: 24, height: 24)
+        .frame(width: WindowChrome.rowIconSide, height: WindowChrome.rowIconSide)
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
