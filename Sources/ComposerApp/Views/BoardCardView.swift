@@ -2406,7 +2406,7 @@ private struct ImageObjectPlaceholder: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
               .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
-            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+            .shadow(color: Theme.Palette.elementShadow.opacity(0.18), radius: 10, y: 4)
         } else {
           RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(Theme.Palette.elementFill)
@@ -2423,7 +2423,7 @@ private struct ImageObjectPlaceholder: View {
             }
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
               .strokeBorder(Theme.Palette.chromeDivider, style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
-            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+            .shadow(color: Theme.Palette.elementShadow.opacity(0.18), radius: 10, y: 4)
         }
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
