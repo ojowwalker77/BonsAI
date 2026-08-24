@@ -902,6 +902,12 @@ struct ComposerCanvas: View {
   /// downward into board management; it never becomes a tab row or changes workspace geometry.
   private func boardSwitcherPill(in size: CGSize) -> some View {
     boardPickerMenu(viewportWidth: size.width)
+      // Constrain pointer ownership while this view still has the popup's intrinsic bounds. The
+      // following alignment frame intentionally fills the window for positioning only; giving it
+      // the interaction shape would let transparent canvas space win hit testing over the board.
+      .contentShape(
+        .interaction,
+        RoundedRectangle(cornerRadius: WindowChrome.radius, style: .continuous))
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .padding(.top, WindowChrome.edgeInset)
       .padding(.leading, WindowChrome.trafficLightInset)
@@ -3337,6 +3343,19 @@ enum BoardPickerPresentationPolicy {
     hasDeleteConfirmation: Bool
   ) -> Bool {
     !isHovering && !hasActiveRename && !hasDeleteConfirmation
+  }
+}
+
+/// The wrapper that positions the picker fills the window, but its interactive region is only the
+/// visible popup at these chrome insets. Kept as geometry-only policy so that contract can be
+/// regression-tested independently of SwiftUI's modifier tree.
+enum BoardPickerHitTestingPolicy {
+  static func interactiveSurfaceRect(surfaceSize: CGSize) -> CGRect {
+    CGRect(
+      x: WindowChrome.trafficLightInset,
+      y: WindowChrome.edgeInset,
+      width: surfaceSize.width,
+      height: surfaceSize.height)
   }
 }
 

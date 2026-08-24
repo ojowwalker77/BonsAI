@@ -3,6 +3,23 @@ import XCTest
 @testable import ComposerApp
 
 final class BoardPickerPresentationTests: XCTestCase {
+  func testFullWindowPositioningWrapperDoesNotExpandPickerHitRegion() {
+    let collapsedSize = CGSize(
+      width: BoardPickerLayoutPolicy.collapsedSurfaceWidth,
+      height: WindowChrome.controlHeight + WindowChrome.padV * 2)
+    let expandedSize = CGSize(width: WindowChrome.boardPickerExpandedWidth, height: 240)
+
+    for surfaceSize in [collapsedSize, expandedSize] {
+      let interaction = BoardPickerHitTestingPolicy.interactiveSurfaceRect(
+        surfaceSize: surfaceSize)
+      XCTAssertTrue(interaction.contains(CGPoint(
+        x: WindowChrome.trafficLightInset + surfaceSize.width / 2,
+        y: WindowChrome.edgeInset + surfaceSize.height / 2)))
+      XCTAssertFalse(interaction.contains(CGPoint(x: 500, y: 400)))
+      XCTAssertEqual(interaction.size, surfaceSize)
+    }
+  }
+
   func testChromeTokensPreservePickerRowAndActionGeometry() {
     XCTAssertEqual(WindowChrome.boardPickerExpandedWidth, 232)
     XCTAssertEqual(WindowChrome.boardPickerRowHeight, 30)
