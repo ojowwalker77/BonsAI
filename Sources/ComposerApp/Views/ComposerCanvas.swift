@@ -38,13 +38,10 @@ struct ComposerCanvas: View {
   /// drop-target treatment. In-canvas card drags never set this (onDrop's isTargeted only
   /// fires for external content).
   @State private var isImageDropTargeted = false
-  @State private var freehandDraft: [CGPoint]?
-  @State private var vectorDraft: VectorPathDraft?
-  @State private var elementDraft: DragSegment?
+  @State private var drawingDraftState = CanvasDrawingDraftState()
   /// While drawing a line/arrow, the card its live end will bind to on release — highlighted so the
   /// bind is visible before commit. Shares `board.bindCandidate` with the commit path, so the
   /// preview and the actual binding can never disagree.
-  @State private var bindTargetID: UUID?
   @State private var isSpacePressed = false
   @State private var viewportThrottle = ViewportEventThrottle()
   /// Observed for the agent's *coarse* state (isRunning / grounding) so the toolbar and ⌘K palette
@@ -118,6 +115,42 @@ struct ComposerCanvas: View {
   private var pan: CGSize {
     get { workspace.pan }
     nonmutating set { workspace.pan = newValue }
+  }
+
+  private var freehandDraft: [CGPoint]? {
+    get { drawingDraftState.freehand }
+    nonmutating set {
+      var state = drawingDraftState
+      state.freehand = newValue
+      drawingDraftState = state
+    }
+  }
+
+  private var vectorDraft: VectorPathDraft? {
+    get { drawingDraftState.vector }
+    nonmutating set {
+      var state = drawingDraftState
+      state.vector = newValue
+      drawingDraftState = state
+    }
+  }
+
+  private var elementDraft: DragSegment? {
+    get { drawingDraftState.element }
+    nonmutating set {
+      var state = drawingDraftState
+      state.element = newValue
+      drawingDraftState = state
+    }
+  }
+
+  private var bindTargetID: UUID? {
+    get { drawingDraftState.bindTargetID }
+    nonmutating set {
+      var state = drawingDraftState
+      state.bindTargetID = newValue
+      drawingDraftState = state
+    }
   }
 
   private var effectiveScale: CGFloat { scale }
@@ -819,6 +852,7 @@ struct ComposerCanvas: View {
           }
           Button("Duplicate to Edit".localizedUI) {
             if board.duplicateProtectedBoardForEditing() {
+              resetView()
               show(Toast(
                 text: "Created an editable copy; the original board remains unchanged.".localizedUI,
                 symbol: "doc.on.doc.fill",
@@ -1571,7 +1605,18 @@ struct ComposerCanvas: View {
   }
 
 
-  private func resetView() { scale = 1; pan = .zero; dismissPromotion() }
+  /// Reset everything tied to the outgoing board. Drawing drafts are view-local rather than part
+  /// of `BoardViewModel`, so every path that replaces its cards must explicitly discard them here;
+  /// otherwise a pen path begun on one board could finish onto the next board.
+  private func resetView() {
+    scale = 1
+    pan = .zero
+    panLive = .zero
+    var drafts = drawingDraftState
+    drafts.cancelForBoardReplacement()
+    drawingDraftState = drafts
+    dismissPromotion()
+  }
 
   // MARK: Export
 
@@ -3071,9 +3116,29 @@ struct BoardCardLayer: View, Equatable {
 }
 
 /// Start/end of an in-progress drag that draws a shape or line (viewport coordinates).
-private struct DragSegment: Equatable {
+struct DragSegment: Equatable {
   var start: CGPoint
   var end: CGPoint
+}
+
+/// Transient drawing state belongs to exactly one loaded board. Board replacement resets this
+/// value atomically, which also makes that lifecycle rule testable without mounting SwiftUI.
+struct CanvasDrawingDraftState: Equatable {
+  var freehand: [CGPoint]? = nil
+  var vector: VectorPathDraft? = nil
+  var element: DragSegment? = nil
+  var bindTargetID: UUID? = nil
+
+  var hasDraft: Bool {
+    freehand != nil || vector != nil || element != nil || bindTargetID != nil
+  }
+
+  mutating func cancelForBoardReplacement() {
+    freehand = nil
+    vector = nil
+    element = nil
+    bindTargetID = nil
+  }
 }
 
 /// One row of the hover export menu: a short centered format name ("PNG"). The menu is
