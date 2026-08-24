@@ -166,6 +166,13 @@ struct EditingStage: View {
         VStack(spacing: 8) {
           ForEach($checklistDraft) { $item in
             HStack(spacing: 9) {
+              Image(systemName: "line.3.horizontal")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.Palette.menuDesc)
+                .frame(width: 22, height: 30)
+                .contentShape(Rectangle())
+                .draggable(item.id.uuidString)
+                .help("Drag to reorder".localizedUI)
               Toggle("", isOn: $item.isChecked).toggleStyle(.checkbox).labelsHidden()
               TextField("Task".localizedUI, text: $item.text).textFieldStyle(.plain)
               Button { checklistDraft.removeAll { $0.id == item.id } } label: {
@@ -173,6 +180,10 @@ struct EditingStage: View {
               }.buttonStyle(.plain).help("Remove task".localizedUI)
             }
             .padding(.horizontal, 10).frame(height: 34).background(labelFieldSurface)
+            .dropDestination(for: String.self) { values, _ in
+              guard let rawID = values.first, let draggedID = UUID(uuidString: rawID) else { return false }
+              return ChecklistInteraction.move(&checklistDraft, itemID: draggedID, to: item.id)
+            }
           }
           Button { checklistDraft.append(.init(text: "")) } label: {
             Label("Add task".localizedUI, systemImage: "plus")

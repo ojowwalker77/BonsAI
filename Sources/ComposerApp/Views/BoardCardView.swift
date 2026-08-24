@@ -214,18 +214,19 @@ struct BoardCardView: View {
       CardPointerCatcher(
         onPress: { modifiers, localPoint in
           if card.elementKind == .checklist, modifiers.isEmpty {
-            let rowHeight = 30 * zoom
-            let index = Int(max(0, localPoint.y - 16 * zoom) / rowHeight)
-            if card.checklist?.indices.contains(index) == true {
+            let items = card.checklist ?? []
+            if let index = ChecklistInteraction.itemIndex(
+              at: localPoint, zoom: zoom, itemCount: items.count, layout: .structured) {
               board.toggleChecklistItem(card.id, index: index)
               armedForMove = false
               return .consumed
             }
           }
           if card.elementKind == .text, modifiers.isEmpty {
-            let line = Int(max(0, localPoint.y - 18 * zoom) / (24 * zoom))
             let lines = interaction.plainText.components(separatedBy: "\n")
-            if lines.indices.contains(line), lines[line].hasPrefix("- [") {
+            if let line = ChecklistInteraction.itemIndex(
+              at: localPoint, zoom: zoom, itemCount: lines.count, layout: .markdown),
+               lines[line].hasPrefix("- [") {
               board.toggleTextChecklistLine(card.id, lineIndex: line)
               armedForMove = false
               return .consumed
