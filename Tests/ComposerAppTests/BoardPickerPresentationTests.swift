@@ -3,6 +3,22 @@ import XCTest
 @testable import ComposerApp
 
 final class BoardPickerPresentationTests: XCTestCase {
+  func testRowActionsStayVisibleAndEnabledForTheWholeHoverLifetime() {
+    var state = BoardPickerRowInteractionState()
+    XCTAssertFalse(state.showsActions)
+    XCTAssertFalse(state.enablesActions)
+
+    XCTAssertTrue(state.setHovered(true))
+    XCTAssertTrue(state.showsActions)
+    XCTAssertTrue(state.enablesActions)
+    XCTAssertFalse(state.setHovered(true), "moving within the row must not restart hover")
+    XCTAssertTrue(state.showsActions, "crossing into the reserved action slot keeps actions alive")
+
+    XCTAssertFalse(state.setHovered(false))
+    XCTAssertFalse(state.showsActions)
+    XCTAssertFalse(state.enablesActions)
+  }
+
   func testExpandedPickerPreservesCompactRestWidthAndUsefulTitleBudget() {
     let normalViewportWidth: CGFloat = 1_000
     let expandedWidth = BoardPickerLayoutPolicy.expandedSurfaceWidth(

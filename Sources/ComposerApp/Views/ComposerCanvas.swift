@@ -3380,6 +3380,22 @@ enum BoardPickerLayoutPolicy {
   }
 }
 
+/// Visibility and activation move together for the hover-only row actions. The view keeps one
+/// stable whole-row hover region, including the reserved action slot, and feeds that region here.
+struct BoardPickerRowInteractionState: Equatable {
+  private(set) var isHovered = false
+
+  var showsActions: Bool { isHovered }
+  var enablesActions: Bool { isHovered }
+
+  /// Returns true only on entry so callers can emit one hover tick, not one per state refresh.
+  mutating func setHovered(_ hovered: Bool) -> Bool {
+    let entered = hovered && !isHovered
+    isHovered = hovered
+    return entered
+  }
+}
+
 /// One non-current board in the hover picker. Management state stays in `ComposerCanvas`, so a
 /// failed persistence attempt can keep this exact editor visible and Escape follows the global
 /// coordinator instead of being swallowed by row-local state.
@@ -3394,17 +3410,13 @@ private struct BoardPickerRow: View {
   let onCancelRename: () -> Void
   let onDelete: () -> Void
 
-  @State private var hovering = false
+  @State private var interaction = BoardPickerRowInteractionState()
 
   var body: some View {
     Group {
       if isRenaming { renameRow } else { pickRow }
     }
-    .onHover { over in
-      hovering = over
-      if over { Haptics.hover() }
-    }
-    .animation(.easeOut(duration: 0.1), value: hovering)
+    .animation(.easeOut(duration: 0.1), value: interaction.showsActions)
   }
 
   private var pickRow: some View {
@@ -3435,12 +3447,19 @@ private struct BoardPickerRow: View {
         rowIcon("trash", help: "Delete board".localizedUI, tint: .red, action: onDelete)
       }
       .frame(width: BoardPickerLayoutPolicy.actionSlotWidth, height: 24)
-      .opacity(hovering ? 1 : 0)
-      .allowsHitTesting(hovering)
-      .accessibilityHidden(!hovering)
+      .opacity(interaction.showsActions ? 1 : 0)
+      // Keep the reserved slot in the row's hover region even while its controls are invisible.
+      // Disabling prevents invisible activation without making the pointer fall through and fire a
+      // hover exit just as it crosses from the title into Edit/Delete.
+      .disabled(!interaction.enablesActions)
+      .accessibilityHidden(!interaction.showsActions)
     }
     .padding(.horizontal, WindowChrome.labelPadH)
     .frame(height: 30)
+    .contentShape(.interaction, Rectangle())
+    .onHover { over in
+      if interaction.setHovered(over) { Haptics.hover() }
+    }
   }
 
   private var renameRow: some View {
