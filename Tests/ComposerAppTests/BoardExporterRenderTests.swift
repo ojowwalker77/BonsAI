@@ -161,6 +161,14 @@ final class BoardExporterRenderTests: XCTestCase {
   }
 
   func testWholeBoardRenderIncludesVectorPathStrokeAndFill() throws {
+    let spec = VectorPathSpec(nodes: [
+      VectorPathNode(anchor: CanvasPoint(x: 0.08, y: 0.88)),
+      VectorPathNode(
+        anchor: CanvasPoint(x: 0.50, y: 0.08),
+        incoming: CanvasPoint(x: 0.28, y: 0.08),
+        outgoing: CanvasPoint(x: 0.72, y: 0.08)),
+      VectorPathNode(anchor: CanvasPoint(x: 0.92, y: 0.88)),
+    ], isClosed: true)
     let vector = CardState(
       kind: .vectorPath,
       x: 100,
@@ -168,14 +176,8 @@ final class BoardExporterRenderTests: XCTestCase {
       w: 260,
       h: 180,
       z: 1,
-      vectorPath: VectorPathSpec(nodes: [
-        VectorPathNode(anchor: CanvasPoint(x: 0.08, y: 0.88)),
-        VectorPathNode(
-          anchor: CanvasPoint(x: 0.50, y: 0.08),
-          incoming: CanvasPoint(x: 0.28, y: 0.08),
-          outgoing: CanvasPoint(x: 0.72, y: 0.08)),
-        VectorPathNode(anchor: CanvasPoint(x: 0.92, y: 0.88)),
-      ], isClosed: true))
+      vectorPath: spec,
+      tint: 0)
     let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
     let id = try XCTUnwrap(board.insertCopies([vector], offset: .zero).first)
     let card = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
@@ -193,6 +195,20 @@ final class BoardExporterRenderTests: XCTestCase {
       }
     }
     XCTAssertGreaterThan(drawnSamples, 100, "vector stroke/fill should be present in PNG rendering")
+
+    // A one-card export has equal margins, so its center maps to the bitmap center. Prove the
+    // corresponding local point is inside this exact cubic path before using that pixel to test
+    // fill independently from the boundary stroke.
+    let localInterior = CGPoint(x: CGFloat(card.w) / 2, y: CGFloat(card.h) / 2)
+    let path = VectorPathGeometry.path(
+      for: spec, in: CGRect(origin: .zero, size: card.frame.size))
+    XCTAssertTrue(path.contains(localInterior), "the selected fill sample must be inside the path")
+    let interior = try XCTUnwrap(rep.colorAt(
+      x: rep.pixelsWide / 2,
+      y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+    XCTAssertFalse(
+      colorsClose(interior, canvas, tolerance: 0.03),
+      "closed vector interior should contain its tint fill; got \(rgbString(interior))")
   }
 
   func testWholeBoardRenderIncludesOpenVectorPathStroke() throws {
