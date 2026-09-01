@@ -45,6 +45,26 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
       characters: escape, charactersIgnoringModifiers: escape, isARepeat: false, keyCode: 53)!
   }
 
+  private func letterKeyDown(_ letter: String, in panel: NSWindow) -> NSEvent {
+    NSEvent.keyEvent(
+      with: .keyDown, location: .zero, modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: panel.windowNumber, context: nil,
+      characters: letter, charactersIgnoringModifiers: letter, isARepeat: false, keyCode: 35)!
+  }
+
+  private func selectedTool(during body: () -> Void) -> CanvasTool? {
+    var selected: CanvasTool?
+    let observer = NotificationCenter.default.addObserver(
+      forName: .composerSelectTool, object: nil, queue: nil
+    ) { note in
+      selected = note.userInfo?["tool"] as? CanvasTool
+    }
+    body()
+    NotificationCenter.default.removeObserver(observer)
+    return selected
+  }
+
   private func deleteSelectionFired(during body: () -> Void) -> Bool {
     var fired = false
     let observer = NotificationCenter.default.addObserver(
@@ -74,6 +94,44 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     let fired = deleteSelectionFired { panel.sendEvent(backspaceKeyDown(in: panel)) }
 
     XCTAssertTrue(fired, "with no text input editing, Backspace must delete the selected cards")
+  }
+
+  func testBarePSelectsVectorPenOutsideTextEditing() {
+    let panel = makePanel()
+    XCTAssertEqual(
+      selectedTool { panel.sendEvent(letterKeyDown("p", in: panel)) },
+      .vectorPen)
+  }
+
+  func testBarePRemainsTextInputWhileAFieldIsEditing() {
+    let panel = makePanel()
+    let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
+    panel.contentView?.addSubview(field)
+    XCTAssertTrue(panel.makeFirstResponder(field))
+    XCTAssertTrue(
+      panel.firstResponder is NSTextView,
+      "an editing NSTextField must install the field editor — bare-P routing depends on it")
+    XCTAssertNil(selectedTool { panel.sendEvent(letterKeyDown("p", in: panel)) })
+  }
+
+  func testResigningKeyDoesNotReopenViewportTransformsDuringAnActiveDraft() {
+    let panel = makePanel()
+    let previousMode = CanvasKeyState.shared.viewportDragMode
+    defer { CanvasKeyState.shared.viewportDragMode = previousMode }
+    CanvasKeyState.shared.viewportDragMode = .drawing
+
+    var releasedSpace = false
+    let observer = NotificationCenter.default.addObserver(
+      forName: .composerSpaceKeyChanged, object: nil, queue: nil
+    ) { note in
+      releasedSpace = note.userInfo?["down"] as? Bool == false
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    panel.resignKey()
+
+    XCTAssertTrue(releasedSpace)
+    XCTAssertEqual(CanvasKeyState.shared.viewportDragMode, .drawing)
   }
 
   func testBackspaceWhileAppKitFieldIsEditingDoesNotDeleteCards() {
@@ -189,9 +247,71 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(
         hasBoardRename: true,
+        hasBoardPicker: true,
+        hasDrawingDraft: true,
         hasSelection: true
       )),
       .boardRename
+    )
+  }
+
+  func testEscapeCoordinatorClosesBoardPickerBeforeOtherCanvasSurfaces() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasBoardPicker: true,
+        hasCommandPalette: true,
+        hasActiveEditor: true,
+        hasSelection: true
+      )),
+      .boardPicker
+    )
+  }
+
+  func testEscapeCoordinatorCancelsDrawingDraftBeforeClosingBoardPicker() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasBoardPicker: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true,
+        hasSelection: true
+      )),
+      .drawingDraft
+    )
+  }
+
+  func testEscapeCoordinatorCancelsVectorDraftBeforePickerAndInlineVectorEditor() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasBoardPicker: true,
+        hasActiveEditor: true,
+        hasActiveVectorEditor: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true
+      )),
+      .drawingDraft
+    )
+  }
+
+  func testEscapeCoordinatorKeepsPickerAheadOfDraftDuringOrdinaryEditing() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasBoardPicker: true,
+        hasActiveEditor: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true
+      )),
+      .boardPicker
+    )
+  }
+
+  func testEscapeCoordinatorKeepsCommandPaletteAheadOfDrawingWithoutPicker() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasCommandPalette: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true
+      )),
+      .commandPalette
     )
   }
 
@@ -199,7 +319,9 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(
         hasBoardDeletionConfirmation: true,
-        hasBoardRename: true
+        hasBoardRename: true,
+        hasBoardPicker: true,
+        hasDrawingDraft: true
       )),
       .boardDeletionConfirmation
     )
@@ -230,5 +352,35 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
       ComposerEscapeCoordinator.target(for: ComposerEscapeState()),
       .windowDismissal
     )
+  }
+
+  func testEscapeCoordinatorCancelsDrawingBeforeClosingAnInlineVectorEditor() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasActiveEditor: true,
+        hasActiveVectorEditor: true,
+        hasDrawingDraft: true,
+        hasActiveTool: true
+      )),
+      .drawingDraft
+    )
+  }
+
+  func testEscapeCoordinatorEndsAnIdleInlineVectorEditorAsTheActiveEditor() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasActiveEditor: true,
+        hasActiveVectorEditor: true
+      )),
+      .activeEditor
+    )
+  }
+
+  func testEscapeCancelsInProgressVectorDraftBeforeLeavingTheTool() {
+    XCTAssertEqual(
+      ComposerEscapeCoordinator.target(for: ComposerEscapeState(
+        hasDrawingDraft: true,
+        hasActiveTool: true)),
+      .drawingDraft)
   }
 }

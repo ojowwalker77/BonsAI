@@ -189,7 +189,9 @@ final class FloatingPanel: NSWindow {
 
   /// Losing key status mid-press can swallow the space `keyUp`, which would otherwise leave the
   /// board stuck in pan mode (open-hand cursor, cards non-interactive). Clear the space latch so it
-  /// resets — mirroring a `keyUp` — the moment focus leaves.
+  /// resets — mirroring a `keyUp` — the moment focus leaves. The viewport gesture mode remains
+  /// owned by `BoardViewportInput`: clearing it here while that view is still drawing would reopen
+  /// pan and zoom beneath an in-flight draft.
   override func resignKey() {
     super.resignKey()
     NotificationCenter.default.post(
@@ -349,6 +351,17 @@ final class FloatingPanel: NSWindow {
     }
     if !textIsEditing, raw == "\u{7f}" || raw == "\u{08}" {
       NotificationCenter.default.post(name: .composerDeleteSelection, object: nil)
+      return
+    }
+    // Bare P selects the vector pen. Keep this beside the bare number routing so it inherits the
+    // same exact-modifier and NSTextView guards: typing a p in any editor remains text input.
+    if !textIsEditing,
+       event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+       raw?.lowercased() == "p" {
+      NotificationCenter.default.post(
+        name: .composerSelectTool,
+        object: nil,
+        userInfo: ["tool": CanvasTool.vectorPen])
       return
     }
     // Bare 1–9 picks a tool (Excalidraw/Figma style) — switching must be one keypress, which is

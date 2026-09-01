@@ -17,7 +17,7 @@
 "Board" = "보드";
 "Board name" = "보드 이름";
 "Boards" = "보드";
-"BonsAI - quick capture" = "BonsAI - 빠른 캡처";
+"BonsAI - click to capture, double-click to show the board" = "BonsAI - 클릭하여 빠른 캡처, 더블 클릭하여 보드 표시";
 "BonsAI %@ is ready - click to install" = "BonsAI %@ 준비됨 - 클릭하여 설치";
 "BonsAI checks GitHub for new releases automatically, then downloads and installs them in place." = "BonsAI는 GitHub에서 새 릴리스를 자동으로 확인한 뒤 다운로드하고 제자리에서 설치합니다.";
 "BonsAI could not allocate a bitmap to render the board for export." = "내보내기용 보드를 렌더링할 비트맵을 할당할 수 없습니다.";
@@ -40,6 +40,7 @@
 "Close  Esc" = "닫기  Esc";
 "Close  ⌘J" = "닫기  ⌘J";
 "Close Settings  ·  Esc" = "설정 닫기  ·  Esc";
+"Collapsed" = "접힘";
 "Compile board" = "보드 컴파일";
 "Compiling the board" = "보드 컴파일 중";
 "Compiled draft" = "컴파일된 초안";
@@ -67,6 +68,7 @@
 "Engine" = "엔진";
 "Engine for the agent chat - Claude, Codex, or OpenCode" = "에이전트 채팅 엔진 - Claude, Codex 또는 OpenCode";
 "Equation" = "수식";
+"Expanded" = "펼쳐짐";
 "Export board" = "보드 내보내기";
 "Export Board" = "보드 내보내기";
 "Export board as PNG" = "보드를 PNG로 내보내기";
@@ -223,6 +225,11 @@
 "Checking saved boards for the BonsAI 1.3 welcome board" = "저장된 보드에서 BonsAI 1.3 환영 보드 확인 중";
 "Checking whether Composer has existing boards" = "Composer에 기존 보드가 있는지 확인 중";
 "Checklist" = "체크리스트";
+"Drag to reorder" = "드래그하여 순서 변경";
+"Edit element" = "요소 편집";
+"Drag vector anchor" = "벡터 앵커 드래그";
+"Drag vector handle" = "벡터 핸들 드래그";
+"Return applies · Shift-Return inserts a new line" = "Return으로 적용 · Shift-Return으로 줄바꿈";
 "Claude authentication failed: %@. Run `claude auth login`, then retry." = "Claude 인증 실패: %@. `claude auth login`을 실행한 뒤 다시 시도하세요.";
 "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry." = "Claude 인증이 API에서 거부되었습니다(HTTP 401: %@). `claude auth login`을 실행한 뒤 다시 시도하세요.";
 "Click again to permanently delete" = "다시 클릭하면 영구 삭제";
@@ -379,6 +386,7 @@
 "Line  ·  drag to draw  6" = "선  ·  드래그하여 그리기  6";
 "Arrow  ·  drag to draw  7" = "화살표  ·  드래그하여 그리기  7";
 "Freehand stroke  ·  drag to draw  8" = "자유 곡선  ·  드래그하여 그리기  8";
+"Pen  ·  click corners, drag curves, Return commits  P" = "펜  ·  클릭으로 모서리, 드래그로 곡선, Return으로 완료  P";
 "Equation  ·  click the board, then type LaTeX  9" = "수식  ·  보드를 클릭한 뒤 LaTeX 입력  9";
 "Heading  ·  cycles # / ## / ###" = "제목  ·  # / ## / ### 순환";
 "Bold  ·  **text**" = "굵게  ·  **text**";
@@ -505,6 +513,8 @@
 "Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac." = "이 Mac에 설치되어 응답하는 엔진만 표시됩니다. CLI 프롬프트는 설정한 에이전트 계정에 머무릅니다. Apple Intelligence는 기기 내에서 검사를 실행하며 초안을 Mac 밖으로 내보내지 않습니다.";
 "Pick the body font for cards, chrome, and the editor." = "카드, UI, 편집기에 사용할 본문 글꼴을 선택합니다.";
 "Canvas" = "캔버스";
+"Dot grid" = "점 격자";
+"Show a subtle alignment grid behind board content." = "보드 콘텐츠 뒤에 은은한 정렬 격자를 표시합니다.";
 "Let the desktop blur through the board surface. Solid keeps the flat canvas." = "보드 표면 너머로 데스크탑 블러가 비치게 합니다. “단색”은 평면 캔버스를 유지합니다.";
 "Theme" = "테마";
 "Pick the palette for the whole app." = "앱 전체의 팔레트를 선택합니다.";
@@ -515,10 +525,21 @@
 "Text size" = "텍스트 크기";
 "Drawing" = "그리기";
 "How the board behaves while you draw." = "그리는 동안 보드의 동작 방식을 설정합니다.";
+"Continuous drawing" = "연속 그리기";
+"Keep shape, line, freehand, and pen tools active after drawing. Esc returns to Select." = "도형, 선, 자유형, 펜 도구를 그린 뒤에도 활성 상태로 유지합니다. Esc를 누르면 선택 도구로 돌아갑니다.";
+"Drawing tool stays active · click to use once" = "그리기 도구 고정됨 · 클릭하여 한 번만 사용";
+"Drawing tool is one-shot · click to keep active" = "그리기 도구 한 번만 사용 · 클릭하여 고정";
 "Snap sketches into shapes" = "스케치를 도형으로 스냅";
 "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "인식된 스트로크는 펜을 떼면 깔끔한 도형이 됩니다. 끄면 제안 칩이 유지됩니다.";
 "Migrating saved connector tokens" = "저장된 커넥터 토큰 마이그레이션 중";
 "Renaming the board" = "보드 이름 변경 중";
 "%@: macOS Keychain access failed. Check Keychain Access and try again." = "%@: macOS 키체인에 접근하지 못했습니다. 키체인 접근을 확인한 후 다시 시도하세요.";
 "%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again." = "%@: BonsAI가 기존 커넥터 토큰 파일을 업데이트하지 못했습니다. Application Support 권한을 확인한 후 다시 시도하세요.";
+"Drag connector endpoint" = "커넥터 끝점 드래그";
+"Create linked line" = "선으로 연결된 도형 만들기";
+"Click to create a linked shape; drag to connect; hold Option for a line" = "클릭하여 연결된 도형 만들기, 드래그하여 연결, Option 키를 누르면 선 사용";
 "Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI." = "커넥터 토큰 마이그레이션을 확인하지 못했습니다. 토큰이 손실되지 않도록 기존 파일을 유지했습니다. 키체인 접근을 확인하고 BonsAI를 다시 연 후 재시도하세요.";
+"Application" = "애플리케이션";
+"Choose how BonsAI appears in macOS." = "macOS에서 BonsAI를 표시하는 방식을 선택하세요.";
+"Hide Dock icon" = "Dock 아이콘 숨기기";
+"Keep BonsAI in the menu bar and use the global shortcut to restore the board." = "BonsAI를 메뉴 막대에 유지하고 전역 단축키로 보드를 다시 표시합니다.";

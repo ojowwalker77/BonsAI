@@ -24,6 +24,15 @@ struct BoardCardView: View {
 
   @State private var moveDelta: CGSize = .zero
   @GestureState private var resize: ResizeSession?
+  /// Connector endpoints preview locally during a drag, then cross the model seam once on mouse-up
+  /// so the entire detach/rebind is one undoable mutation.
+  @GestureState private var endpointDrag: ConnectorEndpointDragSession?
+  /// Vector control previews remain local for the entire drag. Mouse-up commits the refitted spec
+  /// and frame once through `BoardViewModel`, preserving one undo checkpoint per gesture.
+  @GestureState private var vectorControlDrag: VectorControlDragSession?
+  /// Quick-connect chooses line versus arrow when the gesture begins. Reading global modifiers on
+  /// mouse-up would let releasing Option mid-drag silently change the requested connector kind.
+  @State private var quickConnectDrag: QuickConnectDragSession?
   /// Text-only side resize: changes the wrapping width while preserving font scale. Corner resize
   /// remains proportional type scaling; the two gestures intentionally solve different jobs.
   @GestureState private var textWidthResize: TextWidthResizeSession?
@@ -46,6 +55,9 @@ struct BoardCardView: View {
   /// The graph marker currently being dragged (series id + point index), armed on a plain press that
   /// lands on a marker of a selected graph card. While set, drags move the point, not the card.
   @State private var markerDrag: (seriesID: UUID, index: Int)?
+  /// Real rendered checkbox bounds in this card's screen-space coordinate system. Using measured
+  /// symbols avoids guessing row strides when text wraps or a text card has its own font scale.
+  @State private var checklistCheckboxFrames: [Int: CGRect] = [:]
 
   /// The content's corner radius, so the selection ring hugs each element shape correctly
   /// (a too-round ring around a square image is what reads as "wrong").
@@ -66,6 +78,8 @@ struct BoardCardView: View {
   private var isTextElement: Bool { card.elementKind == .text }
   private var isEquationElement: Bool { card.elementKind == .equation }
   private var isGraphElement: Bool { card.elementKind == .graph }
+  private var checklistCoordinateSpace: String { "checklist-\(card.id.uuidString)" }
+  private var isVectorPath: Bool { card.elementKind == .vectorPath }
   /// An empty text card is just a place to write, not a placed object — so it shows no chrome.
   private var isEmptyText: Bool { isTextElement && interaction.text.trimmed.isEmpty }
   /// Suppress chrome (ring, handles, delete ✕) on an empty text card ONLY while it's being edited —
@@ -76,6 +90,7 @@ struct BoardCardView: View {
   /// The frame to draw right now — base frame plus any in-flight move or resize.
   private var liveFrame: CGRect {
     if isEditing, let liveTextFrame { return liveTextFrame }
+    if isEditing, let liveVectorPlacement { return liveVectorPlacement.frame }
     if let resize { return applyResize(resize.corner, translation: resize.translation, to: card.frame) }
     if let textWidthResize {
       return textWidthFrame(textWidthResize.edge, translation: textWidthResize.translation, in: card.frame)
@@ -96,6 +111,7 @@ struct BoardCardView: View {
       .overlay(graphDropRing)
       .overlay(selectionChrome)
       .overlay(deleteButton, alignment: .topTrailing)
+      .overlay(editAffordance, alignment: .bottomTrailing)
       .overlay(lockBadge, alignment: .topLeading)
       .overlay(pointComposerPopover, alignment: .bottom)
       .offset(x: liveFrame.minX * zoom, y: liveFrame.minY * zoom)
@@ -196,7 +212,7 @@ struct BoardCardView: View {
         // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
         // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
         // zoom so the text is laid out at screen size (crisp), not stretched.
-        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: boardTextContext.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id)
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: boardTextContext.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id, connectorPoints: liveConnectorPoints, vectorSpec: liveVectorPlacement?.spec, checklistCoordinateSpace: checklistCoordinateSpace)
           .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)
@@ -213,19 +229,19 @@ struct BoardCardView: View {
       // single/double tap recognizers wait out the double-click interval first.
       CardPointerCatcher(
         onPress: { modifiers, localPoint in
-          if card.elementKind == .checklist, modifiers.isEmpty {
-            let rowHeight = 30 * zoom
-            let index = Int(max(0, localPoint.y - 16 * zoom) / rowHeight)
-            if card.checklist?.indices.contains(index) == true {
+          if !card.locked, card.elementKind == .checklist, modifiers.isEmpty {
+            if let index = ChecklistInteraction.itemIndex(
+              at: localPoint, renderedFrames: checklistCheckboxFrames) {
               board.toggleChecklistItem(card.id, index: index)
               armedForMove = false
               return .consumed
             }
           }
-          if card.elementKind == .text, modifiers.isEmpty {
-            let line = Int(max(0, localPoint.y - 18 * zoom) / (24 * zoom))
+          if !card.locked, card.elementKind == .text, modifiers.isEmpty {
             let lines = interaction.plainText.components(separatedBy: "\n")
-            if lines.indices.contains(line), lines[line].hasPrefix("- [") {
+            if let line = ChecklistInteraction.itemIndex(
+              at: localPoint, renderedFrames: checklistCheckboxFrames),
+               lines.indices.contains(line), lines[line].hasPrefix("- [") {
               board.toggleTextChecklistLine(card.id, lineIndex: line)
               armedForMove = false
               return .consumed
@@ -261,12 +277,20 @@ struct BoardCardView: View {
       )
       .allowsHitTesting(!isEditing && selectable)
 
+      if VectorPathNodeEditorPolicy.isVisible(isEditing: isEditing, kind: card.elementKind) {
+        vectorNodeEditor
+      }
+
       // Selected graph cards get a live interaction layer ABOVE the catcher: the ✕-legend (its
       // small top-right region claims clicks) and a passive hover crosshair/readout. Plot-area
       // presses (⌥-click, marker drag) still fall through to the catcher below.
       if isGraphElement, isSelected, !isEditing, selectable {
         GraphInteractionOverlay(spec: card.graph ?? CardState.GraphSpec(), board: board, graphID: card.id)
       }
+    }
+    .coordinateSpace(name: checklistCoordinateSpace)
+    .onPreferenceChange(ChecklistCheckboxFramesPreferenceKey.self) { frames in
+      if checklistCheckboxFrames != frames { checklistCheckboxFrames = frames }
     }
   }
 
@@ -306,6 +330,7 @@ struct BoardCardView: View {
   /// owning focus/commit/Esc. This just arms edit mode; freehand/image kinds have no stage, so the
   /// canvas guards `beginEditing` for them (a double-click there does nothing).
   private func enterEditing() {
+    guard !card.locked, card.elementKind.supportsEditing else { return }
     board.beginEditing(card.id)
     // Text edits inline — hand the caret to the just-mounted in-card editor. Stage kinds focus
     // their own fields on appear.
@@ -522,7 +547,8 @@ struct BoardCardView: View {
     // a text card it's chromeless too; the ring returns only once it's a placed object you
     // select to move or resize. Shapes keep their ring while editing.
     if (isSelected || isEditing) && !suppressEmptyChrome {
-      let showRing = !isTextElement || (isSelected && !isEditing)
+      let isConnector = ConnectorGeometry.isConnector(card)
+      let showRing = !isConnector && (!isTextElement || (isSelected && !isEditing))
       // Image cards draw their own rounded border, so a ring sitting `selectionGap` px outside reads
       // as an ugly double border with a gap. Hug the image's own edge instead — a single clean
       // accent outline. Other elements (text, shapes, lines) keep the offset ring.
@@ -541,25 +567,53 @@ struct BoardCardView: View {
               .allowsHitTesting(false)
           }
           if showHandles {
-            ForEach(Corner.allCases, id: \.self) { corner in
-              handleDot
-                .position(handlePoint(corner, in: geo.size))
-                .gesture(resizeGesture(corner))
-                // A diagonal resize cursor over each corner handle, restored on exit. Pushing/popping
-                // keeps the cursor correct even as SwiftUI reuses the handle views across cards.
-                .onHover { inside in
-                  if inside { corner.resizeCursor.push() } else { NSCursor.pop() }
-                }
-            }
-            if isTextElement {
-              ForEach(HorizontalEdge.allCases, id: \.self) { edge in
-                textWidthHandle
-                  .position(textWidthHandlePoint(edge, in: geo.size))
-                  .gesture(textWidthResizeGesture(edge))
+            if isConnector {
+              ForEach(ConnectorEndpoint.allCases, id: \.self) { endpoint in
+                connectorHandle
+                  .position(connectorHandlePoint(endpoint, in: geo.size))
+                  .gesture(connectorEndpointGesture(endpoint))
                   .onHover { inside in
-                    if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
                   }
-                  .help("Drag to change text wrapping width".localizedUI)
+                  .help("Drag connector endpoint".localizedUI)
+              }
+            } else {
+              ForEach(Corner.allCases, id: \.self) { corner in
+                handleDot
+                  .position(handlePoint(corner, in: geo.size))
+                  .gesture(resizeGesture(corner))
+                  // A diagonal resize cursor over each corner handle, restored on exit. Pushing/popping
+                  // keeps the cursor correct even as SwiftUI reuses the handle views across cards.
+                  .onHover { inside in
+                    if inside { corner.resizeCursor.push() } else { NSCursor.pop() }
+                  }
+              }
+              if isTextElement {
+                ForEach(HorizontalEdge.allCases, id: \.self) { edge in
+                  textWidthHandle
+                    .position(textWidthHandlePoint(edge, in: geo.size))
+                    .gesture(textWidthResizeGesture(edge))
+                    .onHover { inside in
+                      if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
+                    .help("Drag to change text wrapping width".localizedUI)
+                  }
+              }
+              if isQuickConnectSource {
+                ForEach(ConnectorDirection.allCases, id: \.self) { direction in
+                  quickConnectHandle(direction)
+                    .position(quickConnectHandlePoint(direction, in: geo.size))
+                    .gesture(quickConnectGesture(direction))
+                    .onHover { inside in
+                      if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                    }
+                    .contextMenu {
+                      Button("Create linked line".localizedUI) {
+                        board.quickConnect(from: card.id, direction: direction, kind: .line)
+                      }
+                    }
+                    .help("Click to create a linked shape; drag to connect; hold Option for a line".localizedUI)
+                }
               }
             }
           }
@@ -581,6 +635,156 @@ struct BoardCardView: View {
     CGPoint(x: edge == .leading ? -selectionGap : size.width + selectionGap, y: size.height / 2)
   }
 
+  private var isQuickConnectSource: Bool {
+    isSelected &&
+    board.selectedCardIDs.count == 1 &&
+    !card.locked &&
+    [.rectangle, .ellipse, .diamond].contains(card.elementKind)
+  }
+
+  private func quickConnectHandlePoint(_ direction: ConnectorDirection, in size: CGSize) -> CGPoint {
+    // Keep a sliver of the padded hit target inside the card's bounds so SwiftUI routes drags that
+    // begin on the outward-facing control, while the visible 15pt circle stays outside the ring.
+    let offset = QuickConnectDragSession.screenHandleOffset
+    return switch direction {
+    case .up: CGPoint(x: size.width / 2, y: -offset)
+    case .right: CGPoint(x: size.width + offset, y: size.height / 2)
+    case .down: CGPoint(x: size.width / 2, y: size.height + offset)
+    case .left: CGPoint(x: -offset, y: size.height / 2)
+    }
+  }
+
+  /// Actual stored endpoints, expressed in the card's current screen-space layout. In particular,
+  /// the end handle of an arrow sits on its tip instead of on the connector's padded frame corner.
+  private func connectorHandlePoint(_ endpoint: ConnectorEndpoint, in size: CGSize) -> CGPoint {
+    let points = liveConnectorPoints ?? card.points ?? CardState.defaultLinePoints()
+    let point = endpoint == .start ? points.first : points.dropFirst().first
+    let normalized = point?.cgPoint ?? (endpoint == .start
+      ? CGPoint(x: 0.06, y: 0.88)
+      : CGPoint(x: 0.94, y: 0.12))
+    return CGPoint(x: normalized.x * size.width, y: normalized.y * size.height)
+  }
+
+  private var liveConnectorPoints: [CanvasPoint]? {
+    guard ConnectorGeometry.isConnector(card) else { return nil }
+    guard let endpoints = ConnectorGeometry.endpoints(of: card), let endpointDrag else {
+      return card.points ?? CardState.defaultLinePoints()
+    }
+    var preview = endpoints
+    preview[endpointDrag.endpoint] = ConnectorEndpointDrag.boardPoint(
+      from: endpoints[endpointDrag.endpoint], translation: endpointDrag.translation, zoom: zoom)
+    return [preview.start, preview.end].map { point in
+      CanvasPoint(
+        x: Double((point.x - card.frame.minX) / max(card.frame.width, 1)),
+        y: Double((point.y - card.frame.minY) / max(card.frame.height, 1)))
+    }
+  }
+
+  private var liveVectorPlacement: VectorPathPlacement? {
+    guard isEditing,
+          let spec = card.vectorPath,
+          let drag = vectorControlDrag else { return nil }
+    return VectorPathControlDrag.placement(
+      drag.control,
+      nodeAt: drag.nodeIndex,
+      screenTranslation: drag.translation,
+      zoom: zoom,
+      in: spec,
+      frame: card.frame)
+  }
+
+  @ViewBuilder
+  private var vectorNodeEditor: some View {
+    if let baseSpec = card.vectorPath {
+      let spec = liveVectorPlacement?.spec ?? baseSpec
+      GeometryReader { geo in
+        ZStack {
+          Path { path in
+            for node in spec.nodes {
+              let anchor = vectorPoint(node.anchor, in: geo.size)
+              if let incoming = node.incoming {
+                path.move(to: anchor)
+                path.addLine(to: vectorPoint(incoming, in: geo.size))
+              }
+              if let outgoing = node.outgoing {
+                path.move(to: anchor)
+                path.addLine(to: vectorPoint(outgoing, in: geo.size))
+              }
+            }
+          }
+          .stroke(Theme.Palette.accent.opacity(0.52), lineWidth: 1)
+          .allowsHitTesting(false)
+
+          ForEach(Array(spec.nodes.enumerated()), id: \.offset) { index, node in
+            if let incoming = node.incoming {
+              vectorHandleDot
+                .position(vectorPoint(incoming, in: geo.size))
+                .gesture(vectorControlGesture(nodeIndex: index, control: .incoming))
+                .help("Drag vector handle".localizedUI)
+            }
+            if let outgoing = node.outgoing {
+              vectorHandleDot
+                .position(vectorPoint(outgoing, in: geo.size))
+                .gesture(vectorControlGesture(nodeIndex: index, control: .outgoing))
+                .help("Drag vector handle".localizedUI)
+            }
+            vectorAnchorDot
+              .position(vectorPoint(node.anchor, in: geo.size))
+              .gesture(vectorControlGesture(nodeIndex: index, control: .anchor))
+              .help("Drag vector anchor".localizedUI)
+          }
+        }
+      }
+    }
+  }
+
+  private func vectorPoint(_ point: CanvasPoint, in size: CGSize) -> CGPoint {
+    CGPoint(x: CGFloat(point.x) * size.width, y: CGFloat(point.y) * size.height)
+  }
+
+  private var vectorAnchorDot: some View {
+    Circle()
+      .fill(Theme.Palette.labelChipFill)
+      .frame(width: 10, height: 10)
+      .overlay(Circle().strokeBorder(Theme.Palette.accent, lineWidth: 1.75))
+      .shadow(color: Theme.Palette.elementShadow, radius: 2, y: 1)
+      .padding(9)
+      .contentShape(Circle())
+  }
+
+  private var vectorHandleDot: some View {
+    Circle()
+      .fill(Theme.Palette.accent)
+      .frame(width: 8, height: 8)
+      .overlay(Circle().strokeBorder(Theme.Palette.labelChipFill, lineWidth: 1))
+      .shadow(color: Theme.Palette.elementShadow, radius: 1, y: 1)
+      .padding(9)
+      .contentShape(Circle())
+  }
+
+  private func vectorControlGesture(nodeIndex: Int, control: VectorPathControl) -> some Gesture {
+    // Global coordinates stay stable while the preview refits and repositions this card. A local
+    // translation would observe that moving origin and feed the geometry change back into itself.
+    DragGesture(minimumDistance: 0, coordinateSpace: .global)
+      .updating($vectorControlDrag) { value, state, _ in
+        state = VectorControlDragSession(
+          nodeIndex: nodeIndex,
+          control: control,
+          translation: value.translation)
+      }
+      .onEnded { value in
+        guard let spec = card.vectorPath,
+              let placement = VectorPathControlDrag.placement(
+                control,
+                nodeAt: nodeIndex,
+                screenTranslation: value.translation,
+                zoom: zoom,
+                in: spec,
+                frame: card.frame) else { return }
+        board.setVectorPath(card.id, placement: placement)
+      }
+  }
+
   /// A small white square with a hairline accent edge and a soft shadow — reads as a crisp,
   /// premium resize handle on the dark glass rather than a flat blue block.
   private var handleDot: some View {
@@ -591,6 +795,30 @@ struct BoardCardView: View {
       .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
       .padding(9)
       .contentShape(Rectangle())
+  }
+
+  /// Circular endpoint furniture is deliberately distinct from the square box-resize furniture.
+  /// Its padded hit target remains easy to acquire without making a selected connector noisy.
+  private var connectorHandle: some View {
+    Circle()
+      .fill(Theme.Palette.labelChipFill)
+      .frame(width: 9, height: 9)
+      .overlay(Circle().strokeBorder(Theme.Palette.accent, lineWidth: 1.5))
+      .shadow(color: Theme.Palette.elementShadow, radius: 2, y: 1)
+      .padding(9)
+      .contentShape(Circle())
+  }
+
+  private func quickConnectHandle(_ direction: ConnectorDirection) -> some View {
+    Image(systemName: direction.symbolName)
+      .font(.system(size: 8, weight: .semibold))
+      .foregroundStyle(Theme.Palette.accent)
+      .frame(width: 15, height: 15)
+      .background(Circle().fill(Theme.Palette.windowCanvas.opacity(0.94)))
+      .overlay(Circle().strokeBorder(Theme.Palette.accent.opacity(0.62), lineWidth: 1))
+      .shadow(color: Theme.Palette.elementShadow, radius: 2, y: 1)
+      .padding(7)
+      .contentShape(Circle())
   }
 
   /// A vertical pill distinguishes reflow handles from the four square scale handles. The visible
@@ -632,6 +860,50 @@ struct BoardCardView: View {
         } else {
           board.setFrame(card.id, applyResize(corner, translation: value.translation, to: card.frame))
         }
+      }
+  }
+
+  private func connectorEndpointGesture(_ endpoint: ConnectorEndpoint) -> some Gesture {
+    DragGesture(minimumDistance: 2, coordinateSpace: .local)
+      .updating($endpointDrag) { value, state, _ in
+        state = ConnectorEndpointDragSession(endpoint: endpoint, translation: value.translation)
+      }
+      .onEnded { value in
+        guard let endpoints = ConnectorGeometry.endpoints(of: card) else { return }
+        let destination = ConnectorEndpointDrag.boardPoint(
+          from: endpoints[endpoint], translation: value.translation, zoom: zoom)
+        board.setConnectorEndpoint(endpoint, of: card.id, to: destination)
+      }
+  }
+
+  private func quickConnectGesture(_ direction: ConnectorDirection) -> some Gesture {
+    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+      .onChanged { _ in
+        if quickConnectDrag == nil {
+          quickConnectDrag = QuickConnectDragSession(
+            optionPressed: NSEvent.modifierFlags.contains(.option))
+        }
+      }
+      .onEnded { value in
+        let session = quickConnectDrag ?? QuickConnectDragSession(
+          optionPressed: NSEvent.modifierFlags.contains(.option))
+        quickConnectDrag = nil
+        let distance = hypot(value.translation.width, value.translation.height)
+        if distance <= 4 {
+          board.quickConnect(from: card.id, direction: direction, kind: session.connectorKind)
+          return
+        }
+        let destination = session.destination(
+          from: card.frame,
+          direction: direction,
+          translation: value.translation,
+          zoom: zoom)
+        guard let targetID = board.bindCandidate(at: destination, excluding: [card.id]) else { return }
+        board.quickConnect(
+          from: card.id,
+          direction: direction,
+          kind: session.connectorKind,
+          to: targetID)
       }
   }
 
@@ -730,6 +1002,36 @@ struct BoardCardView: View {
 
   // MARK: Delete
 
+  /// A small hover-only invitation to the editing surface. It stays inside the card so it does not
+  /// fight resize handles, and only appears under Select — drawing tools keep every card pointer-
+  /// transparent so a new stroke can begin anywhere.
+  @ViewBuilder
+  private var editAffordance: some View {
+    if hovering, selectable, !isEditing, !card.locked,
+       CanvasEditAffordancePolicy.isAvailable(
+         for: card.elementKind, whileSelected: isSelected) {
+      Button(action: enterEditing) {
+        ZStack {
+          Circle()
+            .fill(Theme.Palette.labelChipFill)
+            .frame(width: 20, height: 20)
+            .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 0.75))
+          Image(systemName: "pencil")
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(Theme.Palette.menuDesc)
+        }
+        .frame(
+          width: CanvasEditAffordancePolicy.minimumHitSide,
+          height: CanvasEditAffordancePolicy.minimumHitSide)
+        .contentShape(Circle())
+      }
+      .buttonStyle(.plain)
+      .padding(4)
+      .help("Edit element".localizedUI)
+      .transition(.opacity)
+    }
+  }
+
   @ViewBuilder
   private var deleteButton: some View {
     if isSelected && !isEditing && !card.locked && !suppressEmptyChrome && selectable {
@@ -788,6 +1090,13 @@ private struct CanvasElementContent: View {
   /// in cardBody); `graphDropTarget` lightens the plot for an incoming equation. Both false on export.
   var graphSelected: Bool = false
   var graphDropTarget: Bool = false
+  /// Optional normalized line/arrow endpoints used only for an in-flight endpoint drag preview.
+  var connectorPoints: [CanvasPoint]?
+  /// Refitted vector geometry used only during an in-flight node/handle edit preview.
+  var vectorSpec: VectorPathSpec?
+  /// Present only for live board cards. Export renderers omit it, so measuring interaction geometry
+  /// never changes exported content.
+  var checklistCoordinateSpace: String? = nil
 
   /// The card's tint slot resolved against the ACTIVE flavor — semantic, so the same element
   /// re-colors when the theme changes.
@@ -808,7 +1117,8 @@ private struct CanvasElementContent: View {
                 .lineSpacing(Theme.Typography.bodyLineSpacing * zoom)
                 .foregroundStyle(Theme.Palette.placeholder)
             } else if Self.containsChecklist(text) {
-              InlineChecklistText(text: text, zoom: zoom, tint: tint)
+              InlineChecklistText(text: text, zoom: zoom, tint: tint,
+                                  checklistCoordinateSpace: checklistCoordinateSpace)
             } else {
               ComposerChipText(tint: tint, plain: text, ink: ink, definedVars: definedVars, failedCommands: failedCommands, zoom: zoom)
             }
@@ -821,17 +1131,19 @@ private struct CanvasElementContent: View {
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .rectangle:
-          ShapeBox(kind: .rectangle, tint: tint)
+          ShapeBox(kind: .rectangle, tint: tint, zoom: zoom)
         case .ellipse:
-          ShapeBox(kind: .ellipse, tint: tint)
+          ShapeBox(kind: .ellipse, tint: tint, zoom: zoom)
         case .diamond:
-          ShapeBox(kind: .diamond, tint: tint)
+          ShapeBox(kind: .diamond, tint: tint, zoom: zoom)
         case .line:
-          LineShape(arrow: false, points: card.points ?? CardState.defaultLinePoints(), tint: tint)
+          LineShape(arrow: false, points: connectorPoints ?? card.points ?? CardState.defaultLinePoints(), tint: tint)
         case .arrow:
-          LineShape(arrow: true, points: card.points ?? CardState.defaultLinePoints(), tint: tint)
+          LineShape(arrow: true, points: connectorPoints ?? card.points ?? CardState.defaultLinePoints(), tint: tint)
         case .freehand:
           FreehandShape(points: card.points ?? CardState.defaultFreehandPoints(), tint: tint)
+        case .vectorPath:
+          VectorPathShape(spec: vectorSpec ?? card.vectorPath ?? VectorPathSpec(), tint: tint)
         case .image:
           ImageObjectPlaceholder(path: card.imagePath)
             .overlay(alignment: .bottomTrailing) {
@@ -855,7 +1167,8 @@ private struct CanvasElementContent: View {
         case .sticky:
           StickyNoteView(title: card.stickyTitle ?? "", bodyText: text, tint: tint, zoom: zoom)
         case .checklist:
-          ChecklistView(items: card.checklist ?? [], tint: tint, zoom: zoom)
+          ChecklistView(items: card.checklist ?? [], tint: tint, zoom: zoom,
+                        checklistCoordinateSpace: checklistCoordinateSpace)
         case .table:
           SimpleTableView(spec: card.table ?? CardState.TableSpec(), tint: tint, zoom: zoom)
         }
@@ -881,18 +1194,45 @@ private struct CanvasElementContent: View {
   }
 }
 
+private struct ChecklistCheckboxFramesPreferenceKey: PreferenceKey {
+  static var defaultValue: [Int: CGRect] = [:]
+
+  static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+    value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+  }
+}
+
+private extension View {
+  @ViewBuilder
+  func reportChecklistCheckbox(index: Int, in coordinateSpace: String?) -> some View {
+    if let coordinateSpace {
+      background {
+        GeometryReader { proxy in
+          Color.clear.preference(
+            key: ChecklistCheckboxFramesPreferenceKey.self,
+            value: [index: proxy.frame(in: .named(coordinateSpace))])
+        }
+      }
+    } else {
+      self
+    }
+  }
+}
+
 private struct InlineChecklistText: View {
   let text: String
   let zoom: CGFloat
   let tint: Color?
+  let checklistCoordinateSpace: String?
   var body: some View {
     VStack(alignment: .leading, spacing: 3 * zoom) {
-      ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
+      ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { index, line in
         if line.hasPrefix("- [ ] ") || line.lowercased().hasPrefix("- [x] ") {
           let checked = line.lowercased().hasPrefix("- [x] ")
           HStack(spacing: 8 * zoom) {
             Image(systemName: checked ? "checkmark.circle.fill" : "circle")
               .foregroundStyle(checked ? (tint ?? Theme.Palette.accent) : Theme.Palette.menuDesc)
+              .reportChecklistCheckbox(index: index, in: checklistCoordinateSpace)
             Text(String(line.dropFirst(6))).strikethrough(checked)
           }
           .foregroundStyle(checked ? Theme.Palette.menuDesc : (tint ?? Theme.Palette.body))
@@ -949,12 +1289,14 @@ private struct ChecklistView: View {
   let items: [CardState.ChecklistItem]
   let tint: Color?
   let zoom: CGFloat
+  let checklistCoordinateSpace: String?
   var body: some View {
     VStack(alignment: .leading, spacing: 8 * zoom) {
-      ForEach(items) { item in
+      ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
         HStack(alignment: .firstTextBaseline, spacing: 9 * zoom) {
           Image(systemName: item.isChecked ? "checkmark.square.fill" : "square")
             .foregroundStyle(item.isChecked ? (tint ?? Theme.Palette.accent) : Theme.Palette.menuDesc)
+            .reportChecklistCheckbox(index: index, in: checklistCoordinateSpace)
           Text(item.text).strikethrough(item.isChecked).foregroundStyle(item.isChecked ? Theme.Palette.menuDesc : Theme.Palette.body)
         }
         .font(ComposerPreferences.appSwiftUIFont(size: 15 * zoom))
@@ -1038,8 +1380,11 @@ private struct NodeLabel: View {
       // on light themes).
       .foregroundStyle(tint ?? Theme.Palette.body)
       .shadow(color: Theme.Palette.elementShadow, radius: 3, y: 1)
-      .padding(.horizontal, 12 * zoom)
-      .padding(.vertical, 8 * zoom)
+      // The sizing seam measures with this same cap. Without it, the larger diamond frame offers
+      // Text extra width, changes its wrap, and invalidates the measured containment block.
+      .frame(maxWidth: ShapeLabelGeometry.defaultMaximumContentWidth * zoom)
+      .padding(.horizontal, ShapeLabelGeometry.horizontalPadding * zoom)
+      .padding(.vertical, ShapeLabelGeometry.verticalPadding * zoom)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .allowsHitTesting(false)
   }
@@ -1198,13 +1543,14 @@ private struct CanvasLabel: View {
 private struct ShapeBox: View {
   let kind: BoxShapeKind
   var tint: Color?
+  var zoom: CGFloat = 1
 
   var body: some View {
     BoxShape(kind: kind)
       .fill(tint.map { $0.opacity(Theme.flavor.isDark ? 0.16 : 0.10) } ?? Theme.Palette.elementFill)
       .overlay(BoxShape(kind: kind).stroke(tint ?? Theme.Palette.elementStroke, lineWidth: 2))
       .shadow(color: Theme.Palette.elementShadow, radius: 10, y: 4)
-      .padding(2)
+      .padding(ShapeLabelGeometry.renderedShapePathInset(at: zoom))
   }
 }
 
@@ -1281,6 +1627,29 @@ private struct FreehandShape: View {
         for point in mapped.dropFirst() { path.addLine(to: point) }
       }
       .stroke(tint ?? Theme.Palette.elementStroke, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
+    }
+  }
+}
+
+private struct VectorPathShape: View {
+  let spec: VectorPathSpec
+  var tint: Color?
+
+  var body: some View {
+    GeometryReader { geo in
+      let path = Path(VectorPathGeometry.path(
+        for: spec,
+        in: CGRect(origin: .zero, size: geo.size)))
+      ZStack {
+        if spec.isClosed {
+          path.fill(tint.map { $0.opacity(Theme.flavor.isDark ? 0.13 : 0.08) }
+                    ?? Theme.Palette.elementFill)
+        }
+        path.stroke(
+          tint ?? Theme.Palette.elementStroke,
+          style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+      }
       .shadow(color: Theme.Palette.elementShadow, radius: 6, y: 3)
     }
   }
@@ -2024,36 +2393,40 @@ private struct ImageObjectPlaceholder: View {
   }
 
   var body: some View {
-    Group {
-      if let image = resolvedImage {
-      Image(nsImage: image)
-        .resizable()
-        .scaledToFill()
-        // Clamp to the card frame so `scaledToFill` fills-and-crops within the card instead of
-        // overflowing it — the image's rounded border (and the selection ring) then hug the frame.
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-      } else {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(Theme.Palette.elementFill)
-          .overlay {
-            VStack(spacing: 8) {
-              Image(systemName: "photo")
-                .font(.system(size: 24, weight: .medium))
-              Text(path.map { ($0 as NSString).lastPathComponent } ?? "Image".localizedUI)
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
+    GeometryReader { proxy in
+      Group {
+        if let image = resolvedImage {
+          Image(nsImage: image)
+            .resizable()
+            .scaledToFill()
+            // `scaledToFill` may choose an aspect-derived child size larger than its proposal. An
+            // exact frame makes the following clip use the card bounds (the same bounds read by
+            // selection chrome) instead of the overflowing image's intrinsic fill height.
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
+            .shadow(color: Theme.Palette.elementShadow.opacity(0.18), radius: 10, y: 4)
+        } else {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Theme.Palette.elementFill)
+            .overlay {
+              VStack(spacing: 8) {
+                Image(systemName: "photo")
+                  .font(.system(size: 24, weight: .medium))
+                Text(path.map { ($0 as NSString).lastPathComponent } ?? "Image".localizedUI)
+                  .font(.caption.weight(.medium))
+                  .lineLimit(1)
+              }
+              .foregroundStyle(Theme.Palette.chromeText)
+              .padding(10)
             }
-            .foregroundStyle(Theme.Palette.chromeText)
-            .padding(10)
-          }
-          .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(Theme.Palette.chromeDivider, style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
-          .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .strokeBorder(Theme.Palette.chromeDivider, style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
+            .shadow(color: Theme.Palette.elementShadow.opacity(0.18), radius: 10, y: 4)
+        }
       }
+      .frame(width: proxy.size.width, height: proxy.size.height)
     }
     // `.task(id:)` runs on appear AND whenever `path` changes, and is cancelled on disappear — so a
     // card reloaded from a saved board (or culled and re-added while panning) reliably re-decodes,
@@ -2400,6 +2773,63 @@ private struct ResizeSession: Equatable {
   var translation: CGSize
 }
 
+struct ConnectorEndpointDrag {
+  static func boardPoint(from origin: CGPoint, translation: CGSize, zoom: CGFloat) -> CGPoint {
+    let safeZoom = max(zoom, 0.01)
+    return CGPoint(
+      x: origin.x + translation.width / safeZoom,
+      y: origin.y + translation.height / safeZoom)
+  }
+}
+
+struct QuickConnectDragSession: Equatable {
+  /// The handle center sits this many screen points beyond the card edge. Use this shared value for
+  /// both rendering and board-space destination math so a dragged handle remains under the pointer.
+  static let screenHandleOffset: CGFloat = 14
+
+  let connectorKind: CanvasElementKind
+
+  init(optionPressed: Bool) {
+    connectorKind = optionPressed ? .line : .arrow
+  }
+
+  func destination(from sourceFrame: CGRect,
+                   direction: ConnectorDirection,
+                   translation: CGSize,
+                   zoom: CGFloat) -> CGPoint {
+    let safeZoom = max(zoom, 0.01)
+    let offset = Self.screenHandleOffset / safeZoom
+    var origin = ConnectorGeometry.port(on: sourceFrame, direction: direction)
+    switch direction {
+    case .up: origin.y -= offset
+    case .right: origin.x += offset
+    case .down: origin.y += offset
+    case .left: origin.x -= offset
+    }
+    return ConnectorEndpointDrag.boardPoint(
+      from: origin,
+      translation: translation,
+      zoom: safeZoom)
+  }
+}
+
+enum VectorPathNodeEditorPolicy {
+  static func isVisible(isEditing: Bool, kind: CanvasElementKind) -> Bool {
+    isEditing && kind == .vectorPath
+  }
+}
+
+private struct ConnectorEndpointDragSession: Equatable {
+  let endpoint: ConnectorEndpoint
+  var translation: CGSize
+}
+
+private struct VectorControlDragSession: Equatable {
+  let nodeIndex: Int
+  let control: VectorPathControl
+  var translation: CGSize
+}
+
 private enum HorizontalEdge: CaseIterable, Hashable {
   case leading, trailing
 }
@@ -2407,6 +2837,17 @@ private enum HorizontalEdge: CaseIterable, Hashable {
 private struct TextWidthResizeSession: Equatable {
   let edge: HorizontalEdge
   var translation: CGSize
+}
+
+private extension ConnectorDirection {
+  var symbolName: String {
+    switch self {
+    case .up: "arrow.up"
+    case .right: "arrow.right"
+    case .down: "arrow.down"
+    case .left: "arrow.left"
+    }
+  }
 }
 
 private extension EventModifiers {

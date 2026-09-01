@@ -17,7 +17,7 @@
 "Board" = "画板";
 "Board name" = "画板名称";
 "Boards" = "画板";
-"BonsAI - quick capture" = "BonsAI - 快速捕捉";
+"BonsAI - click to capture, double-click to show the board" = "BonsAI - 单击快速捕捉，双击显示画板";
 "BonsAI %@ is ready - click to install" = "BonsAI %@ 已就绪 - 点击安装";
 "BonsAI checks GitHub for new releases automatically, then downloads and installs them in place." = "BonsAI 会自动在 GitHub 检查新版本，然后下载并原地安装。";
 "BonsAI could not allocate a bitmap to render the board for export." = "BonsAI 无法分配用于导出画板的位图。";
@@ -40,6 +40,7 @@
 "Close  Esc" = "关闭  Esc";
 "Close  ⌘J" = "关闭  ⌘J";
 "Close Settings  ·  Esc" = "关闭设置  ·  Esc";
+"Collapsed" = "已折叠";
 "Compile board" = "编译画板";
 "Compiling the board" = "正在编译画板";
 "Compiled draft" = "已编译草稿";
@@ -67,6 +68,7 @@
 "Engine" = "引擎";
 "Engine for the agent chat - Claude, Codex, or OpenCode" = "代理聊天使用的引擎 - Claude、Codex 或 OpenCode";
 "Equation" = "方程";
+"Expanded" = "已展开";
 "Export board" = "导出画板";
 "Export Board" = "导出画板";
 "Export board as PNG" = "将画板导出为 PNG";
@@ -223,6 +225,11 @@
 "Checking saved boards for the BonsAI 1.3 welcome board" = "正在已保存画板中检查 BonsAI 1.3 欢迎画板";
 "Checking whether Composer has existing boards" = "正在检查 Composer 是否有现有画板";
 "Checklist" = "清单";
+"Drag to reorder" = "拖动以重新排序";
+"Edit element" = "编辑元素";
+"Drag vector anchor" = "拖动矢量锚点";
+"Drag vector handle" = "拖动矢量手柄";
+"Return applies · Shift-Return inserts a new line" = "Return 应用 · Shift-Return 插入换行";
 "Claude authentication failed: %@. Run `claude auth login`, then retry." = "Claude 认证失败：%@。请运行 `claude auth login` 后重试。";
 "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry." = "Claude 认证被 API 拒绝（HTTP 401：%@）。请运行 `claude auth login` 后重试。";
 "Click again to permanently delete" = "再次点击将永久删除";
@@ -379,6 +386,7 @@
 "Line  ·  drag to draw  6" = "线条  ·  拖动绘制  6";
 "Arrow  ·  drag to draw  7" = "箭头  ·  拖动绘制  7";
 "Freehand stroke  ·  drag to draw  8" = "手绘笔画  ·  拖动绘制  8";
+"Pen  ·  click corners, drag curves, Return commits  P" = "钢笔  ·  点击创建角点，拖动创建曲线，Return 提交  P";
 "Equation  ·  click the board, then type LaTeX  9" = "方程  ·  点击画板后输入 LaTeX  9";
 "Heading  ·  cycles # / ## / ###" = "标题  ·  循环切换 # / ## / ###";
 "Bold  ·  **text**" = "粗体  ·  **text**";
@@ -505,6 +513,8 @@
 "Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac." = "仅提供在这台 Mac 上已安装并能响应的引擎。CLI 提示会保留在你配置的代理账户中；Apple Intelligence 在设备端运行其检查，绝不会将草稿发送出你的 Mac。";
 "Pick the body font for cards, chrome, and the editor." = "为卡片、界面和编辑器选择正文字体。";
 "Canvas" = "画布";
+"Dot grid" = "点阵网格";
+"Show a subtle alignment grid behind board content." = "在画板内容后方显示淡雅的对齐网格。";
 "Let the desktop blur through the board surface. Solid keeps the flat canvas." = "让桌面的模糊透过画板表面显示。“实色”则保持平面画布。";
 "Theme" = "主题";
 "Pick the palette for the whole app." = "为整个应用选择配色。";
@@ -515,10 +525,21 @@
 "Text size" = "文字大小";
 "Drawing" = "绘图";
 "How the board behaves while you draw." = "绘制时画板的行为方式。";
+"Continuous drawing" = "连续绘图";
+"Keep shape, line, freehand, and pen tools active after drawing. Esc returns to Select." = "绘制后保持形状、线条、手绘和钢笔工具处于活动状态。按 Esc 返回选择工具。";
+"Drawing tool stays active · click to use once" = "绘图工具保持活动 · 点击改为单次使用";
+"Drawing tool is one-shot · click to keep active" = "绘图工具为单次使用 · 点击保持活动";
 "Snap sketches into shapes" = "草图自动转为图形";
 "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "识别出的笔画在抬笔时变为规整图形。关闭时保留建议提示。";
 "Migrating saved connector tokens" = "正在迁移已保存的连接器令牌";
 "Renaming the board" = "正在重命名画板";
 "%@: macOS Keychain access failed. Check Keychain Access and try again." = "%@：无法访问 macOS 钥匙串。请检查“钥匙串访问”后重试。";
 "%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again." = "%@：BonsAI 无法更新旧版连接器令牌文件。请检查 Application Support 权限后重试。";
+"Drag connector endpoint" = "拖动连接线端点";
+"Create linked line" = "创建线条连接的形状";
+"Click to create a linked shape; drag to connect; hold Option for a line" = "点击创建连接形状；拖动进行连接；按住 Option 使用线条";
 "Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI." = "无法验证连接器令牌迁移。旧版文件已保留以避免令牌丢失；请检查“钥匙串访问”，重新打开 BonsAI 后重试。";
+"Application" = "应用程序";
+"Choose how BonsAI appears in macOS." = "选择 BonsAI 在 macOS 中的显示方式。";
+"Hide Dock icon" = "隐藏程序坞图标";
+"Keep BonsAI in the menu bar and use the global shortcut to restore the board." = "将 BonsAI 保留在菜单栏中，并使用全局快捷键恢复画板。";

@@ -11,6 +11,28 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Added
+
+- **Diagram connections are faster to create and easier to reshape.** Selected shapes expose
+  directional quick-connect controls for bound lines or arrows, while every connector has dedicated
+  draggable endpoint handles and stays attached through moves, copies, and undo.
+- **A vector pen creates editable custom paths and curves.** Click for corners, drag for symmetric
+  Bézier handles, close against the first node or press Return for an open path, then edit anchors
+  and handles inline; paths persist, honor canvas tints, and render in PNG exports.
+- **Canvas drawing can keep its tool and show an optional dot grid.** Both behaviors are persisted
+  Appearance settings, remain opt-in, and the grid follows pan and zoom behind board content.
+- **BonsAI can run without a Dock icon.** A new Appearance option switches the app to a menu-bar-only
+  activation policy at runtime while keeping the global shortcut available to restore the board.
+
+### Changed
+
+- **Canvas editing is more discoverable and deliberate.** Editable elements reveal a hover action,
+  shape and connector labels grow across multiple lines, and checklist rows use dedicated drag
+  handles plus measured checkbox targets so reordering, selecting, and completing tasks do not
+  interfere with one another.
+- **Double-clicking the menu-bar icon restores the board.** A single click still opens quick capture,
+  while the second click dismisses capture and brings the complete workspace forward.
+
 ### Fixed
 
 - **Canvas tabs no longer show a hard-edged shadow in light themes.** The horizontally scrollable

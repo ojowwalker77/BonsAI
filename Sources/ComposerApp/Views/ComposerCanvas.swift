@@ -21,6 +21,9 @@ struct ComposerCanvas: View {
   @ObservedObject private var engineCapabilities = EngineCapabilityStore.shared
   @ObservedObject private var userFacingErrors = UserFacingErrorStore.shared
   @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
+  @AppStorage(ComposerPreferences.continuousDrawingEnabledKey) private var continuousDrawingEnabled
+    = ComposerPreferences.defaultContinuousDrawingEnabled
+  @AppStorage(ComposerPreferences.dotGridEnabledKey) private var dotGridEnabled = false
 
   @State private var tool: CanvasTool = .select
   @State private var isWorking = false
@@ -35,12 +38,10 @@ struct ComposerCanvas: View {
   /// drop-target treatment. In-canvas card drags never set this (onDrop's isTargeted only
   /// fires for external content).
   @State private var isImageDropTargeted = false
-  @State private var freehandDraft: [CGPoint]?
-  @State private var elementDraft: DragSegment?
+  @State private var drawingDraftState = CanvasDrawingDraftState()
   /// While drawing a line/arrow, the card its live end will bind to on release — highlighted so the
   /// bind is visible before commit. Shares `board.bindCandidate` with the commit path, so the
   /// preview and the actual binding can never disagree.
-  @State private var bindTargetID: UUID?
   @State private var isSpacePressed = false
   @State private var viewportThrottle = ViewportEventThrottle()
   /// Observed for the agent's *coarse* state (isRunning / grounding) so the toolbar and ⌘K palette
@@ -58,15 +59,20 @@ struct ComposerCanvas: View {
   @State private var showPalette = false
   /// The tint swatch row in the bottom bar is expanded.
   @State private var tintPickerOpen = false
+  /// The single board picker expands downward on hover. A grace timer prevents flicker while the
+  /// pointer crosses into its rows; rename and delete-confirmation state pin it open.
+  @State private var boardPickerOpen = false
+  @State private var boardPickerHovering = false
+  @State private var boardPickerCloseWork: DispatchWorkItem?
   /// The export pill grows on hover into a list of export formats (same mechanic as the board
-  /// picker it replaced. Open immediate, close deferred so the glyph→row gap doesn't flicker.
+  /// picker). Open immediate, close deferred so the glyph→row gap doesn't flicker.
   @State private var exportMenuOpen = false
   @State private var exportMenuCloseWork: DispatchWorkItem?
   /// Measured rest-label width of the Export pill; its expanded list pins to this so hovering
   /// only grows the surface downward, never sideways.
   @State private var exportRestWidth: CGFloat = 0
-  /// Board rename stays owned by the canvas so each repeated picker pill can remain plain inline
-  /// SwiftUI instead of introducing another tab/component abstraction.
+  /// Board rename stays owned by the canvas so persistence failures keep the attempted name visible
+  /// and Escape participates in the workspace's single dismissal coordinator.
   @State private var renamingBoardID: PersistentIdentifier?
   @State private var boardNameDraft = ""
   @FocusState private var boardNameFocused: Bool
@@ -116,6 +122,42 @@ struct ComposerCanvas: View {
     nonmutating set { workspace.pan = newValue }
   }
 
+  private var freehandDraft: [CGPoint]? {
+    get { drawingDraftState.freehand }
+    nonmutating set {
+      var state = drawingDraftState
+      state.freehand = newValue
+      drawingDraftState = state
+    }
+  }
+
+  private var vectorDraft: VectorPathDraft? {
+    get { drawingDraftState.vector }
+    nonmutating set {
+      var state = drawingDraftState
+      state.vector = newValue
+      drawingDraftState = state
+    }
+  }
+
+  private var elementDraft: DragSegment? {
+    get { drawingDraftState.element }
+    nonmutating set {
+      var state = drawingDraftState
+      state.element = newValue
+      drawingDraftState = state
+    }
+  }
+
+  private var bindTargetID: UUID? {
+    get { drawingDraftState.bindTargetID }
+    nonmutating set {
+      var state = drawingDraftState
+      state.bindTargetID = newValue
+      drawingDraftState = state
+    }
+  }
+
   private var effectiveScale: CGFloat { scale }
 
   var body: some View {
@@ -141,7 +183,12 @@ struct ComposerCanvas: View {
       "Delete board".localizedUI,
       isPresented: Binding(
         get: { pendingBoardDeletion != nil },
-        set: { if !$0 { pendingBoardDeletion = nil } }
+        set: {
+          if !$0 {
+            pendingBoardDeletion = nil
+            scheduleBoardPickerCloseIfNeeded()
+          }
+        }
       ),
       titleVisibility: .visible,
       presenting: pendingBoardDeletion
@@ -201,7 +248,10 @@ struct ComposerCanvas: View {
       // The promotion chip floats above the cards but below the command bar/pills and the agent dock
       // — it's a whisper over the canvas, not chrome that competes with the tools.
       promotionOverlay(in: inner)
-      boardSwitcherPill(in: proxy.size)
+      if !showPalette {
+        boardSwitcherPill(in: proxy.size)
+          .transition(.opacity)
+      }
       boardActionsPill(in: proxy.size)
       protectedBoardBanner(in: proxy.size)
       bottomCommandBar(fit: inner)
@@ -224,7 +274,10 @@ struct ComposerCanvas: View {
     }
     .onChange(of: inner) { _, value in lastViewportSize = value }
     // Promotion lifecycle: a tool change starts a fresh intent, so any live chip is stale.
-    .onChange(of: tool) { _, _ in dismissPromotion() }
+    .onChange(of: tool) { _, selectedTool in
+      dismissPromotion()
+      if selectedTool != .vectorPen { vectorDraft = nil }
+    }
     // Editing a card owns the screen; while a stage is open the chip must not hover behind it. When
     // a text card's edit session ENDS (editingCardID → nil), evaluate it for a text promotion.
     .onChange(of: board.editingCardID) { previous, current in
@@ -289,7 +342,7 @@ struct ComposerCanvas: View {
     commandAnchor
       .onReceive(NotificationCenter.default.publisher(for: .composerZoomOut)) { _ in zoom(0.8, anchoredAt: zoomAnchor) }
       .onReceive(NotificationCenter.default.publisher(for: .composerZoomIn)) { _ in zoom(1.25, anchoredAt: zoomAnchor) }
-      .onReceive(NotificationCenter.default.publisher(for: .composerZoomReset)) { _ in withAnimation(Theme.Motion.accessory) { scale = 1 } }
+      .onReceive(NotificationCenter.default.publisher(for: .composerZoomReset)) { _ in resetZoom() }
       .onReceive(NotificationCenter.default.publisher(for: .composerZoomFit)) { note in
         let all = (note.userInfo?["scope"] as? String) == "all"
         withAnimation(Theme.Motion.accessory) { fitBoard(in: lastViewportSize, forceAll: all) }
@@ -316,7 +369,11 @@ struct ComposerCanvas: View {
         quickCaptureRevealCardID = nil
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerSelectTool)) { note in
-        if let index = note.userInfo?["index"] as? Int { selectTool(index: index) }
+        if let selectedTool = note.userInfo?["tool"] as? CanvasTool {
+          tool = selectedTool
+        } else if let index = note.userInfo?["index"] as? Int {
+          selectTool(index: index)
+        }
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerToggleAgent)) { _ in
         toggleAgent()
@@ -378,6 +435,10 @@ struct ComposerCanvas: View {
         onSelectionEnded: selectCards(inViewportRect:modifiers:),
         onFreehandChanged: { freehandDraft = $0; if promotion != nil { dismissPromotion() } },
         onFreehandEnded: commitFreehandDraft,
+        onVectorNodeChanged: updateVectorNode,
+        onVectorNodeEnded: finishVectorNode,
+        onVectorHoverChanged: updateVectorHover,
+        onVectorCommitOpen: commitOpenVectorDraft,
         onElementDraftChanged: onElementDraftChanged,
         onElementDraftEnded: commitElementDraft,
         onElementDraftCancelled: { elementDraft = nil; bindTargetID = nil },
@@ -391,6 +452,14 @@ struct ComposerCanvas: View {
         onZoom: handleZoom
       )
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      if dotGridEnabled {
+        CanvasDotGrid(
+          scale: effectiveScale,
+          translation: CGSize(
+            width: pan.width + panLive.width,
+            height: pan.height + panLive.height))
+      }
 
       // The card layer is isolated and `Equatable` so SwiftUI skips rebuilding every card when only a
       // transient gesture changed (draw / freehand / selection rect / pan / zoom). The live pan
@@ -420,6 +489,7 @@ struct ComposerCanvas: View {
 
       selectionRectView
       freehandDraftView
+      vectorDraftView
       elementDraftView
       snapGuidesOverlay
 
@@ -574,6 +644,38 @@ struct ComposerCanvas: View {
     }
   }
 
+  @ViewBuilder
+  private var vectorDraftView: some View {
+    if let draft = vectorDraft {
+      let transform = CGAffineTransform(
+        a: effectiveScale,
+        b: 0,
+        c: 0,
+        d: effectiveScale,
+        tx: pan.width + panLive.width,
+        ty: pan.height + panLive.height)
+      Path(draft.previewPath)
+        .applying(transform)
+        .stroke(
+          currentTintColor ?? Theme.Palette.inkStroke,
+          style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+        .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
+        .allowsHitTesting(false)
+
+      ForEach(Array(draft.anchorPoints.enumerated()), id: \.offset) { index, point in
+        Circle()
+          .fill(index == 0 ? Theme.Palette.accent : Theme.Palette.labelChipFill)
+          .overlay(Circle().strokeBorder(Theme.Palette.accent, lineWidth: 1.5))
+          .frame(width: index == 0 && draft.nodeCount >= 3 ? 10 : 8,
+                 height: index == 0 && draft.nodeCount >= 3 ? 10 : 8)
+          .position(
+            x: point.x * effectiveScale + pan.width + panLive.width,
+            y: point.y * effectiveScale + pan.height + panLive.height)
+          .allowsHitTesting(false)
+      }
+    }
+  }
+
   /// The active tint resolved against the current flavor (nil = default ink).
   private var currentTintColor: Color? {
     guard let slot = board.currentTint, Theme.flavor.tints.indices.contains(slot) else { return nil }
@@ -591,11 +693,11 @@ struct ComposerCanvas: View {
     // A bare click with a line/arrow/freehand tool places nothing (no default diagonal shape drops
     // out of nowhere) and keeps the tool active so the next drag draws. Only box shapes and text
     // are click-to-place; lines are drawn by dragging start→end.
-    if kind == .line || kind == .arrow || kind == .freehand { return }
+    if kind == .line || kind == .arrow || kind == .freehand || kind == .vectorPath { return }
     let boardPoint = CGPoint(x: (point.x - pan.width) / effectiveScale,
                              y: (point.y - pan.height) / effectiveScale)
     let id = board.addElement(kind, at: boardPoint)
-    tool = .select
+    tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
     // Editing state is established synchronously so navigation cannot race the stage's own focus
     // delay and persist an abandoned structured card before its editor mounts.
     if kind == .text || kind == .equation || kind == .sticky || kind == .checklist || kind == .table {
@@ -617,7 +719,7 @@ struct ComposerCanvas: View {
 
   /// The draft segment changed (viewport space). Store it, and for a line/arrow resolve the card its
   /// live end would bind to — under the CURRENT drag endpoint, converted to board space — so the
-  /// highlight tracks the cursor and matches exactly what `bindArrowIfPossible` will do on commit.
+  /// highlight tracks the cursor and matches exactly what connector finalization does on commit.
   private func onElementDraftChanged(_ start: CGPoint, _ current: CGPoint) {
     if promotion != nil { dismissPromotion() }
     elementDraft = DragSegment(start: start, end: current)
@@ -635,7 +737,7 @@ struct ComposerCanvas: View {
     guard elementDraft != nil else { return }
     guard let kind = tool.elementKind else { return }
     if let id = board.addDrawnElement(kind, from: boardPoint(forViewport: start), to: boardPoint(forViewport: end)) {
-      tool = .select
+      tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
       // A perpendicular partner means this pair of lines/arrows reads as axes — offer a graph.
       if kind == .line || kind == .arrow { offerGraphPromotion(id) }
     }
@@ -671,7 +773,7 @@ struct ComposerCanvas: View {
       )
     }
     if let id = board.addFreehandStroke(frame: frame, points: normalized) {
-      tool = .select
+      tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
       // Auto-snap (Settings ▸ Drawing): a confident read converts on pen-up, no chip — the rough
       // stroke stays its own undo step, so ⌘Z restores the original ink like OneNote. Arrows are
       // EXCLUDED from auto conversion: too many ordinary strokes read as arrow-with-a-hook and
@@ -686,6 +788,45 @@ struct ComposerCanvas: View {
         offerFreehandPromotion(id, boardPoints: boardPoints)
       }
     }
+  }
+
+  private func updateVectorNode(_ viewportAnchor: CGPoint, _ viewportDrag: CGPoint) {
+    if promotion != nil { dismissPromotion() }
+    var draft = vectorDraft ?? VectorPathDraft()
+    draft.update(
+      anchor: boardPoint(forViewport: viewportAnchor),
+      drag: boardPoint(forViewport: viewportDrag))
+    vectorDraft = draft
+  }
+
+  private func finishVectorNode(_ viewportAnchor: CGPoint, _ viewportDrag: CGPoint) {
+    guard var draft = vectorDraft else { return }
+    let placement = draft.finish(
+      anchor: boardPoint(forViewport: viewportAnchor),
+      drag: boardPoint(forViewport: viewportDrag),
+      closeTolerance: 10 / max(effectiveScale, 0.01))
+    if let placement {
+      commitVectorPlacement(placement)
+    } else {
+      vectorDraft = draft
+    }
+  }
+
+  private func updateVectorHover(_ viewportPoint: CGPoint?) {
+    guard var draft = vectorDraft else { return }
+    draft.hover(at: viewportPoint.map(boardPoint(forViewport:)))
+    vectorDraft = draft
+  }
+
+  private func commitOpenVectorDraft() {
+    guard let placement = vectorDraft?.commitOpen() else { return }
+    commitVectorPlacement(placement)
+  }
+
+  private func commitVectorPlacement(_ placement: VectorPathPlacement) {
+    vectorDraft = nil
+    guard board.addVectorPath(placement) != nil else { return }
+    tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
   }
 
   private func selectCards(inViewportRect rect: CGRect, modifiers: EventModifiers) {
@@ -728,6 +869,7 @@ struct ComposerCanvas: View {
           }
           Button("Duplicate to Edit".localizedUI) {
             if board.duplicateProtectedBoardForEditing() {
+              resetView()
               show(Toast(
                 text: "Created an editable copy; the original board remains unchanged.".localizedUI,
                 symbol: "doc.on.doc.fill",
@@ -756,122 +898,178 @@ struct ComposerCanvas: View {
     }
   }
 
-  /// The existing board-picker pill repeated horizontally: board, space, board, space, plus. Each
-  /// board owns its own glass surface; there is deliberately no enclosing tab-bar component.
+  /// The current board's name rests in one top-left pill. Hovering the same surface expands it
+  /// downward into board management; it never becomes a tab row or changes workspace geometry.
   private func boardSwitcherPill(in size: CGSize) -> some View {
-    boardPickerPills(in: size)
+    boardPickerMenu(viewportWidth: size.width)
+      // Constrain pointer ownership while this view still has the popup's intrinsic bounds. The
+      // following alignment frame intentionally fills the window for positioning only; giving it
+      // the interaction shape would let transparent canvas space win hit testing over the board.
+      .contentShape(
+        .interaction,
+        RoundedRectangle(cornerRadius: WindowChrome.radius, style: .continuous))
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .padding(.top, WindowChrome.edgeInset)
       .padding(.leading, WindowChrome.trafficLightInset)
-      .zIndex(60)
+      // The protected-board banner sits at 70 below this rest row. An expanded picker must remain
+      // visually and interactively above it, especially at the 640pt window minimum.
+      .zIndex(boardPickerOpen ? 80 : 60)
   }
 
-  private func boardPickerPills(in size: CGSize) -> some View {
-    // Reserve a stable lane for the top-right export / agent controls. The picker row may scroll,
-    // but it never grows underneath those controls or changes the board/dock window geometry.
-    let maxWidth = max(
-      WindowChrome.boardPillWidth + WindowChrome.controlHeight + WindowChrome.edgeInset / 2,
-      size.width - WindowChrome.trafficLightInset - WindowChrome.topRightReservedWidth
-    )
-    let menuShadow = Theme.Shadow.menu
-    let shadowOverflow = CGFloat(menuShadow.radius + abs(menuShadow.y))
-    let rowHeight = WindowChrome.controlHeight + WindowChrome.padV * 2
-    return ScrollViewReader { proxy in
-      ScrollView(.horizontal, showsIndicators: false) {
-        LazyHStack(spacing: WindowChrome.edgeInset / 2) {
-          ForEach(store.dumps, id: \.persistentModelID) { dump in
-            let id = dump.persistentModelID
-            let current = id == store.currentID
-            let displayTitle = boardPillTitle(for: dump)
-            Group {
-              if renamingBoardID == id {
-                TextField("Board name".localizedUI, text: $boardNameDraft)
-                  .textFieldStyle(.plain)
-                  .font(WindowChrome.labelFont)
-                  .foregroundStyle(Theme.Palette.body)
-                  .multilineTextAlignment(.center)
-                  .focused($boardNameFocused)
-                  .onSubmit { _ = commitBoardRename() }
-                  // Escape in the rename field goes through the guarded coordinator like every
-                  // other surface (Agent, Settings, ⌘K): with the rename active the coordinator
-                  // resolves to `.boardRename` → cancel, and `escapeHandledThisTurn` guarantees a
-                  // press that AppKit delivers through more than one route still performs exactly
-                  // one dismissal instead of also firing a lower-priority action.
-                  .onExitCommand(perform: handleEscapeBoard)
-                  .onAppear { DispatchQueue.main.async { boardNameFocused = true } }
-                  .onChange(of: boardNameFocused) { _, focused in
-                    if !focused { _ = commitBoardRename() }
-                  }
-              } else {
-                Button {
-                  guard commitBoardRename() else { return }
-                  if !current { pickBoard(id) }
-                } label: {
-                  Text(displayTitle)
-                    .font(WindowChrome.labelFont)
-                    .foregroundStyle(current ? Theme.Palette.body : Theme.Palette.title)
-                    .lineLimit(1)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                  Button("Rename Board".localizedUI) {
-                    guard commitBoardRename() else { return }
-                    beginBoardRename(id, title: dump.title)
-                  }
-                  if store.dumps.count > 1 {
-                    Button("Delete Board".localizedUI, role: .destructive) {
-                      requestBoardDeletion(id, title: dump.title)
-                    }
-                  }
-                }
-                .help(current ? displayTitle : "Open %@".localizedUI(displayTitle))
-              }
-            }
-            .frame(width: WindowChrome.boardPillWidth, height: WindowChrome.controlHeight)
-            .padding(.horizontal, WindowChrome.padH)
-            .padding(.vertical, WindowChrome.padV)
-            .composerPopupSurface()
-            .id(id)
-          }
+  private var currentBoardName: String {
+    let name = store.current?.title.trimmed ?? ""
+    guard !name.isEmpty else { return "Untitled".localizedUI }
+    return name
+  }
 
-          Button(action: newBoard) {
-            Image(systemName: "plus")
-              .font(WindowChrome.iconFont)
-              .foregroundStyle(Theme.Palette.chromeText)
-              .frame(width: WindowChrome.controlHeight, height: WindowChrome.controlHeight)
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .chromePill()
-          .help("New board  ⌘N".localizedUI)
+  /// Fixed-width rest label: the expanded list grows only downward, never sideways.
+  private var boardPickerTitle: String {
+    let name = currentBoardName
+    return name.count > 13 ? String(name.prefix(13)) + "…" : name
+  }
+
+  @ViewBuilder
+  private func currentBoardTitleRow(canDelete: Bool, contentWidth: CGFloat) -> some View {
+    if renamingBoardID == store.currentID {
+      TextField("Board name".localizedUI, text: $boardNameDraft)
+        .textFieldStyle(.plain)
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .multilineTextAlignment(.center)
+        .focused($boardNameFocused)
+        .onSubmit { _ = commitBoardRename() }
+        .onExitCommand(perform: handleEscapeBoard)
+        .frame(width: contentWidth, height: WindowChrome.controlHeight)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.rowFill))
+        .onAppear { DispatchQueue.main.async { boardNameFocused = true } }
+        .onChange(of: boardNameFocused) { _, focused in
+          if !focused { _ = commitBoardRename() }
         }
-        // Keep the pills at their existing coordinates while giving their shadows real pixels
-        // inside the scroll viewport. The outer frame below preserves the picker's layout width,
-        // so the padded viewport cannot move content into the reserved top-right control lane.
-        .padding(shadowOverflow)
+    } else {
+      Button(action: toggleBoardPicker) {
+        Text(boardPickerOpen ? currentBoardName : boardPickerTitle)
+          .font(WindowChrome.labelFont)
+          .foregroundStyle(Theme.Palette.body)
+          .lineLimit(1)
+          .frame(width: contentWidth, height: WindowChrome.controlHeight)
+          .contentShape(Rectangle())
       }
-      .frame(width: maxWidth + shadowOverflow * 2, height: rowHeight + shadowOverflow * 2)
-      .offset(x: -shadowOverflow, y: -shadowOverflow)
-      .frame(width: maxWidth, height: rowHeight, alignment: .topLeading)
-      // Drawing may overflow this rectangle; interaction must not, or canvas drags below the row
-      // would be swallowed by the horizontal scroller's invisible shadow allowance.
-      .contentShape(.interaction, Rectangle())
-      .onAppear { scrollCurrentBoardPill(using: proxy, animated: false) }
-      .onChange(of: store.currentID) { _, _ in scrollCurrentBoardPill(using: proxy, animated: true) }
+      .buttonStyle(.plain)
+      .help(currentBoardName)
+      .accessibilityLabel(Text(currentBoardName))
+      .accessibilityValue(Text((boardPickerOpen ? "Expanded" : "Collapsed").localizedUI))
+      .accessibilityHint(Text("Switch board".localizedUI))
+      .accessibilityActions {
+        Button("Rename board".localizedUI) {
+          guard let id = store.currentID, commitBoardRename() else { return }
+          beginBoardRename(id, title: store.current?.title ?? "")
+        }
+        if canDelete, let id = store.currentID {
+          Button("Delete board".localizedUI) {
+            requestBoardDeletion(id, title: store.current?.title ?? "")
+          }
+        }
+      }
+      .contextMenu {
+        Button("Rename Board".localizedUI) {
+          guard let id = store.currentID, commitBoardRename() else { return }
+          beginBoardRename(id, title: store.current?.title ?? "")
+        }
+        if canDelete, let id = store.currentID {
+          Button("Delete Board".localizedUI, role: .destructive) {
+            requestBoardDeletion(id, title: store.current?.title ?? "")
+          }
+        }
+      }
     }
   }
 
-  private func boardPillTitle(for dump: Dump) -> String {
-    let title = dump.title.isEmpty ? "Untitled".localizedUI : dump.title
-    return title.count > 13 ? String(title.prefix(13)) + "…" : title
+  /// One glass surface: current board at rest; other boards and New Board below on hover.
+  private func boardPickerMenu(viewportWidth: CGFloat) -> some View {
+    let others = store.dumps.filter { $0.persistentModelID != store.currentID }
+    let expandedContentWidth = BoardPickerLayoutPolicy.expandedContentWidth(
+      viewportWidth: viewportWidth)
+    let contentWidth = boardPickerOpen ? expandedContentWidth : WindowChrome.boardPillWidth
+    return VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+      currentBoardTitleRow(canDelete: !others.isEmpty, contentWidth: contentWidth)
+
+      if boardPickerOpen {
+        VStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+          Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+
+          if !others.isEmpty {
+            ScrollView {
+              LazyVStack(alignment: .leading, spacing: WindowChrome.itemSpacing) {
+                ForEach(others, id: \.persistentModelID) { dump in
+                  let id = dump.persistentModelID
+                  BoardPickerRow(
+                    title: dump.title.isEmpty ? "Untitled".localizedUI : dump.title,
+                    isRenaming: renamingBoardID == id,
+                    draftName: $boardNameDraft,
+                    nameFocused: $boardNameFocused,
+                    onPick: {
+                      guard commitBoardRename() else { return }
+                      pickBoard(id)
+                      if store.currentID == id { boardPickerOpen = false }
+                    },
+                    onBeginRename: {
+                      guard commitBoardRename() else { return }
+                      beginBoardRename(id, title: dump.title)
+                    },
+                    onCommitRename: { _ = commitBoardRename() },
+                    onCancelRename: handleEscapeBoard,
+                    onDelete: { requestBoardDeletion(id, title: dump.title) }
+                  )
+                }
+              }
+            }
+            .frame(maxHeight: 320)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Divider().overlay(Theme.Palette.separator).padding(.horizontal, 2)
+          }
+          newBoardRow
+        }
+        .frame(width: expandedContentWidth)
+      }
+    }
+    .frame(width: contentWidth, alignment: .leading)
+    .padding(.horizontal, WindowChrome.padH)
+    .padding(.vertical, WindowChrome.padV)
+    .composerPopupSurface()
+    .onHover { setBoardPickerHover($0) }
+    .animation(.easeOut(duration: 0.16), value: boardPickerOpen)
+    .help(boardPickerOpen ? "" : "Switch board".localizedUI)
+  }
+
+  private var newBoardRow: some View {
+    Button {
+      let previousID = store.currentID
+      newBoard()
+      if store.currentID != previousID { boardPickerOpen = false }
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
+        Text("New board".localizedUI).font(WindowChrome.labelFont)
+        Spacer(minLength: 0)
+      }
+      .foregroundStyle(Theme.Palette.body)
+      .padding(.horizontal, WindowChrome.labelPadH)
+      .frame(maxWidth: .infinity)
+      .frame(height: WindowChrome.boardPickerRowHeight)
+      .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.rowFill))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help("New board  ⌘N".localizedUI)
   }
 
   private func beginBoardRename(_ id: PersistentIdentifier, title: String) {
     boardNameDraft = title.isEmpty ? "Untitled".localizedUI : title
     renamingBoardID = id
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    boardPickerOpen = true
   }
 
   @discardableResult
@@ -880,10 +1078,12 @@ struct ComposerCanvas: View {
     let name = boardNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !name.isEmpty else {
       renamingBoardID = nil
+      scheduleBoardPickerCloseIfNeeded()
       return true
     }
     if renameBoard(id, to: name) {
       renamingBoardID = nil
+      scheduleBoardPickerCloseIfNeeded()
       return true
     } else {
       // Keep the editor and the attempted value visible so the user can retry after fixing storage.
@@ -894,17 +1094,56 @@ struct ComposerCanvas: View {
 
   private func cancelBoardRename() {
     renamingBoardID = nil
+    scheduleBoardPickerCloseIfNeeded()
   }
 
-  private func scrollCurrentBoardPill(using proxy: ScrollViewProxy, animated: Bool) {
-    guard let id = store.currentID else { return }
-    DispatchQueue.main.async {
-      if animated {
-        withAnimation(Theme.Motion.accessory) { proxy.scrollTo(id, anchor: .center) }
-      } else {
-        proxy.scrollTo(id, anchor: .center)
-      }
+  private func setBoardPickerHover(_ hovering: Bool) {
+    boardPickerHovering = hovering
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    if hovering {
+      if !boardPickerOpen { Haptics.hover() }
+      boardPickerOpen = true
+    } else {
+      scheduleBoardPickerCloseIfNeeded()
     }
+  }
+
+  private func toggleBoardPicker() {
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    if boardPickerOpen,
+       BoardPickerPresentationPolicy.canClose(
+         isHovering: false,
+         hasActiveRename: renamingBoardID != nil,
+         hasDeleteConfirmation: pendingBoardDeletion != nil
+       ) {
+      boardPickerOpen = false
+    } else {
+      boardPickerOpen = true
+    }
+  }
+
+  private func closeBoardPicker() {
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    withAnimation(.easeOut(duration: 0.16)) { boardPickerOpen = false }
+  }
+
+  private func scheduleBoardPickerCloseIfNeeded() {
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    guard !boardPickerHovering else { return }
+    let work = DispatchWorkItem {
+      guard BoardPickerPresentationPolicy.canClose(
+        isHovering: boardPickerHovering,
+        hasActiveRename: renamingBoardID != nil,
+        hasDeleteConfirmation: pendingBoardDeletion != nil
+      ) else { return }
+      boardPickerOpen = false
+    }
+    boardPickerCloseWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
   }
 
   /// The top-right chrome: an Export pill (hover-expands) to the LEFT of the
@@ -1015,7 +1254,7 @@ struct ComposerCanvas: View {
   private func bottomCommandBar(fit innerSize: CGSize) -> some View {
     return HStack(spacing: WindowChrome.itemSpacing) {
       SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out".localizedUI) { zoom(0.8, anchoredAt: zoomAnchor) }
-      Button(action: { withAnimation(Theme.Motion.accessory) { scale = 1 } }) {
+      Button(action: resetZoom) {
         Text("\(Int((effectiveScale * 100).rounded()))%")
           .font(WindowChrome.labelFont.monospacedDigit())
           .foregroundStyle(Theme.Palette.chromeText)
@@ -1031,7 +1270,7 @@ struct ComposerCanvas: View {
 
       barDivider
 
-      CanvasToolbar(tool: $tool)
+      CanvasToolbar(tool: $tool, continuousDrawingEnabled: $continuousDrawingEnabled)
 
       barDivider
 
@@ -1143,7 +1382,8 @@ struct ComposerCanvas: View {
 
   /// The unified editing surface for STRUCTURED edits — equation, graph, shape/line label — plus
   /// the ⇧⌘F writing sheet (`focusedCardID`). Text otherwise edits inline on the board and never
-  /// opens a stage from `editingCardID`; freehand/image never open one at all.
+  /// opens a stage from `editingCardID`; vector paths edit their nodes inline, and freehand/image
+  /// never open an editor at all.
   @ViewBuilder
   private func editingStageOverlay(in size: CGSize) -> some View {
     if let id = focusedCardID,
@@ -1160,7 +1400,7 @@ struct ComposerCanvas: View {
       .id(id)
     } else if let id = board.editingCardID,
        let card = board.cards.first(where: { $0.id == id }),
-       card.elementKind != .freehand, card.elementKind != .image, card.elementKind != .text {
+       EditingStagePresentationPolicy.presentsStage(for: card.elementKind) {
       EditingStage(
         board: board,
         card: card,
@@ -1412,7 +1652,7 @@ struct ComposerCanvas: View {
   }
 
   private func zoom(_ factor: CGFloat, anchoredAt point: CGPoint) {
-    guard allowPanZoom() else { return }
+    guard allowViewportTransform() else { return }
     let oldScale = max(scale, 0.01)
     let nextScale = clampZoom(oldScale * factor)
     guard nextScale != scale else { return }
@@ -1428,17 +1668,29 @@ struct ComposerCanvas: View {
   }
 
   private func handleScroll(_ delta: CGSize) {
-    guard allowPanZoom() else { return }
-    viewportThrottle.enqueueScroll(delta) { applied in
+    guard allowViewportTransform() else { return }
+    viewportThrottle.enqueueScroll(delta, canApply: allowViewportTransform) { applied in
       pan.width += applied.width
       pan.height += applied.height
     }
   }
 
   private func handleZoom(_ factor: CGFloat, anchoredAt point: CGPoint) {
-    viewportThrottle.enqueueZoom(factor, anchoredAt: point) { appliedFactor, anchor in
+    guard allowViewportTransform() else { return }
+    viewportThrottle.enqueueZoom(
+      factor, anchoredAt: point, canApply: allowViewportTransform
+    ) { appliedFactor, anchor in
       zoom(appliedFactor, anchoredAt: anchor)
     }
+  }
+
+  /// Checks both modal editing and pointer ownership. The throttle calls this again immediately
+  /// before applying deferred work: an event accepted just before a drawing press must not move the
+  /// captured viewport transform after that press begins.
+  private func allowViewportTransform() -> Bool {
+    guard CanvasViewportTransformPolicy.allowsPanOrZoom(
+      during: CanvasKeyState.shared.viewportDragMode) else { return false }
+    return allowPanZoom()
   }
 
   private func visibleCards(in viewportSize: CGSize) -> [CardState] {
@@ -1462,6 +1714,7 @@ struct ComposerCanvas: View {
   /// selection when there is one (so "Fit" can zoom to what you picked), unless `forceAll` asks for
   /// the whole board — used by the agent's tidy/relayout so it never snaps to a stray selection.
   private func fitBoard(in size: CGSize, forceAll: Bool = false) {
+    guard allowViewportTransform() else { return }
     let selected = forceAll ? [] : board.cards.filter { board.selectedCardIDs.contains($0.id) }
     let target = selected.isEmpty ? board.cards : selected
     guard !target.isEmpty else { scale = 1; pan = .zero; return }
@@ -1477,8 +1730,26 @@ struct ComposerCanvas: View {
     pan = CGSize(width: margin - CGFloat(minX) * s, height: margin - CGFloat(minY) * s)
   }
 
+  /// Keyboard and menu reset commands obey the same pointer-ownership gate as wheel/pinch input.
+  /// Otherwise a Pen press could capture one transform for its preview and commit under another.
+  private func resetZoom() {
+    guard allowViewportTransform() else { return }
+    withAnimation(Theme.Motion.accessory) { scale = 1 }
+  }
 
-  private func resetView() { scale = 1; pan = .zero; dismissPromotion() }
+
+  /// Reset everything tied to the outgoing board. Drawing drafts are view-local rather than part
+  /// of `BoardViewModel`, so every path that replaces its cards must explicitly discard them here;
+  /// otherwise a pen path begun on one board could finish onto the next board.
+  private func resetView() {
+    scale = 1
+    pan = .zero
+    panLive = .zero
+    var drafts = drawingDraftState
+    drafts.cancelForBoardReplacement()
+    drawingDraftState = drafts
+    dismissPromotion()
+  }
 
   // MARK: Export
 
@@ -1534,9 +1805,13 @@ struct ComposerCanvas: View {
     escapeHandledThisTurn = true
     DispatchQueue.main.async { escapeHandledThisTurn = false }
 
+    let activeEditorKind = board.editingCardID.flatMap { id in
+      board.cards.first(where: { $0.id == id })?.elementKind
+    }
     let target = ComposerEscapeCoordinator.target(for: ComposerEscapeState(
       hasBoardDeletionConfirmation: pendingBoardDeletion != nil,
       hasBoardRename: renamingBoardID != nil,
+      hasBoardPicker: boardPickerOpen,
       hasCommandPalette: showPalette,
       hasFocusedEditor: focusedCardID != nil,
       hasCompiledOverlay: store.compiledDraft != nil,
@@ -1544,7 +1819,8 @@ struct ComposerCanvas: View {
       hasAgent: showAgent,
       hasSettings: store.isSettingsOpen,
       hasActiveEditor: board.editingInteraction != nil,
-      hasDrawingDraft: elementDraft != nil || freehandDraft != nil,
+      hasActiveVectorEditor: activeEditorKind == .vectorPath,
+      hasDrawingDraft: elementDraft != nil || freehandDraft != nil || vectorDraft != nil,
       hasTintPicker: tintPickerOpen,
       hasActiveTool: tool != .select,
       hasSelection: !board.selectedCardIDs.isEmpty
@@ -1553,8 +1829,11 @@ struct ComposerCanvas: View {
     switch target {
     case .boardDeletionConfirmation:
       pendingBoardDeletion = nil
+      scheduleBoardPickerCloseIfNeeded()
     case .boardRename:
       cancelBoardRename()
+    case .boardPicker:
+      closeBoardPicker()
     case .commandPalette:
       dismissPalette()
     case .focusedEditor:
@@ -1567,14 +1846,21 @@ struct ComposerCanvas: View {
       closeAuxiliaryPanel()
     case .activeEditor:
       // Inline text and structured stages own their draft cancellation. The window-level command
-      // must stop here rather than dismissing the workspace behind an active editor.
+      // must stop here rather than dismissing the workspace behind an active editor. Vector nodes
+      // are the one inline non-text editor, so Escape explicitly ends that session here.
+      if let id = board.editingCardID,
+         board.cards.first(where: { $0.id == id })?.elementKind == .vectorPath {
+        board.endEditing(id)
+      }
       return
     case .drawingDraft:
       // The InputView listens for the same escape and drops its drag, so a pending mouse-up cannot
       // commit after this preview state is cleared.
       elementDraft = nil
       freehandDraft = nil
+      vectorDraft = nil
       bindTargetID = nil
+      tool = .select
     case .tintPicker:
       withAnimation(.easeOut(duration: 0.14)) { tintPickerOpen = false }
     case .activeTool:
@@ -1637,6 +1923,9 @@ struct ComposerCanvas: View {
   private func requestBoardDeletion(_ id: PersistentIdentifier, title: String) {
     guard store.dumps.count > 1,
           store.dumps.contains(where: { $0.persistentModelID == id }) else { return }
+    boardPickerCloseWork?.cancel()
+    boardPickerCloseWork = nil
+    boardPickerOpen = true
     pendingBoardDeletion = PendingBoardDeletion(
       boardID: id,
       title: title.isEmpty ? "Untitled".localizedUI : title
@@ -1645,6 +1934,7 @@ struct ComposerCanvas: View {
 
   private func confirmBoardDeletion(_ pending: PendingBoardDeletion) {
     pendingBoardDeletion = nil
+    scheduleBoardPickerCloseIfNeeded()
     guard commitBoardRename() else { return }
     let deletingCurrent = pending.boardID == store.currentID
     if deletingCurrent {
@@ -1773,6 +2063,11 @@ struct ComposerCanvas: View {
     if showPalette { dismissPalette(); return }
     // The compiled-draft overlay is a focused modal — dismiss it before opening the palette.
     guard store.compiledDraft == nil else { return }
+    // The picker temporarily sits above the protected-board banner. Collapse it before the palette
+    // claims modal ownership at zIndex 50; a failed rename keeps both its editor and attempted value
+    // visible instead of opening the palette behind it.
+    guard commitBoardRename() else { return }
+    closeBoardPicker()
     store.isHistoryOpen = false
     // Capture the editing card, then end the edit session so its stage (zIndex 70) doesn't sit over
     // the palette (zIndex 50). Cancel hands editing back by reopening the stage on the same card.
@@ -2220,8 +2515,35 @@ struct ComposerCanvas: View {
   }
 }
 
+/// A quiet board-space dot field rendered as one vector path. It sits above the pointer-input view
+/// but below cards and live drawing previews, and never participates in hit testing or export.
+private struct CanvasDotGrid: View {
+  let scale: CGFloat
+  let translation: CGSize
+
+  var body: some View {
+    Canvas { context, size in
+      let layout = CanvasDotGridLayout.layout(
+        scale: scale, translation: translation, viewportSize: size)
+      let radius = min(max(scale, 0.7), 1.35)
+      var dots = Path()
+
+      for x in stride(from: layout.xAxis.first, through: size.width, by: layout.xAxis.spacing) {
+        for y in stride(from: layout.yAxis.first, through: size.height, by: layout.yAxis.spacing) {
+          dots.addEllipse(in: CGRect(x: x - radius, y: y - radius,
+                                     width: radius * 2, height: radius * 2))
+        }
+      }
+      context.fill(dots, with: .color(Theme.Palette.menuDesc.opacity(Theme.flavor.isDark ? 0.34 : 0.26)))
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
+}
+
 @MainActor
-private final class ViewportEventThrottle {
+final class ViewportEventThrottle {
   private var pendingScroll: CGSize = .zero
   private var scrollScheduled = false
   private var pendingZoomFactor: CGFloat = 1
@@ -2229,7 +2551,11 @@ private final class ViewportEventThrottle {
   private var zoomScheduled = false
   private let interval: TimeInterval = 1.0 / 120.0
 
-  func enqueueScroll(_ delta: CGSize, apply: @escaping (CGSize) -> Void) {
+  func enqueueScroll(
+    _ delta: CGSize,
+    canApply: @escaping () -> Bool = { true },
+    apply: @escaping (CGSize) -> Void
+  ) {
     pendingScroll.width += delta.width
     pendingScroll.height += delta.height
     guard !scrollScheduled else { return }
@@ -2239,12 +2565,17 @@ private final class ViewportEventThrottle {
       let value = pendingScroll
       pendingScroll = .zero
       scrollScheduled = false
-      guard value != .zero else { return }
+      guard value != .zero, canApply() else { return }
       apply(value)
     }
   }
 
-  func enqueueZoom(_ factor: CGFloat, anchoredAt point: CGPoint, apply: @escaping (CGFloat, CGPoint) -> Void) {
+  func enqueueZoom(
+    _ factor: CGFloat,
+    anchoredAt point: CGPoint,
+    canApply: @escaping () -> Bool = { true },
+    apply: @escaping (CGFloat, CGPoint) -> Void
+  ) {
     pendingZoomFactor *= factor
     latestZoomAnchor = point
     guard !zoomScheduled else { return }
@@ -2255,7 +2586,7 @@ private final class ViewportEventThrottle {
       let anchor = latestZoomAnchor
       pendingZoomFactor = 1
       zoomScheduled = false
-      guard factor != 1 else { return }
+      guard factor != 1, canApply() else { return }
       apply(factor, anchor)
     }
   }
@@ -2273,10 +2604,43 @@ private final class ViewportEventThrottle {
 /// Not `@MainActor`: it's a single `Bool` mutated and read only on the main thread (from
 /// notification handlers and AppKit's `hitTest`/`mouseDown`), and staying nonisolated lets the
 /// AppKit NSView overrides poll it without concurrency ceremony.
+enum CanvasViewportDragMode: Equatable {
+  case maybeTap
+  case selecting
+  case drawing
+  case vectorPress
+  case vectorDrawing
+  case placing
+  case panning
+}
+
+/// A draft's viewport-to-board conversion is captured when its press begins. Pan or zoom during
+/// these modes would change that transform before commit and separate result from preview.
+enum CanvasViewportTransformPolicy {
+  static func allowsPanOrZoom(during mode: CanvasViewportDragMode) -> Bool {
+    switch mode {
+    case .drawing, .vectorPress, .vectorDrawing, .placing: false
+    case .maybeTap, .selecting, .panning: true
+    }
+  }
+}
+
+/// Resolves pointer ownership synchronously at mouse-down, before any preview callback fires.
+/// Pen clicks are real vector drafts even when they never cross AppKit's drag threshold, so they
+/// freeze the viewport for the entire press rather than briefly masquerading as a generic tap.
+enum CanvasPointerPressMode {
+  static func resolve(tool: CanvasTool, isSpacePressed: Bool) -> CanvasViewportDragMode {
+    if isSpacePressed { return .panning }
+    if tool == .vectorPen { return .vectorPress }
+    return .maybeTap
+  }
+}
+
 final class CanvasKeyState: @unchecked Sendable {
   static let shared = CanvasKeyState()
   private init() {}
   var isSpaceDown = false
+  var viewportDragMode: CanvasViewportDragMode = .maybeTap
 }
 
 private struct BoardViewportInput: NSViewRepresentable {
@@ -2288,6 +2652,10 @@ private struct BoardViewportInput: NSViewRepresentable {
   let onSelectionEnded: (CGRect, EventModifiers) -> Void
   let onFreehandChanged: ([CGPoint]?) -> Void
   let onFreehandEnded: ([CGPoint]) -> Void
+  let onVectorNodeChanged: (CGPoint, CGPoint) -> Void
+  let onVectorNodeEnded: (CGPoint, CGPoint) -> Void
+  let onVectorHoverChanged: (CGPoint?) -> Void
+  let onVectorCommitOpen: () -> Void
   let onElementDraftChanged: (CGPoint, CGPoint) -> Void
   let onElementDraftEnded: (CGPoint, CGPoint) -> Void
   let onElementDraftCancelled: () -> Void
@@ -2316,6 +2684,10 @@ private struct BoardViewportInput: NSViewRepresentable {
       onSelectionEnded: onSelectionEnded,
       onFreehandChanged: onFreehandChanged,
       onFreehandEnded: onFreehandEnded,
+      onVectorNodeChanged: onVectorNodeChanged,
+      onVectorNodeEnded: onVectorNodeEnded,
+      onVectorHoverChanged: onVectorHoverChanged,
+      onVectorCommitOpen: onVectorCommitOpen,
       onElementDraftChanged: onElementDraftChanged,
       onElementDraftEnded: onElementDraftEnded,
       onElementDraftCancelled: onElementDraftCancelled,
@@ -2336,6 +2708,10 @@ private struct BoardViewportInput: NSViewRepresentable {
       var onSelectionEnded: (CGRect, EventModifiers) -> Void = { _, _ in }
       var onFreehandChanged: ([CGPoint]?) -> Void = { _ in }
       var onFreehandEnded: ([CGPoint]) -> Void = { _ in }
+      var onVectorNodeChanged: (CGPoint, CGPoint) -> Void = { _, _ in }
+      var onVectorNodeEnded: (CGPoint, CGPoint) -> Void = { _, _ in }
+      var onVectorHoverChanged: (CGPoint?) -> Void = { _ in }
+      var onVectorCommitOpen: () -> Void = {}
       var onElementDraftChanged: (CGPoint, CGPoint) -> Void = { _, _ in }
       var onElementDraftEnded: (CGPoint, CGPoint) -> Void = { _, _ in }
       var onElementDraftCancelled: () -> Void = {}
@@ -2343,14 +2719,6 @@ private struct BoardViewportInput: NSViewRepresentable {
       var onPanEnded: (CGSize) -> Void = { _ in }
       var onScroll: (CGSize) -> Void = { _ in }
       var onZoom: (CGFloat, CGPoint) -> Void = { _, _ in }
-    }
-
-    private enum DragMode {
-      case maybeTap
-      case selecting
-      case drawing
-      case placing
-      case panning
     }
 
     var state = State() {
@@ -2364,8 +2732,11 @@ private struct BoardViewportInput: NSViewRepresentable {
     private var dragModifiers: EventModifiers = []
     /// Refresh the cursor whenever the drag mode changes, so the open-hand grab flips to a closed
     /// grab the moment a space-pan actually starts (and back when it ends).
-    private var dragMode: DragMode = .maybeTap {
-      didSet { if dragMode != oldValue { window?.invalidateCursorRects(for: self) } }
+    private var dragMode: CanvasViewportDragMode = .maybeTap {
+      didSet {
+        CanvasKeyState.shared.viewportDragMode = dragMode
+        if dragMode != oldValue { window?.invalidateCursorRects(for: self) }
+      }
     }
     private var dragClickCount = 1
     private var lastPan: CGSize = .zero
@@ -2377,6 +2748,7 @@ private struct BoardViewportInput: NSViewRepresentable {
     /// preview and the pending mouse-up commits nothing. Reset on the next `mouseDown`.
     private var draftCancelled = false
     private var escapeObserver: NSObjectProtocol?
+    private var pointerTrackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
       super.init(frame: frameRect)
@@ -2394,12 +2766,26 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     deinit {
       if let escapeObserver { NotificationCenter.default.removeObserver(escapeObserver) }
+      CanvasKeyState.shared.viewportDragMode = .maybeTap
+    }
+
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      if let pointerTrackingArea { removeTrackingArea(pointerTrackingArea) }
+      let area = NSTrackingArea(
+        rect: .zero,
+        options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+        owner: self,
+        userInfo: nil)
+      addTrackingArea(area)
+      pointerTrackingArea = area
     }
 
     /// Abandon a placing/freehand drag in progress (Esc). Leaves the mode intact so the eventual
     /// mouse-up still tears the gesture down cleanly, but flags it so nothing is committed.
     private func cancelActiveDraft() {
-      guard dragMode == .placing || dragMode == .drawing else { return }
+      guard dragMode == .placing || dragMode == .drawing || dragMode == .vectorPress
+              || dragMode == .vectorDrawing else { return }
       draftCancelled = true
       freehandPoints = []
       state.onFreehandChanged(nil)
@@ -2408,6 +2794,15 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+
+    override func mouseMoved(with event: NSEvent) {
+      guard state.tool == .vectorPen, !state.isSpacePressed else { return }
+      state.onVectorHoverChanged(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+      if state.tool == .vectorPen { state.onVectorHoverChanged(nil) }
+    }
 
     // Cursor feedback for the current mode: a closed grab while actually panning (space + drag), an
     // open grab while space is merely held (pan is armed), and a crosshair for every drawing tool so
@@ -2429,10 +2824,14 @@ private struct BoardViewportInput: NSViewRepresentable {
       lastPan = .zero
       freehandPoints = []
       draftCancelled = false
-      dragMode = state.isSpacePressed ? .panning : .maybeTap
+      dragMode = CanvasPointerPressMode.resolve(
+        tool: state.tool, isSpacePressed: state.isSpacePressed)
       state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
       state.onElementDraftCancelled()
+      if state.tool == .vectorPen, !state.isSpacePressed {
+        state.onVectorNodeChanged(point, point)
+      }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -2443,13 +2842,15 @@ private struct BoardViewportInput: NSViewRepresentable {
       let delta = CGSize(width: point.x - start.x, height: point.y - start.y)
       let distance = hypot(delta.width, delta.height)
 
-      if dragMode == .maybeTap, distance >= 4 {
+      if (dragMode == .maybeTap || dragMode == .vectorPress), distance >= 4 {
         if state.tool == .select {
           dragMode = .selecting
         } else if state.tool == .freehand {
           dragMode = .drawing
           freehandPoints = [start]
           state.onFreehandChanged(freehandPoints)
+        } else if state.tool == .vectorPen {
+          dragMode = .vectorDrawing
         } else if state.tool.placesByDragging {
           dragMode = .placing
         } else {
@@ -2458,7 +2859,7 @@ private struct BoardViewportInput: NSViewRepresentable {
       }
 
       switch dragMode {
-      case .maybeTap:
+      case .maybeTap, .vectorPress:
         break
       case .selecting:
         state.onSelectionChanged(Self.normalizedRect(from: start, to: point))
@@ -2467,6 +2868,8 @@ private struct BoardViewportInput: NSViewRepresentable {
           freehandPoints.append(point)
           state.onFreehandChanged(freehandPoints)
         }
+      case .vectorDrawing:
+        state.onVectorNodeChanged(start, point)
       case .placing:
         state.onElementDraftChanged(start, constrained(point, from: start, flags: event.modifierFlags))
       case .panning:
@@ -2516,8 +2919,14 @@ private struct BoardViewportInput: NSViewRepresentable {
       }
 
       switch dragMode {
-      case .maybeTap:
-        if dragClickCount >= 2 { state.onDoubleTap(start) } else { state.onTap(start, dragModifiers) }
+      case .maybeTap, .vectorPress:
+        if state.tool == .vectorPen {
+          state.onVectorNodeEnded(start, start)
+        } else if dragClickCount >= 2 {
+          state.onDoubleTap(start)
+        } else {
+          state.onTap(start, dragModifiers)
+        }
       case .selecting:
         if distance < 5 {
           state.onSelectionChanged(nil)
@@ -2528,6 +2937,8 @@ private struct BoardViewportInput: NSViewRepresentable {
       case .drawing:
         if freehandPoints.last != point { freehandPoints.append(point) }
         state.onFreehandEnded(freehandPoints)
+      case .vectorDrawing:
+        state.onVectorNodeEnded(start, point)
       case .placing:
         if distance < 5 {
           // A bare click (no real drag). `onTap` → `handleTap` decides per tool whether to place:
@@ -2560,8 +2971,16 @@ private struct BoardViewportInput: NSViewRepresentable {
       // Panning mid-draw would shift the board out from under a draft whose start point was captured
       // at the old pan, so the committed shape lands away from the preview. Swallow scroll-pan while
       // a shape/freehand drag is live; two-finger pan resumes the moment the draw ends.
-      if dragMode == .placing || dragMode == .drawing { return }
+      guard CanvasViewportTransformPolicy.allowsPanOrZoom(during: dragMode) else { return }
       state.onScroll(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY))
+    }
+
+    override func keyDown(with event: NSEvent) {
+      if state.tool == .vectorPen, event.keyCode == 36 {
+        state.onVectorCommitOpen()
+        return
+      }
+      super.keyDown(with: event)
     }
 
     private static func normalizedRect(from start: CGPoint, to end: CGPoint) -> CGRect {
@@ -2657,6 +3076,11 @@ private struct PinchZoomCatcher: NSViewRepresentable {
       guard monitor == nil else { return }
       monitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
         guard let self, let window = self.window, event.window === window else { return event }
+        // Swallow pinch just like InputView swallows scroll-pan while drawing. The shared drag mode
+        // is updated synchronously by the AppKit input view, so this global monitor cannot zoom the
+        // board out from beneath an in-progress shape, freehand stroke, or vector handle pull.
+        guard CanvasViewportTransformPolicy.allowsPanOrZoom(
+          during: CanvasKeyState.shared.viewportDragMode) else { return nil }
         self.onZoom(1 + event.magnification, self.convert(event.locationInWindow, from: nil))
         return nil   // handled here — don't let any view double-apply it
       }
@@ -2886,9 +3310,214 @@ struct BoardCardLayer: View, Equatable {
 }
 
 /// Start/end of an in-progress drag that draws a shape or line (viewport coordinates).
-private struct DragSegment: Equatable {
+struct DragSegment: Equatable {
   var start: CGPoint
   var end: CGPoint
+}
+
+/// Transient drawing state belongs to exactly one loaded board. Board replacement resets this
+/// value atomically, which also makes that lifecycle rule testable without mounting SwiftUI.
+struct CanvasDrawingDraftState: Equatable {
+  var freehand: [CGPoint]? = nil
+  var vector: VectorPathDraft? = nil
+  var element: DragSegment? = nil
+  var bindTargetID: UUID? = nil
+
+  var hasDraft: Bool {
+    freehand != nil || vector != nil || element != nil || bindTargetID != nil
+  }
+
+  mutating func cancelForBoardReplacement() {
+    freehand = nil
+    vector = nil
+    element = nil
+    bindTargetID = nil
+  }
+}
+
+/// A hover exit may close the picker only after every management surface has released it.
+enum BoardPickerPresentationPolicy {
+  static func canClose(
+    isHovering: Bool,
+    hasActiveRename: Bool,
+    hasDeleteConfirmation: Bool
+  ) -> Bool {
+    !isHovering && !hasActiveRename && !hasDeleteConfirmation
+  }
+}
+
+/// The wrapper that positions the picker fills the window, but its interactive region is only the
+/// visible popup at these chrome insets. Kept as geometry-only policy so that contract can be
+/// regression-tested independently of SwiftUI's modifier tree.
+enum BoardPickerHitTestingPolicy {
+  static func interactiveSurfaceRect(surfaceSize: CGSize) -> CGRect {
+    CGRect(
+      x: WindowChrome.trafficLightInset,
+      y: WindowChrome.edgeInset,
+      width: surfaceSize.width,
+      height: surfaceSize.height)
+  }
+}
+
+/// The compact identity pill keeps its established footprint; only the open manager grows. Values
+/// name the actual popup surface width (including chrome padding) and the resulting row text budget
+/// so future action affordances cannot silently squeeze board titles back to an ellipsis.
+enum BoardPickerLayoutPolicy {
+  static var collapsedSurfaceWidth: CGFloat {
+    WindowChrome.boardPillWidth + WindowChrome.padH * 2
+  }
+
+  static func expandedSurfaceWidth(viewportWidth: CGFloat) -> CGFloat {
+    min(
+      WindowChrome.boardPickerExpandedWidth,
+      max(
+        collapsedSurfaceWidth,
+        viewportWidth - WindowChrome.trafficLightInset - WindowChrome.topRightReservedWidth
+      )
+    )
+  }
+
+  static func expandedContentWidth(viewportWidth: CGFloat) -> CGFloat {
+    expandedSurfaceWidth(viewportWidth: viewportWidth) - WindowChrome.padH * 2
+  }
+
+  static func expandedTextBudget(viewportWidth: CGFloat) -> CGFloat {
+    expandedContentWidth(viewportWidth: viewportWidth)
+      - WindowChrome.labelPadH * 2
+      - WindowChrome.boardPickerActionSlotWidth
+      - WindowChrome.itemSpacing
+      - WindowChrome.boardPickerIndicatorWidth
+      - WindowChrome.boardPickerIndicatorSpacing
+      - WindowChrome.itemSpacing
+  }
+}
+
+/// Visibility and activation move together for the hover-only row actions. The view keeps one
+/// stable whole-row hover region, including the reserved action slot, and feeds that region here.
+struct BoardPickerRowInteractionState: Equatable {
+  private(set) var isHovered = false
+
+  var showsActions: Bool { isHovered }
+  var enablesActions: Bool { isHovered }
+
+  /// Returns true only on entry so callers can emit one hover tick, not one per state refresh.
+  mutating func setHovered(_ hovered: Bool) -> Bool {
+    let entered = hovered && !isHovered
+    isHovered = hovered
+    return entered
+  }
+}
+
+/// One non-current board in the hover picker. Management state stays in `ComposerCanvas`, so a
+/// failed persistence attempt can keep this exact editor visible and Escape follows the global
+/// coordinator instead of being swallowed by row-local state.
+private struct BoardPickerRow: View {
+  let title: String
+  let isRenaming: Bool
+  @Binding var draftName: String
+  var nameFocused: FocusState<Bool>.Binding
+  let onPick: () -> Void
+  let onBeginRename: () -> Void
+  let onCommitRename: () -> Void
+  let onCancelRename: () -> Void
+  let onDelete: () -> Void
+
+  @State private var interaction = BoardPickerRowInteractionState()
+
+  var body: some View {
+    Group {
+      if isRenaming { renameRow } else { pickRow }
+    }
+    .animation(.easeOut(duration: 0.1), value: interaction.showsActions)
+  }
+
+  private var pickRow: some View {
+    HStack(spacing: WindowChrome.itemSpacing) {
+      Button(action: onPick) {
+        HStack(spacing: WindowChrome.boardPickerIndicatorSpacing) {
+          Circle().fill(Color.clear)
+            .frame(width: WindowChrome.boardPickerIndicatorWidth,
+                   height: WindowChrome.boardPickerIndicatorWidth)
+          Text(title)
+            .font(WindowChrome.labelFont)
+            .foregroundStyle(Theme.Palette.body)
+            .lineLimit(1)
+          Spacer(minLength: WindowChrome.itemSpacing)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: WindowChrome.boardPickerRowHeight)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help("Open %@".localizedUI(title))
+      .accessibilityLabel(Text(title))
+      .accessibilityAction(named: Text("Rename board".localizedUI), onBeginRename)
+      .accessibilityAction(named: Text("Delete board".localizedUI), onDelete)
+
+      HStack(spacing: WindowChrome.itemSpacing) {
+        rowIcon("pencil", help: "Rename board".localizedUI, action: onBeginRename)
+        rowIcon("trash", help: "Delete board".localizedUI, tint: .red, action: onDelete)
+      }
+      .frame(
+        width: WindowChrome.boardPickerActionSlotWidth,
+        height: WindowChrome.rowIconSide)
+      .opacity(interaction.showsActions ? 1 : 0)
+      // Keep the reserved slot in the row's hover region even while its controls are invisible.
+      // Disabling prevents invisible activation without making the pointer fall through and fire a
+      // hover exit just as it crosses from the title into Edit/Delete.
+      .disabled(!interaction.enablesActions)
+      .accessibilityHidden(!interaction.showsActions)
+    }
+    .padding(.horizontal, WindowChrome.labelPadH)
+    .frame(height: WindowChrome.boardPickerRowHeight)
+    .contentShape(.interaction, Rectangle())
+    .onHover { over in
+      if interaction.setHovered(over) { Haptics.hover() }
+    }
+  }
+
+  private var renameRow: some View {
+    HStack(spacing: WindowChrome.boardPickerIndicatorSpacing) {
+      Circle().fill(Color.clear)
+        .frame(
+          width: WindowChrome.boardPickerIndicatorWidth,
+          height: WindowChrome.boardPickerIndicatorWidth)
+      TextField("Board name".localizedUI, text: $draftName)
+        .textFieldStyle(.plain)
+        .font(WindowChrome.labelFont)
+        .foregroundStyle(Theme.Palette.body)
+        .focused(nameFocused)
+        .onSubmit(onCommitRename)
+        .onExitCommand(perform: onCancelRename)
+    }
+    .padding(.horizontal, WindowChrome.labelPadH)
+    .frame(height: WindowChrome.boardPickerRowHeight)
+    .background(
+      RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .fill(Theme.Palette.rowFill)
+    )
+    .onAppear { DispatchQueue.main.async { nameFocused.wrappedValue = true } }
+    .onChange(of: nameFocused.wrappedValue) { _, focused in
+      if !focused { onCommitRename() }
+    }
+  }
+
+  private func rowIcon(
+    _ symbol: String,
+    help: String,
+    tint: Color? = nil,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: symbol)
+        .font(WindowChrome.rowIconFont)
+        .foregroundStyle(tint ?? Theme.Palette.title)
+        .frame(width: WindowChrome.rowIconSide, height: WindowChrome.rowIconSide)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(help)
+  }
 }
 
 /// One row of the hover export menu: a short centered format name ("PNG"). The menu is

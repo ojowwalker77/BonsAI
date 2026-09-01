@@ -9,6 +9,7 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
   case line
   case arrow
   case freehand
+  case vectorPath
   case image
   case equation
   case graph
@@ -33,6 +34,31 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
     case .line, .arrow: true
     default: false
     }
+  }
+
+  /// Whether the canvas has a real editing surface for this element. Text edits inline; shapes,
+  /// equations, graphs, and structured cards use `EditingStage`. Image/freehand elements currently
+  /// have no content editor, so advertising or entering edit mode for them would create dead state.
+  var supportsEditing: Bool {
+    switch self {
+    case .freehand, .image: false
+    default: true
+    }
+  }
+}
+
+/// Keeps hover edit chrome from competing with higher-priority manipulation handles.
+enum CanvasEditAffordancePolicy {
+  /// macOS is pointer-first, but 20pt was still needlessly precise at speed. The visible chip stays
+  /// quiet while the actual button target has a stable screen-space floor.
+  static let minimumHitSide: CGFloat = 28
+
+  static func isAvailable(for kind: CanvasElementKind, whileSelected: Bool) -> Bool {
+    guard kind.supportsEditing else { return false }
+    // Selected connectors devote both endpoints to direct manipulation. Their hover pencil remains
+    // available before selection, then yields completely once endpoint handles appear.
+    if whileSelected, kind == .line || kind == .arrow { return false }
+    return true
   }
 }
 
@@ -78,14 +104,17 @@ struct CardState: Codable, Identifiable, Equatable {
   var z: Int
   /// Freehand points are normalized into the element's local 0...1 frame.
   var points: [CanvasPoint]?
+  /// Cubic pen geometry, normalized into the element's local 0...1 frame. Optional so every board
+  /// written before vector paths existed decodes unchanged.
+  var vectorPath: VectorPathSpec?
   /// Reserved for arrow/line binding. Kept optional so the first shape slice stays
   /// backward-compatible while the model can already persist bindings.
   var startBindingID: UUID?
   var endBindingID: UUID?
-  /// WHERE on the bound card this arrow attaches, normalized into that card's frame (0…1 per
-  /// axis). Captured from the drawn stroke, so the arrow lands where it was aimed and keeps that
-  /// attachment as the card moves — instead of re-routing through the card's center ("aim-assist",
-  /// pulled after 1.4.5 feedback). nil (legacy boards, agent connects) = center-ray routing.
+  /// WHERE on the bound card this arrow attaches, normalized into that card's frame. Drawn anchors
+  /// lie on its 0…1 boundary; an endpoint edit may preserve an existing arrow-clearance point just
+  /// outside that range so moving the other handle cannot shift the untouched tip. nil (legacy
+  /// boards, agent connects) = center-ray routing.
   var startBindingAnchor: CanvasPoint?
   var endBindingAnchor: CanvasPoint?
   var groupID: UUID?
@@ -259,6 +288,7 @@ struct CardState: Codable, Identifiable, Equatable {
        h: Double = Double(CardState.defaultSize.height),
        z: Int = 0,
        points: [CanvasPoint]? = nil,
+       vectorPath: VectorPathSpec? = nil,
        startBindingID: UUID? = nil,
        endBindingID: UUID? = nil,
        groupID: UUID? = nil,
@@ -284,6 +314,7 @@ struct CardState: Codable, Identifiable, Equatable {
     self.h = h
     self.z = z
     self.points = points
+    self.vectorPath = vectorPath
     self.startBindingID = startBindingID
     self.endBindingID = endBindingID
     self.groupID = groupID
@@ -355,7 +386,7 @@ struct CardState: Codable, Identifiable, Equatable {
       CGSize(width: 240, height: 120)
     case .rectangle, .ellipse, .diamond, .image:
       CardState.shapeMinSize
-    case .line, .arrow, .freehand:
+    case .line, .arrow, .freehand, .vectorPath:
       CardState.lineMinSize
     }
   }

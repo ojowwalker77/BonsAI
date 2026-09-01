@@ -1,17 +1,20 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// The one editing surface for every card kind. Presented by `ComposerCanvas` whenever
-/// `board.editingCardID` is non-nil, it recedes the board behind a scrim and elevates a centered
-/// glass panel — the shape the Focus Write sheet had always used — so text, equation, graph, and
-/// shape/line editing all enter, sit, and exit identically. Per-kind draft state (equation LaTeX,
-/// graph spec) lives here, seeded from the card on appear and committed through the board's own
-/// mutations (each already registers exactly one undo step).
+/// The centered editing surface for structured card kinds plus the explicitly summoned Focus Write
+/// sheet. `ComposerCanvas` consults `EditingStagePresentationPolicy` before mounting it, so inline
+/// text and vector-node editors remain on the board instead of being covered by this view's scrim.
+/// Per-kind draft state (equation LaTeX, graph spec) lives here, seeded from the card on appear and
+/// committed through the board's own mutations (each already registers exactly one undo step).
 ///
-/// `editingCardID` stays the single source of truth: nothing here invents new global edit state.
-/// The card behind the scrim renders statically while its stage is open — the live editor mounts
-/// only in the stage, handed over via the same `captureEditorState()` the focus sheet always used.
+/// `editingCardID` stays the single source of truth for structured editing: nothing here invents
+/// new global edit state. The card behind the scrim renders statically while its stage is open —
+/// the live editor mounts only in the stage, handed over via the same `captureEditorState()` the
+/// focus sheet always used.
 struct EditingStage: View {
+  private static let checklistRowHeight: CGFloat = 34
+
   @ObservedObject var board: BoardViewModel
   let card: CardState
   @ObservedObject var interaction: CardInteraction
@@ -51,6 +54,8 @@ struct EditingStage: View {
   @State private var stickyBodyDraft = ""
   @FocusState private var stickyTitleFocused: Bool
   @State private var checklistDraft: [CardState.ChecklistItem] = []
+  @State private var draggedChecklistItemID: UUID?
+  @State private var checklistDropTarget: ChecklistRowDropTarget?
   @State private var tableDraft = CardState.TableSpec()
 
   private var tint: Color? { Theme.tintColor(card.tint).map { Color(nsColor: $0) } }
@@ -70,6 +75,7 @@ struct EditingStage: View {
     .zIndex(70)
     .transition(.opacity)
     .onAppear(perform: seedDraft)
+    .onDisappear(perform: clearChecklistDragState)
   }
 
   // MARK: Header
@@ -107,7 +113,7 @@ struct EditingStage: View {
       checklistStage
     case .table:
       tableStage
-    case .freehand, .image:
+    case .freehand, .vectorPath, .image:
       // These kinds have no edit session; the canvas guards against opening a stage for them, so
       // this branch is unreachable. Render nothing rather than an empty glass panel.
       EmptyView()
@@ -166,13 +172,50 @@ struct EditingStage: View {
         VStack(spacing: 8) {
           ForEach($checklistDraft) { $item in
             HStack(spacing: 9) {
+              Image(systemName: "line.3.horizontal")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.Palette.menuDesc)
+                .frame(width: 22, height: 30)
+                .contentShape(Rectangle())
+                .onDrag {
+                  let sourceID = item.id
+                  draggedChecklistItemID = sourceID
+                  checklistDropTarget = nil
+                  return ChecklistDragItemProvider(itemID: sourceID) {
+                    DispatchQueue.main.async {
+                      guard draggedChecklistItemID == sourceID else { return }
+                      clearChecklistDragState()
+                    }
+                  }
+                }
+                .help("Drag to reorder".localizedUI)
               Toggle("", isOn: $item.isChecked).toggleStyle(.checkbox).labelsHidden()
               TextField("Task".localizedUI, text: $item.text).textFieldStyle(.plain)
               Button { checklistDraft.removeAll { $0.id == item.id } } label: {
                 Image(systemName: "minus.circle").foregroundStyle(Theme.Palette.menuDesc)
               }.buttonStyle(.plain).help("Remove task".localizedUI)
             }
-            .padding(.horizontal, 10).frame(height: 34).background(labelFieldSurface)
+            .padding(.horizontal, 10)
+            .frame(height: Self.checklistRowHeight)
+            .background(labelFieldSurface)
+            .overlay(alignment: checklistDropTarget?.placement == .before ? .top : .bottom) {
+              if checklistDropTarget?.targetID == item.id {
+                Capsule()
+                  .fill(Theme.Palette.accent)
+                  .frame(height: 2)
+                  .padding(.horizontal, 4)
+                  .offset(y: checklistDropTarget?.placement == .before ? -4 : 4)
+                  .allowsHitTesting(false)
+              }
+            }
+            .onDrop(
+              of: [.composerChecklistItem],
+              delegate: ChecklistRowDropDelegate(
+                targetID: item.id,
+                rowHeight: Self.checklistRowHeight,
+                draggedItemID: $draggedChecklistItemID,
+                dropTarget: $checklistDropTarget,
+                items: $checklistDraft))
           }
           Button { checklistDraft.append(.init(text: "")) } label: {
             Label("Add task".localizedUI, systemImage: "plus")
@@ -286,6 +329,11 @@ struct EditingStage: View {
             set: { if tableDraft.rows.indices.contains(row) && tableDraft.rows[row].indices.contains(column) { tableDraft.rows[row][column] = $0 } })
   }
   private func commitChecklist() { board.setChecklist(card.id, checklistDraft); board.endEditing(card.id) }
+
+  private func clearChecklistDragState() {
+    draggedChecklistItemID = nil
+    checklistDropTarget = nil
+  }
   private func commitTable() { board.setTable(card.id, tableDraft); board.endEditing(card.id) }
   private func commitSticky() { board.setSticky(card.id, title: stickyTitleDraft, body: stickyBodyDraft); board.endEditing(card.id) }
   private func cancelStructuredEdit() { board.endEditing(card.id) }
@@ -427,19 +475,33 @@ struct EditingStage: View {
       } else {
         VStack(spacing: 0) {
           header("Label".localizedUI)
-          HStack(spacing: 8) {
-            TextField("Label".localizedUI, text: $labelDraft)
+          HStack(alignment: .top, spacing: 8) {
+            TextField("Label".localizedUI, text: $labelDraft, axis: .vertical)
               .textFieldStyle(.plain)
+              .lineLimit(1...8)
               .font(ComposerPreferences.appSwiftUIFont(size: 15, weight: .medium))
               .foregroundStyle(tint ?? Theme.Palette.body)
               .multilineTextAlignment(.center)
               .focused($labelFocused)
-              .onSubmit(commitLabel)
+              .onKeyPress(.return, phases: .down) { keyPress in
+                if keyPress.modifiers.contains(.shift) {
+                  if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
+                    editor.insertNewlineIgnoringFieldEditor(nil)
+                  } else {
+                    labelDraft.append("\n")
+                  }
+                } else {
+                  commitLabel()
+                }
+                return .handled
+              }
               .onExitCommand(perform: revertLabel)
               .padding(.horizontal, 10)
-              .frame(height: 34)
+              .padding(.vertical, 8)
+              .frame(minHeight: 34)
               .frame(maxWidth: .infinity)
               .background(labelFieldSurface)
+              .help("Return applies · Shift-Return inserts a new line".localizedUI)
             if canMakeGraph {
               Button(action: openGraphConfig) {
                 Image(systemName: "chart.xyaxis.line")
@@ -568,6 +630,118 @@ struct EditingStage: View {
     default:
       onClose()
     }
+  }
+}
+
+/// Routes an `editingCardID` session to the centered stage. Inline editors must return `false`:
+/// mounting `EditingStage` for one would still install its full-window scrim even though the
+/// corresponding `stagePanel` branch intentionally renders no panel.
+enum EditingStagePresentationPolicy {
+  static func presentsStage(for kind: CanvasElementKind) -> Bool {
+    switch kind {
+    case .rectangle, .ellipse, .diamond, .line, .arrow,
+         .equation, .graph, .sticky, .checklist, .table:
+      true
+    case .text, .freehand, .vectorPath, .image:
+      false
+    }
+  }
+}
+
+private extension UTType {
+  static let composerChecklistItem = UTType(exportedAs: "dev.jow.BonsAI.checklist-item")
+}
+
+/// SwiftUI's legacy `onDrag` has no end callback. The system retains its item provider for exactly
+/// the drag session, so releasing this provider is the one lifecycle signal shared by successful,
+/// cancelled, and Escape-aborted drags.
+final class ChecklistDragItemProvider: NSItemProvider {
+  private let onSessionEnd: () -> Void
+
+  init(itemID: UUID, onSessionEnd: @escaping () -> Void) {
+    self.onSessionEnd = onSessionEnd
+    super.init()
+    registerDataRepresentation(
+      forTypeIdentifier: UTType.composerChecklistItem.identifier,
+      visibility: .all
+    ) { completion in
+      completion(itemID.uuidString.data(using: .utf8), nil)
+      return nil
+    }
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("ChecklistDragItemProvider does not support decoding")
+  }
+
+  deinit { onSessionEnd() }
+}
+
+/// A valid drop is accepted even when the requested edge already matches the current order.
+/// `ChecklistInteraction.move` intentionally returns false for both invalid and no-op mutations,
+/// while `DropDelegate.performDrop` must distinguish those outcomes to avoid rejection feedback.
+enum ChecklistDropAcceptance {
+  static func perform(_ items: inout [CardState.ChecklistItem],
+                      itemID: UUID,
+                      targetID: UUID,
+                      placement: ChecklistInteraction.DropPlacement) -> Bool {
+    guard itemID != targetID,
+          items.contains(where: { $0.id == itemID }),
+          items.contains(where: { $0.id == targetID }) else { return false }
+    ChecklistInteraction.move(&items, itemID: itemID, to: targetID, placement: placement)
+    return true
+  }
+}
+
+private struct ChecklistRowDropTarget: Equatable {
+  let targetID: UUID
+  let placement: ChecklistInteraction.DropPlacement
+}
+
+private struct ChecklistRowDropDelegate: DropDelegate {
+  let targetID: UUID
+  let rowHeight: CGFloat
+  @Binding var draggedItemID: UUID?
+  @Binding var dropTarget: ChecklistRowDropTarget?
+  @Binding var items: [CardState.ChecklistItem]
+
+  func validateDrop(info: DropInfo) -> Bool {
+    draggedItemID != nil && info.hasItemsConforming(to: [.composerChecklistItem])
+  }
+
+  func dropEntered(info: DropInfo) {
+    updateTarget(for: info)
+  }
+
+  func dropUpdated(info: DropInfo) -> DropProposal? {
+    updateTarget(for: info)
+    return DropProposal(operation: dropTarget == nil ? .forbidden : .move)
+  }
+
+  func dropExited(info: DropInfo) {
+    if dropTarget?.targetID == targetID { dropTarget = nil }
+  }
+
+  func performDrop(info: DropInfo) -> Bool {
+    defer {
+      dropTarget = nil
+      draggedItemID = nil
+    }
+    guard let draggedItemID, draggedItemID != targetID else { return false }
+    let placement = ChecklistInteraction.dropPlacement(at: info.location.y, rowHeight: rowHeight)
+    return ChecklistDropAcceptance.perform(
+      &items, itemID: draggedItemID, targetID: targetID, placement: placement)
+  }
+
+  private func updateTarget(for info: DropInfo) {
+    guard let draggedItemID, draggedItemID != targetID else {
+      if dropTarget?.targetID == targetID { dropTarget = nil }
+      return
+    }
+    dropTarget = ChecklistRowDropTarget(
+      targetID: targetID,
+      placement: ChecklistInteraction.dropPlacement(at: info.location.y, rowHeight: rowHeight))
   }
 }
 

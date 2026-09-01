@@ -119,7 +119,7 @@ bonsai_request POST /canvas '{"op":"capture","text":"Fix the race in BoardViewMo
 | `create_diagram` | Nodes + edges (`nodes`, `edges`, optional `direction`) |
 | `relayout` | Tidy layout (`direction`: `TB` or `LR`) |
 | `update_text` | Replace card text (`id`, `text`) |
-| `connect` | Arrow between cards (`from`, `to`, optional `reason`) |
+| `connect` | Connector between cards (`from`, `to`, optional `reason`; `kind` is `arrow` by default or `line`) |
 | `supersede` | Evolve an idea (`oldId`, `text`, `reason`) |
 
 Full tool catalog and graph conventions: [canvas-agent.md](canvas-agent.md).
@@ -146,7 +146,7 @@ See [canvas-agent.md](canvas-agent.md) for the full tool list.
 
 | Entry point | Usage |
 |-------------|--------|
-| **Menu bar** | Click the leaf → type → ↩ (summons board + new card) |
+| **Menu bar** | Click the leaf → type → ↩ (summons board + new card); double-click → restore and focus the board |
 | **Services** | Select text anywhere → **BonsAI → Send to BonsAI** |
 | **URL** | `open 'bonsai://capture?text=Hello%20world'` |
 

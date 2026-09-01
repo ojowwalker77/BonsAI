@@ -41,7 +41,7 @@ extension Notification.Name {
   /// The active AppKit editor reported a new live hug. The quick-capture flow uses this one-shot
   /// signal to reveal the card again after its final rendered frame replaces the insertion estimate.
   static let composerTextCardLiveFrameChanged = Notification.Name("composerTextCardLiveFrameChanged")
-  /// ⌘1–⌘8 pick a canvas tool; userInfo["index"] is 1-based (1 = select, 2 = text, …).
+  /// Number shortcuts use a 1-based `index`; named shortcuts such as P carry a `CanvasTool`.
   static let composerSelectTool = Notification.Name("composerSelectTool")
   /// ⌘K "Add point to graph…": the graph card whose id matches `object` (a UUID) opens its Point
   /// Composer seeded at the middle of its axis ranges.
@@ -60,6 +60,8 @@ extension Notification.Name {
   static let composerStyleCacheUpdated = Notification.Name("composerStyleCacheUpdated")
   /// Re-bind the global summon hotkey after the user records a new shortcut in Settings.
   static let composerShortcutChanged = Notification.Name("composerShortcutChanged")
+  /// Apply the persisted Dock-icon preference immediately without requiring a relaunch.
+  static let composerDockIconVisibilityChanged = Notification.Name("composerDockIconVisibilityChanged")
   /// Fires when the app-wide theme (System / Light / Dark) changes. The board window remounts its
   /// SwiftUI root with the same retained workspace after synchronously flushing pending edits.
   static let composerThemeChanged = Notification.Name("composerThemeChanged")
@@ -84,6 +86,7 @@ extension Notification.Name {
 enum ComposerEscapeTarget: Equatable {
   case boardDeletionConfirmation
   case boardRename
+  case boardPicker
   case commandPalette
   case focusedEditor
   case compiledOverlay
@@ -100,6 +103,7 @@ enum ComposerEscapeTarget: Equatable {
 struct ComposerEscapeState: Equatable {
   var hasBoardDeletionConfirmation = false
   var hasBoardRename = false
+  var hasBoardPicker = false
   var hasCommandPalette = false
   var hasFocusedEditor = false
   var hasCompiledOverlay = false
@@ -107,6 +111,9 @@ struct ComposerEscapeState: Equatable {
   var hasAgent = false
   var hasSettings = false
   var hasActiveEditor = false
+  /// Vector editing is inline and can coexist with a newly started Pen draft. In that one case the
+  /// live pointer draft owns Escape; text and structured editors still keep their normal priority.
+  var hasActiveVectorEditor = false
   var hasDrawingDraft = false
   var hasTintPicker = false
   var hasActiveTool = false
@@ -117,6 +124,15 @@ enum ComposerEscapeCoordinator {
   static func target(for state: ComposerEscapeState) -> ComposerEscapeTarget {
     if state.hasBoardDeletionConfirmation { return .boardDeletionConfirmation }
     if state.hasBoardRename { return .boardRename }
+    // A hover-open picker must not conceal a live Pen/vector gesture from Escape. Cancel the draft
+    // first when the canvas owns it outright, or when it coexists with the inline vector editor.
+    // Text and structured editors retain their established priority over incidental draft state.
+    if state.hasBoardPicker,
+       state.hasDrawingDraft,
+       !state.hasActiveEditor || state.hasActiveVectorEditor {
+      return .drawingDraft
+    }
+    if state.hasBoardPicker { return .boardPicker }
     if state.hasCommandPalette { return .commandPalette }
     if state.hasFocusedEditor { return .focusedEditor }
     if state.hasCompiledOverlay { return .compiledOverlay }
@@ -125,6 +141,7 @@ enum ComposerEscapeCoordinator {
     // it to true anymore (the history overlay went with the old floating-panel mode), so an
     // Escape priority for it would be unreachable dead state.
     if state.hasAgent || state.hasSettings { return .auxiliaryPanel }
+    if state.hasActiveVectorEditor && state.hasDrawingDraft { return .drawingDraft }
     if state.hasActiveEditor { return .activeEditor }
     if state.hasDrawingDraft { return .drawingDraft }
     if state.hasTintPicker { return .tintPicker }

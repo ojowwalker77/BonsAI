@@ -190,6 +190,16 @@ enum WindowChrome {
     let text = ("Welcome Board" as NSString).size(withAttributes: [.font: font]).width
     return (text + labelPadH * 2).rounded(.up)
   }()
+  /// Board-picker manager surface and row furniture. The action slot exactly fits two compact
+  /// glyph targets plus the standard item spacing, keeping its hover geometry stable.
+  static let boardPickerExpandedWidth: CGFloat = 232
+  static let boardPickerActionSlotWidth: CGFloat = 52
+  static let boardPickerIndicatorWidth: CGFloat = 5
+  static let boardPickerIndicatorSpacing: CGFloat = 8
+  static let boardPickerRowHeight: CGFloat = 30
+  static let rowIconSize: CGFloat = 10.5
+  static var rowIconFont: Font { .system(size: rowIconSize, weight: .semibold) }
+  static let rowIconSide: CGFloat = 24
   /// Space kept clear for the update/export/agent controls at top-right. This constrains only the
   /// standard-window picker row; it never participates in the board + dock panel composition.
   static let topRightReservedWidth: CGFloat = 300

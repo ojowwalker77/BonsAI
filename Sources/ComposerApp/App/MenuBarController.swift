@@ -1,12 +1,68 @@
 import AppKit
 import SwiftUI
 
+enum MenuBarStatusClickAction: Equatable {
+  case deferToggleCapture
+  case cancelDeferredToggleAndShowBoard
+
+  static func resolve(clickCount: Int) -> Self {
+    clickCount >= 2 ? .cancelDeferredToggleAndShowBoard : .deferToggleCapture
+  }
+}
+
+@MainActor
+protocol MenuBarScheduledClick: AnyObject {
+  func cancel()
+}
+
+@MainActor
+protocol MenuBarClickScheduling: AnyObject {
+  func schedule(
+    after delay: TimeInterval,
+    action: @escaping @MainActor () -> Void
+  ) -> any MenuBarScheduledClick
+}
+
+@MainActor
+final class MainQueueMenuBarClickScheduler: MenuBarClickScheduling {
+  private final class ScheduledClick: MenuBarScheduledClick {
+    let work: DispatchWorkItem
+
+    init(work: DispatchWorkItem) { self.work = work }
+    func cancel() { work.cancel() }
+    deinit { work.cancel() }
+  }
+
+  func schedule(
+    after delay: TimeInterval,
+    action: @escaping @MainActor () -> Void
+  ) -> any MenuBarScheduledClick {
+    let work = DispatchWorkItem { action() }
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    return ScheduledClick(work: work)
+  }
+}
+
 /// Menu-bar quick capture: one line → a new card on the current board.
 @MainActor
 final class MenuBarController: NSObject {
   private var statusItem: NSStatusItem?
   private var capturePanel: NSPanel?
   private var captureField: NSTextField?
+  private let notificationCenter: NotificationCenter
+  private let doubleClickInterval: TimeInterval
+  private let clickScheduler: any MenuBarClickScheduling
+  private var pendingSingleClick: (any MenuBarScheduledClick)?
+
+  init(
+    notificationCenter: NotificationCenter = .default,
+    doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval,
+    clickScheduler: (any MenuBarClickScheduling)? = nil
+  ) {
+    self.notificationCenter = notificationCenter
+    self.doubleClickInterval = doubleClickInterval
+    self.clickScheduler = clickScheduler ?? MainQueueMenuBarClickScheduler()
+  }
 
   func install() {
     guard statusItem == nil else { return }
@@ -14,9 +70,9 @@ final class MenuBarController: NSObject {
     if let button = item.button {
       button.image = Self.menuBarIcon()
       button.image?.isTemplate = true
-      button.toolTip = "BonsAI - quick capture".localizedUI
+      button.toolTip = "BonsAI - click to capture, double-click to show the board".localizedUI
       button.target = self
-      button.action = #selector(toggleCapturePanel)
+      button.action = #selector(statusItemClicked)
     }
     statusItem = item
   }
@@ -33,7 +89,41 @@ final class MenuBarController: NSObject {
     return NSImage(systemSymbolName: "leaf.fill", accessibilityDescription: "BonsAI")
   }
 
-  @objc private func toggleCapturePanel() {
+  @objc private func statusItemClicked() {
+    dispatchStatusClick(clickCount: NSApp.currentEvent?.clickCount ?? 1)
+  }
+
+  /// AppKit sends the status-button action for every click in a multi-click sequence. Delay the
+  /// single-click toggle by the system interval so a second delivery can cancel it before capture
+  /// activates or takes focus. Once that interval expires, another click starts a fresh sequence
+  /// and retains the documented open/close toggle behavior.
+  func dispatchStatusClick(clickCount: Int) {
+    dispatchStatusClick(clickCount: clickCount) { [weak self] in
+      self?.toggleCapturePanel()
+    }
+  }
+
+  /// The explicit action is also the small deterministic seam used to prove that cancelled or
+  /// superseded single-click work never reaches capture.
+  func dispatchStatusClick(clickCount: Int, toggleCapture: @escaping @MainActor () -> Void) {
+    switch MenuBarStatusClickAction.resolve(clickCount: clickCount) {
+    case .deferToggleCapture:
+      pendingSingleClick?.cancel()
+      pendingSingleClick = clickScheduler.schedule(after: doubleClickInterval) { [weak self] in
+        guard let self else { return }
+        self.pendingSingleClick = nil
+        toggleCapture()
+      }
+    case .cancelDeferredToggleAndShowBoard:
+      pendingSingleClick?.cancel()
+      pendingSingleClick = nil
+      // Hide, but do not clear, an in-progress capture. The next single click can resume its draft.
+      capturePanel?.orderOut(nil)
+      notificationCenter.post(name: .composerShowWindow, object: nil)
+    }
+  }
+
+  private func toggleCapturePanel() {
     if let panel = capturePanel, panel.isVisible {
       panel.orderOut(nil)
       return

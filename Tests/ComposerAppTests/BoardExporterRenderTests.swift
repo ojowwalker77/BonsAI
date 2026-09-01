@@ -160,6 +160,92 @@ final class BoardExporterRenderTests: XCTestCase {
     XCTAssertGreaterThan(distinctColors.count, 3, "text-card region should contain drawn text, not a flat fill")
   }
 
+  func testWholeBoardRenderIncludesVectorPathStrokeAndFill() throws {
+    let spec = VectorPathSpec(nodes: [
+      VectorPathNode(anchor: CanvasPoint(x: 0.08, y: 0.88)),
+      VectorPathNode(
+        anchor: CanvasPoint(x: 0.50, y: 0.08),
+        incoming: CanvasPoint(x: 0.28, y: 0.08),
+        outgoing: CanvasPoint(x: 0.72, y: 0.08)),
+      VectorPathNode(anchor: CanvasPoint(x: 0.92, y: 0.88)),
+    ], isClosed: true)
+    let vector = CardState(
+      kind: .vectorPath,
+      x: 100,
+      y: 100,
+      w: 260,
+      h: 180,
+      z: 1,
+      vectorPath: spec,
+      tint: 0)
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let id = try XCTUnwrap(board.insertCopies([vector], offset: .zero).first)
+    let card = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    guard let image = BoardExporter.renderBoardImage(cards: [card], board: board),
+          let rep = bitmapRep(of: image) else {
+      return XCTFail("vector export failed")
+    }
+
+    let canvas = BoardExporter.resolvedCanvasColor()
+    var drawnSamples = 0
+    for x in stride(from: 0, to: rep.pixelsWide, by: 3) {
+      for y in stride(from: 0, to: rep.pixelsHigh, by: 3) {
+        guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+        if !colorsClose(color, canvas, tolerance: 0.03) { drawnSamples += 1 }
+      }
+    }
+    XCTAssertGreaterThan(drawnSamples, 100, "vector stroke/fill should be present in PNG rendering")
+
+    // A one-card export has equal margins, so its center maps to the bitmap center. Prove the
+    // corresponding local point is inside this exact cubic path before using that pixel to test
+    // fill independently from the boundary stroke.
+    let localInterior = CGPoint(x: CGFloat(card.w) / 2, y: CGFloat(card.h) / 2)
+    let path = VectorPathGeometry.path(
+      for: spec, in: CGRect(origin: .zero, size: card.frame.size))
+    XCTAssertTrue(path.contains(localInterior), "the selected fill sample must be inside the path")
+    let interior = try XCTUnwrap(rep.colorAt(
+      x: rep.pixelsWide / 2,
+      y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+    XCTAssertFalse(
+      colorsClose(interior, canvas, tolerance: 0.03),
+      "closed vector interior should contain its tint fill; got \(rgbString(interior))")
+  }
+
+  func testWholeBoardRenderIncludesOpenVectorPathStroke() throws {
+    let vector = CardState(
+      kind: .vectorPath,
+      x: 100,
+      y: 100,
+      w: 260,
+      h: 180,
+      z: 1,
+      vectorPath: VectorPathSpec(nodes: [
+        VectorPathNode(anchor: CanvasPoint(x: 0.08, y: 0.82)),
+        VectorPathNode(
+          anchor: CanvasPoint(x: 0.50, y: 0.12),
+          incoming: CanvasPoint(x: 0.28, y: 0.10),
+          outgoing: CanvasPoint(x: 0.72, y: 0.14)),
+        VectorPathNode(anchor: CanvasPoint(x: 0.92, y: 0.78)),
+      ], isClosed: false))
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let id = try XCTUnwrap(board.insertCopies([vector], offset: .zero).first)
+    let card = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    guard let image = BoardExporter.renderBoardImage(cards: [card], board: board),
+          let rep = bitmapRep(of: image) else {
+      return XCTFail("open vector export failed")
+    }
+
+    let canvas = BoardExporter.resolvedCanvasColor()
+    var drawnSamples = 0
+    for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
+      for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
+        guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+        if !colorsClose(color, canvas, tolerance: 0.03) { drawnSamples += 1 }
+      }
+    }
+    XCTAssertGreaterThan(drawnSamples, 40, "open vector stroke should be present in PNG rendering")
+  }
+
   func testStoredAttachmentFilenameLoadsThroughAssetStore() throws {
     let filename = try writeStoredTestImage()
     defer { try? FileManager.default.removeItem(at: AssetStore.storeDirectory.appendingPathComponent(filename)) }
@@ -216,6 +302,79 @@ final class BoardExporterRenderTests: XCTestCase {
       }
     }
     XCTAssertTrue(foundImagePixel, "stored image pixels should appear in the whole-board export")
+  }
+
+  func testImageAspectFillDoesNotPaintOutsideItsCardFrame() throws {
+    let filename = try writeStoredTestImage()
+    defer { try? FileManager.default.removeItem(at: AssetStore.storeDirectory.appendingPathComponent(filename)) }
+
+    // Deliberately mismatch the square fixture and a wide, short card. Aspect-fill must crop the
+    // image vertically at the card boundary; an unconstrained SwiftUI image instead reports its
+    // intrinsic fill height and paints far below the selection/resize frame.
+    let picture = CardState(
+      kind: .image,
+      x: 100,
+      y: 100,
+      w: 180,
+      h: 60,
+      z: 1,
+      imagePath: filename
+    )
+    let board = BoardViewModel(store: DumpStore(inMemoryOnly: true))
+    let id = try XCTUnwrap(board.insertCopies([picture], offset: .zero).first)
+    let card = try XCTUnwrap(board.cards.first(where: { $0.id == id }))
+    guard let image = BoardExporter.renderBoardImage(cards: [card], board: board),
+          let rep = bitmapRep(of: image) else {
+      return XCTFail("image-card render failed")
+    }
+
+    var redBounds: CGRect?
+    for x in 0..<rep.pixelsWide {
+      for y in 0..<rep.pixelsHigh {
+        guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+              color.redComponent > 0.75,
+              color.greenComponent < 0.20,
+              color.blueComponent < 0.20 else { continue }
+        let pixel = CGRect(x: x, y: y, width: 1, height: 1)
+        redBounds = redBounds.map { $0.union(pixel) } ?? pixel
+      }
+    }
+
+    let painted = try XCTUnwrap(redBounds, "solid-red fixture should render inside the image card")
+    let bounds = try XCTUnwrap(BoardExporter.exportBounds(of: [card]))
+    let scale = BoardExporter.renderScale
+    // Board/SwiftUI coordinates grow down from the export's top edge, while NSBitmapImageRep's
+    // `colorAt` coordinates grow up from its bottom edge. Flip Y through the export bounds so the
+    // expected rect and scanned pixel bounds share one bitmap coordinate space.
+    let expectedCardRect = CGRect(
+      x: (card.frame.minX - bounds.minX) * scale,
+      y: (bounds.maxY - card.frame.maxY) * scale,
+      width: card.frame.width * scale,
+      height: card.frame.height * scale)
+    let antialiasingTolerance: CGFloat = 2
+    XCTAssertTrue(
+      expectedCardRect.insetBy(
+        dx: -antialiasingTolerance,
+        dy: -antialiasingTolerance).contains(painted),
+      "aspect-fill pixels \(painted) must stay inside exported card rect \(expectedCardRect)")
+
+    let expectedWidth = card.frame.width * scale
+    let expectedHeight = card.frame.height * scale
+    // The one-point hairline and rounded-corner antialiasing can consume a few edge pixels, but
+    // the solid fixture must otherwise cover the card and may never extend beyond it.
+    XCTAssertGreaterThanOrEqual(
+      painted.width,
+      expectedWidth - 6,
+      "aspect-fill must still cover the full card width")
+    XCTAssertLessThanOrEqual(painted.width, expectedWidth + 2)
+    XCTAssertGreaterThanOrEqual(
+      painted.height,
+      expectedHeight - 6,
+      "aspect-fill must still cover the full card height")
+    XCTAssertLessThanOrEqual(
+      painted.height,
+      expectedHeight + 2,
+      "aspect-fill pixels must be clipped to the same frame used by selection chrome")
   }
 
   // MARK: Helpers

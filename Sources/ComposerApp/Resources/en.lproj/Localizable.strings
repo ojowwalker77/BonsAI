@@ -17,7 +17,7 @@
 "Board" = "Board";
 "Board name" = "Board name";
 "Boards" = "Boards";
-"BonsAI - quick capture" = "BonsAI - quick capture";
+"BonsAI - click to capture, double-click to show the board" = "BonsAI - click to capture, double-click to show the board";
 "BonsAI %@ is ready - click to install" = "BonsAI %@ is ready - click to install";
 "BonsAI checks GitHub for new releases automatically, then downloads and installs them in place." = "BonsAI checks GitHub for new releases automatically, then downloads and installs them in place.";
 "BonsAI could not allocate a bitmap to render the board for export." = "BonsAI could not allocate a bitmap to render the board for export.";
@@ -40,6 +40,7 @@
 "Close  Esc" = "Close  Esc";
 "Close  ⌘J" = "Close  ⌘J";
 "Close Settings  ·  Esc" = "Close Settings  ·  Esc";
+"Collapsed" = "Collapsed";
 "Compile board" = "Compile board";
 "Compiling the board" = "Compiling the board";
 "Compiled draft" = "Compiled draft";
@@ -67,6 +68,7 @@
 "Engine" = "Engine";
 "Engine for the agent chat - Claude, Codex, or OpenCode" = "Engine for the agent chat - Claude, Codex, or OpenCode";
 "Equation" = "Equation";
+"Expanded" = "Expanded";
 "Export board" = "Export board";
 "Export Board" = "Export Board";
 "Export board as PNG" = "Export board as PNG";
@@ -224,6 +226,11 @@
 "Checking saved boards for the BonsAI 1.3 welcome board" = "Checking saved boards for the BonsAI 1.3 welcome board";
 "Checking whether Composer has existing boards" = "Checking whether Composer has existing boards";
 "Checklist" = "Checklist";
+"Drag to reorder" = "Drag to reorder";
+"Edit element" = "Edit element";
+"Drag vector anchor" = "Drag vector anchor";
+"Drag vector handle" = "Drag vector handle";
+"Return applies · Shift-Return inserts a new line" = "Return applies · Shift-Return inserts a new line";
 "Claude authentication failed: %@. Run `claude auth login`, then retry." = "Claude authentication failed: %@. Run `claude auth login`, then retry.";
 "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry." = "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry.";
 "Click again to permanently delete" = "Click again to permanently delete";
@@ -380,6 +387,7 @@
 "Line  ·  drag to draw  6" = "Line  ·  drag to draw  6";
 "Arrow  ·  drag to draw  7" = "Arrow  ·  drag to draw  7";
 "Freehand stroke  ·  drag to draw  8" = "Freehand stroke  ·  drag to draw  8";
+"Pen  ·  click corners, drag curves, Return commits  P" = "Pen  ·  click corners, drag curves, Return commits  P";
 "Equation  ·  click the board, then type LaTeX  9" = "Equation  ·  click the board, then type LaTeX  9";
 "Heading  ·  cycles # / ## / ###" = "Heading  ·  cycles # / ## / ###";
 "Bold  ·  **text**" = "Bold  ·  **text**";
@@ -503,6 +511,8 @@
 "Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac." = "Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac.";
 "Pick the body font for cards, chrome, and the editor." = "Pick the body font for cards, chrome, and the editor.";
 "Canvas" = "Canvas";
+"Dot grid" = "Dot grid";
+"Show a subtle alignment grid behind board content." = "Show a subtle alignment grid behind board content.";
 "Let the desktop blur through the board surface. Solid keeps the flat canvas." = "Let the desktop blur through the board surface. Solid keeps the flat canvas.";
 "Theme" = "Theme";
 "Pick the palette for the whole app." = "Pick the palette for the whole app.";
@@ -513,6 +523,10 @@
 "Text size" = "Text size";
 "Drawing" = "Drawing";
 "How the board behaves while you draw." = "How the board behaves while you draw.";
+"Continuous drawing" = "Continuous drawing";
+"Keep shape, line, freehand, and pen tools active after drawing. Esc returns to Select." = "Keep shape, line, freehand, and pen tools active after drawing. Esc returns to Select.";
+"Drawing tool stays active · click to use once" = "Drawing tool stays active · click to use once";
+"Drawing tool is one-shot · click to keep active" = "Drawing tool is one-shot · click to keep active";
 "Snap sketches into shapes" = "Snap sketches into shapes";
 "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip." = "Recognized strokes become clean shapes on pen-up. Off keeps the suggestion chip.";
 "Migrating saved connector tokens" = "Migrating saved connector tokens";
@@ -520,3 +534,10 @@
 "%@: macOS Keychain access failed. Check Keychain Access and try again." = "%@: macOS Keychain access failed. Check Keychain Access and try again.";
 "%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again." = "%@: BonsAI couldn't update its legacy connector-token file. Check Application Support permissions and try again.";
 "Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI." = "Connector-token migration could not be verified. The legacy file was kept so no token is lost; check Keychain Access and retry after reopening BonsAI.";
+"Application" = "Application";
+"Choose how BonsAI appears in macOS." = "Choose how BonsAI appears in macOS.";
+"Hide Dock icon" = "Hide Dock icon";
+"Keep BonsAI in the menu bar and use the global shortcut to restore the board." = "Keep BonsAI in the menu bar and use the global shortcut to restore the board.";
+"Drag connector endpoint" = "Drag connector endpoint";
+"Create linked line" = "Create linked line";
+"Click to create a linked shape; drag to connect; hold Option for a line" = "Click to create a linked shape; drag to connect; hold Option for a line";

@@ -228,6 +228,10 @@ private struct SettingsContent: View {
   @AppStorage(ComposerPreferences.followSystemAppearanceKey) private var followSystemAppearance = false
   @AppStorage(ComposerPreferences.autoSnapFreehandKey) private var autoSnapFreehand = false
   @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
+  @AppStorage(ComposerPreferences.hideDockIconKey) private var hideDockIcon = false
+  @AppStorage(ComposerPreferences.continuousDrawingEnabledKey) private var continuousDrawingEnabled
+    = ComposerPreferences.defaultContinuousDrawingEnabled
+  @AppStorage(ComposerPreferences.dotGridEnabledKey) private var dotGridEnabled = false
   /// The raw text-size preference. Written directly by the stepper; the change notification is
   /// posted from `.onChange` — AFTER the SwiftUI update transaction — because the observer
   /// rebuilds the whole canvas, and doing that synchronously from inside a binding setter tears
@@ -643,11 +647,42 @@ private struct SettingsContent: View {
 
   private var appearancePage: some View {
     VStack(alignment: .leading, spacing: 22) {
+      applicationCard
       languageCard
       themeCard
       fontCard
       canvasGlassCard
       drawingCard
+    }
+  }
+
+  /// App presence is a live process policy, not static bundle metadata. The menu-bar status item and
+  /// global shortcuts stay installed in either mode, so hiding the Dock icon never strands the user.
+  private var applicationCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      pageHeader("Application", "Choose how BonsAI appears in macOS.")
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Hide Dock icon".localizedUI)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(Theme.Palette.body)
+          Text("Keep BonsAI in the menu bar and use the global shortcut to restore the board.".localizedUI)
+            .font(.caption)
+            .foregroundStyle(Theme.Palette.menuDesc)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Spacer(minLength: 12)
+        Toggle("", isOn: $hideDockIcon)
+          .labelsHidden()
+          .accessibilityLabel(Text("Hide Dock icon".localizedUI))
+          .toggleStyle(.switch)
+          .tint(Theme.Palette.accent)
+      }
+      .padding(14)
+      .settingsCard()
+    }
+    .onChange(of: hideDockIcon) { _, _ in
+      NotificationCenter.default.post(name: .composerDockIconVisibilityChanged, object: nil)
     }
   }
 
@@ -658,6 +693,27 @@ private struct SettingsContent: View {
     VStack(alignment: .leading, spacing: 8) {
       pageHeader("Drawing", "How the board behaves while you draw.")
       VStack(spacing: 0) {
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Continuous drawing".localizedUI)
+              .font(.callout.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+            Text("Keep shape, line, freehand, and pen tools active after drawing. Esc returns to Select.".localizedUI)
+              .font(.caption)
+              .foregroundStyle(Theme.Palette.menuDesc)
+          }
+          Spacer(minLength: 12)
+          Toggle("", isOn: $continuousDrawingEnabled)
+            .labelsHidden()
+            .accessibilityLabel(Text("Continuous drawing".localizedUI))
+            .toggleStyle(.switch)
+            .tint(Theme.Palette.accent)
+        }
+        .padding(.vertical, 11)
+
+        Divider()
+          .overlay(Theme.Palette.separator)
+
         HStack(spacing: 12) {
           VStack(alignment: .leading, spacing: 2) {
             Text("Snap sketches into shapes".localizedUI)
@@ -794,6 +850,25 @@ private struct SettingsContent: View {
         }
         .font(.caption2)
         .foregroundStyle(Theme.Palette.count)
+
+        Divider().overlay(Theme.Palette.separator)
+
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Dot grid".localizedUI)
+              .font(.callout.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+            Text("Show a subtle alignment grid behind board content.".localizedUI)
+              .font(.caption)
+              .foregroundStyle(Theme.Palette.menuDesc)
+          }
+          Spacer(minLength: 12)
+          Toggle("", isOn: $dotGridEnabled)
+            .labelsHidden()
+            .accessibilityLabel(Text("Dot grid".localizedUI))
+            .toggleStyle(.switch)
+            .tint(Theme.Palette.accent)
+        }
       }
       .padding(14)
       .settingsCard()
