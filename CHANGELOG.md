@@ -11,6 +11,8 @@ under the new version heading.
 
 ## [Unreleased]
 
+## [1.4.11] - 2026-09-01
+
 ### Added
 
 - **Diagram connections are faster to create and easier to reshape.** Selected shapes expose
