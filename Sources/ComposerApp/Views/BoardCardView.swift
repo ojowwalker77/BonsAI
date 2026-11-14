@@ -16,7 +16,6 @@ struct BoardCardView: View {
   /// Board zoom — gesture translations are divided by it so moves/resizes track the cursor.
   let scale: CGFloat
   let board: BoardViewModel
-  let boardTextContext: BoardTextContext
   /// True only in the select tool. When false (any drawing tool) the card is pointer-transparent,
   /// so a drag starting over it falls through to the canvas and draws a new element instead of
   /// grabbing this card — selection/move/resize belong to the select tool alone.
@@ -171,11 +170,7 @@ struct BoardCardView: View {
           onFocusChange: { active in
             if active {
               board.beginEditing(card.id)
-            } else if !interaction.appSearch.isOpen, !interaction.mentions.isOpen {
-              // The editor only truly stopped editing if focus left for a real reason (a
-              // click-away) — not because our own inline search field or mention menu took
-              // first responder. Tearing down editing there would kill the very popup the
-              // user is picking from.
+            } else {
               board.endEditing(card.id)
             }
           },
@@ -190,14 +185,8 @@ struct BoardCardView: View {
               editorContentHeight: contentHeight)
           },
           fontScale: card.textScale,
-          boardContext: { board.lintContext(excluding: card.id) },
-          definedVariables: { boardTextContext.definedVariableNames },
           cardTint: { card.tint },
-          mentions: interaction.mentions,
-          appSearch: interaction.appSearch,
           controller: interaction.controller,
-          lint: interaction.lint,
-          refine: interaction.refine,
           store: DumpStore.shared
         )
         .padding(.horizontal, 12)
@@ -208,11 +197,10 @@ struct BoardCardView: View {
         .frame(width: liveFrame.width, height: liveFrame.height, alignment: .topLeading)
         .scaleEffect(zoom, anchor: .topLeading)
       } else {
-        // Non-editing cards render from the serialized plain text (tokens like "@github"), so
-        // the chip renderer can rebuild the styled chips — `interaction.text` is the visible
-        // string, where a chip has already collapsed to its bare label. Fonts/padding scale with
-        // zoom so the text is laid out at screen size (crisp), not stretched.
-        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), definedVars: boardTextContext.definedVariableNames, failedCommands: board.failedShellCommands, zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id, connectorPoints: liveConnectorPoints, vectorSpec: liveVectorPlacement?.spec, checklistCoordinateSpace: checklistCoordinateSpace)
+        // Non-editing cards render from the serialized plain text (image placeholders like
+        // "[image: …]" included). Fonts/padding scale with zoom so the text is laid out at screen
+        // size (crisp), not stretched.
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id, connectorPoints: liveConnectorPoints, vectorSpec: liveVectorPlacement?.spec, checklistCoordinateSpace: checklistCoordinateSpace)
           .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)
@@ -339,8 +327,8 @@ struct BoardCardView: View {
     }
   }
 
-  /// Recolor the LIVE editor's text to the card's tint: every run except chips (marked with
-  /// `.mentionToken`) and per-range ink (marked with `.inkSlot`) takes the ink, and the typing
+  /// Recolor the LIVE editor's text to the card's tint: every run except per-range ink (marked
+  /// with `.inkSlot`) takes the ink, and the typing
   /// attributes follow so new text matches. Inked spans keep their own color so a whole-card tint
   /// never stomps range ink.
   private func applyEditorTint() {
@@ -350,7 +338,7 @@ struct BoardCardView: View {
     let full = NSRange(location: 0, length: storage.length)
     storage.beginEditing()
     storage.enumerateAttributes(in: full, options: []) { attrs, range, _ in
-      guard attrs[.mentionToken] == nil, attrs[.inkSlot] == nil else { return }
+      guard attrs[.inkSlot] == nil else { return }
       storage.addAttribute(.foregroundColor, value: color, range: range)
     }
     storage.endEditing()
@@ -1076,14 +1064,10 @@ struct BoardCardView: View {
 
 private struct CanvasElementContent: View {
   let card: CardState
-  /// Serialized plain text (`@github`, `[image: …]`, literal prose) for text cards.
+  /// Serialized plain text (`[image: …]` placeholders, literal prose) for text cards.
   let text: String
   /// Per-range text ink over `text` (serialized-offset spans), resolved to colors at render.
   var ink: [InkRun] = []
-  /// Board-scoped variable names, for styling `$name` references defined in other cards.
-  var definedVars: Set<String> = []
-  /// Commands that failed on the last copy — their tokens render amber.
-  var failedCommands: Set<String> = []
   /// Board zoom — fonts scale by it so text is laid out (and stays crisp) at screen size.
   var zoom: CGFloat = 1
   /// Graph-card display flags. `graphSelected` hands the ✕-legend to the interactive overlay (drawn
@@ -1120,7 +1104,7 @@ private struct CanvasElementContent: View {
               InlineChecklistText(text: text, zoom: zoom, tint: tint,
                                   checklistCoordinateSpace: checklistCoordinateSpace)
             } else {
-              ComposerChipText(tint: tint, plain: text, ink: ink, definedVars: definedVars, failedCommands: failedCommands, zoom: zoom)
+              CardText(tint: tint, plain: text, ink: ink, zoom: zoom)
             }
           }
           // The card height was measured by the AppKit editor at 100% zoom, but this static text
@@ -1147,8 +1131,8 @@ private struct CanvasElementContent: View {
         case .image:
           ImageObjectPlaceholder(path: card.imagePath)
             .overlay(alignment: .bottomTrailing) {
-              // A captured screenshot that's been read on-device carries text into the prompt; mark
-              // it so it doesn't look like an inert image.
+              // A captured screenshot that's been read on-device carries its text to agents over the
+              // canvas API; mark it so it doesn't look like an inert image.
               if let understanding = card.imageUnderstanding, !understanding.isEmpty {
                 Image(systemName: "text.viewfinder")
                   .font(.system(size: 11, weight: .semibold))
@@ -1156,7 +1140,7 @@ private struct CanvasElementContent: View {
                   .padding(5)
                   .background(Color.black.opacity(0.55), in: Circle())
                   .padding(6)
-                  .help("Read on-device - this screenshot adds text to the compiled prompt".localizedUI)
+                  .help("Read on-device - agents can read this screenshot's text".localizedUI)
               }
             }
         case .equation:
@@ -1390,23 +1374,19 @@ private struct NodeLabel: View {
   }
 }
 
-// MARK: - Chip-aware static text (non-editing cards)
+// MARK: - Static text (non-editing cards)
 
-/// Renders a card's serialized plain text with its mention chips styled — brand icon, brand
-/// color, and the `▾` affordance on app chips — so a card looks the same whether or not it's
-/// being edited. Built as concatenated `Text` runs so it wraps natively and stays cheap; image
-/// placeholders show a small inline glyph (the real attachment only lives in the live editor).
-private struct ComposerChipText: View {
-  /// Base ink override (the card's tint); chips keep their brand colors.
+/// Renders a card's serialized plain text — markdown spans and per-range ink — so a card looks the
+/// same whether or not it's being edited. Built as concatenated `Text` runs so it wraps natively
+/// and stays cheap; image placeholders show a small inline glyph (the real attachment only lives in
+/// the live editor).
+private struct CardText: View {
+  /// Base ink override (the card's tint).
   var tint: Color? = nil
   let plain: String
   /// Per-range text ink (serialized-offset spans); each run recolors its characters over the base.
   var ink: [InkRun] = []
-  /// Board-scoped variable names, so a `$name` reference styles even when defined in another card.
-  var definedVars: Set<String> = []
-  /// Commands that failed on the last copy — their `$(…)` tokens render amber instead of green.
-  var failedCommands: Set<String> = []
-  /// Board zoom — the base font + chip icons scale by it so the text is laid out at screen size.
+  /// Board zoom — the base font scales by it so the text is laid out at screen size.
   var zoom: CGFloat = 1
 
   var body: some View {
@@ -1417,23 +1397,10 @@ private struct ComposerChipText: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 
-  /// One styled span over the plain text: an `@mention`/image token, or a copy-time shell token.
-  private enum Span { case mention(String); case shell(ShellTemplate.Kind) }
-
-  // Called from `body`, so the main-actor `MentionStyleCache` access in `styledRun` is safe.
-  @MainActor private var composed: Text {
+  private var composed: Text {
     let ns = plain as NSString
-
-    // Merge mention spans and shell-token spans into one ordered, non-overlapping list.
-    var spans: [(range: NSRange, span: Span)] = []
-    for range in Self.tokenRanges(in: plain) { spans.append((range, .mention(ns.substring(with: range)))) }
-    for expression in ShellTemplate.expressions(in: plain, definedNames: definedVars) {
-      spans.append((expression.range, .shell(expression.kind)))
-    }
-    spans.sort { $0.range.location < $1.range.location }
-
-    // Markdown spans over the whole plain text, styled into every non-token gap. One scan per
-    // render; the ranges are UTF-16 offsets shared with the token spans.
+    // Markdown spans over the whole plain text, styled into every gap between image placeholders.
+    // One scan per render; the ranges are UTF-16 offsets shared with the placeholder spans.
     let markdown = MarkdownStyle.spans(in: plain)
     func gapRun(_ range: NSRange) -> Text {
       Text(MarkdownStyle.rendered(
@@ -1443,15 +1410,11 @@ private struct ComposerChipText: View {
 
     var out = Text(verbatim: "")
     var cursor = 0
-    for (range, span) in spans {
-      if range.location < cursor { continue }   // overlap (rare): keep the first, skip the rest
+    for range in Self.imagePlaceholderRanges(in: plain) {
       if range.location > cursor {
         out = out + gapRun(NSRange(location: cursor, length: range.location - cursor))
       }
-      switch span {
-      case let .mention(raw): out = out + Self.styledRun(for: raw, zoom: zoom)
-      case let .shell(kind): out = out + Self.shellRun(kind, raw: ns.substring(with: range), zoom: zoom, failed: failedCommands)
-      }
+      out = out + Text(Image(systemName: "photo")).foregroundColor(Theme.Palette.placeholder)
       cursor = range.location + range.length
     }
     if cursor < ns.length {
@@ -1460,58 +1423,13 @@ private struct ComposerChipText: View {
     return out
   }
 
-  /// A copy-time shell token, tinted in place — green monospaced for a `$(…)` command, violet for a
-  /// variable definition or `$name` reference. The literal syntax is kept (that's why it was chosen);
-  /// only its color and weight change (bold), so it reads as live without a background swatch.
-  @MainActor private static func shellRun(_ kind: ShellTemplate.Kind, raw: String, zoom: CGFloat, failed: Set<String>) -> Text {
-    // Pin to the card's actual body point size (× zoom) — SwiftUI's semantic `.body` is smaller than
-    // `Theme.Typography.body` (the user-adjustable editor font), which shrank the tokens.
-    let size = Theme.Typography.body.pointSize * zoom
-    // A command that failed on the last copy reads amber, so you can see which `$(…)` to fix.
-    let didFail = { if case let .command(command) = kind { return failed.contains(command) }; return false }()
-    var content = AttributedString(raw)
-    content.font = ShellTokenStyle.isCode(kind)
-      ? .system(size: size, weight: .bold, design: .monospaced)
-      : .system(size: size, weight: .bold)
-    content.foregroundColor = Color(nsColor: didFail ? ShellTokenStyle.warning : ShellTokenStyle.tint(for: kind))
-    return Text(content)
-  }
+  /// `[image: …]` placeholders that `composerPlainText` writes for inline attachments.
+  private static let imagePlaceholderRegex = try? NSRegularExpression(pattern: "\\[image:[^\\]]*\\]")
 
-  /// Matches any catalog mention token (longest id first so `@build-ios-apps` wins over a
-  /// shorter prefix), with an optional `:payload`, plus `[image: …]` placeholders.
-  private static let tokenRegex: NSRegularExpression? = {
-    let ids = MentionCatalog.all.map { NSRegularExpression.escapedPattern(for: $0.id) }
-      .sorted { $0.count > $1.count }
-      .joined(separator: "|")
-    return try? NSRegularExpression(pattern: "(?:\(ids))(?::[^\\s]+)?|\\[image:[^\\]]*\\]")
-  }()
-
-  private static func tokenRanges(in text: String) -> [NSRange] {
-    guard let regex = tokenRegex else { return [] }
+  private static func imagePlaceholderRanges(in text: String) -> [NSRange] {
+    guard let regex = imagePlaceholderRegex else { return [] }
     let ns = text as NSString
     return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map(\.range)
-  }
-
-  @MainActor private static func styledRun(for raw: String, zoom: CGFloat) -> Text {
-    if raw.hasPrefix("[image:") {
-      return Text(Image(systemName: "photo")).foregroundColor(Theme.Palette.placeholder)
-    }
-    let parsed = AppToken.parse(raw)
-    let appID = parsed?.appID ?? raw
-    let item = MentionCatalog.all.first { $0.id == appID }
-    let isApp = item?.kind == .app
-    let label = isApp ? AppToken.label(appID: appID, selection: parsed?.selection) : (item?.label ?? raw)
-    let cache = MentionStyleCache.shared
-    let color = Color(nsColor: cache.color(for: appID) ?? Theme.Palette.nsAccent)
-
-    var chip = Text(verbatim: "")
-    // Build the inline icon at the zoomed size so the brand mark stays crisp alongside the text.
-    if let icon = cache.inlineImage(for: appID, side: (15 * zoom).rounded()) {
-      chip = chip + Text(Image(nsImage: icon)).baselineOffset(-2 * zoom) + Text(verbatim: "\u{2009}")
-    }
-    chip = chip + Text(verbatim: label).foregroundColor(color)
-    if isApp { chip = chip + Text(verbatim: "\u{2009}\u{25BE}").foregroundColor(color.opacity(0.5)) }
-    return chip
   }
 }
 

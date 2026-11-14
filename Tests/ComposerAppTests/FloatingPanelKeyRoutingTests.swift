@@ -232,11 +232,7 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     XCTAssertTrue(routed, "an idle text editor must let Escape reach the workspace coordinator")
   }
 
-  func testEscapeCoordinatorClosesAgentOrSettingsBeforeAnActiveEditor() {
-    XCTAssertEqual(
-      ComposerEscapeCoordinator.target(for: ComposerEscapeState(hasAgent: true, hasActiveEditor: true)),
-      .auxiliaryPanel
-    )
+  func testEscapeCoordinatorClosesSettingsBeforeAnActiveEditor() {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(hasSettings: true, hasActiveEditor: true)),
       .auxiliaryPanel

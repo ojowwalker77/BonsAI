@@ -10,15 +10,13 @@ private struct PendingBoardDeletion: Identifiable {
   var id: String { String(describing: boardID) }
 }
 
-/// The entire app surface: a pan/zoom board of text cards on a chromeless glass card, with a
-/// top tool toolbar and a left action rail floating in the gutters. Per-card editor chrome
-/// (mentions, connector search, the semantic linter) is routed to the active card; board-level
-/// actions (Compile, Copy) span every card.
+/// The entire app surface: a pan/zoom board of cards filling the window, with floating glass
+/// chrome — the board picker top-left, export top-right, and one bottom command bar. Per-card
+/// editor chrome (the selection bar) is routed to the active card.
 struct ComposerCanvas: View {
   @ObservedObject private var workspace: CanvasWorkspaceSession
   @ObservedObject private var store: DumpStore
   @ObservedObject private var board: BoardViewModel
-  @ObservedObject private var engineCapabilities = EngineCapabilityStore.shared
   @ObservedObject private var userFacingErrors = UserFacingErrorStore.shared
   @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
   @AppStorage(ComposerPreferences.continuousDrawingEnabledKey) private var continuousDrawingEnabled
@@ -26,7 +24,6 @@ struct ComposerCanvas: View {
   @AppStorage(ComposerPreferences.dotGridEnabledKey) private var dotGridEnabled = false
 
   @State private var tool: CanvasTool = .select
-  @State private var isWorking = false
   @State private var toast: Toast?
   @State private var lastViewportSize: CGSize = .zero
   /// Bumped on text-size/font-family changes: `.id()` on the board subtree remounts it (fonts and
@@ -44,12 +41,7 @@ struct ComposerCanvas: View {
   /// preview and the actual binding can never disagree.
   @State private var isSpacePressed = false
   @State private var viewportThrottle = ViewportEventThrottle()
-  /// Observed for the agent's *coarse* state (isRunning / grounding) so the toolbar and ⌘K palette
-  /// stay in sync. The streaming transcript lives on `agent.transcript`, which the canvas does NOT
-  /// observe, so per-token updates re-render only the dock — never the board.
-  @ObservedObject private var agent = CanvasAgent.shared
   @ObservedObject private var updater = UpdaterController.shared
-  @State private var showAgent = false
   /// A board delete is only executed by the destructive action in this confirmation surface.
   @State private var pendingBoardDeletion: PendingBoardDeletion?
   /// AppKit may deliver Escape through both keyDown and cancelOperation for one physical press.
@@ -79,9 +71,6 @@ struct ComposerCanvas: View {
   /// The card that held the caret when the palette was summoned, captured before the palette's
   /// search field steals first responder — so a cancel can hand editing back to it.
   @State private var paletteReturnCardID: UUID?
-  /// A quick capture gets one second-pass reveal after its AppKit editor reports the true live hug.
-  /// Cleared immediately after that callback so ordinary typing never auto-pans the board.
-  @State private var quickCaptureRevealCardID: UUID?
 
   // Board transform. Committed scale/pan live in the retained workspace so changing the theme or
   // language does not teleport the user back to the origin. The in-flight gesture remains local.
@@ -103,7 +92,6 @@ struct ComposerCanvas: View {
   /// consumed by `EditingStage` on appear then cleared.
   @State private var openGraphConfigCardID: UUID?
 
-  private let service = HeadlessPromptService()
   private let cardPasteboardType = NSPasteboard.PasteboardType("dev.jow.Composer.cards")
 
   init(workspace: CanvasWorkspaceSession) {
@@ -163,15 +151,9 @@ struct ComposerCanvas: View {
   var body: some View {
     GeometryReader { proxy in canvasRoot(proxy: proxy) }
     .ignoresSafeArea()
-    .animation(Theme.Motion.accessory, value: isWorking)
-    .animation(Theme.Motion.accessory, value: store.isHistoryOpen)
-    .animation(Theme.Motion.accessory, value: store.compiledDraft)
     .animation(Theme.Motion.accessory, value: showPalette)
     .onChange(of: userFacingErrors.latest) { _, notice in
       if notice != nil { showLatestReportedError() }
-    }
-    .onChange(of: isWorking) { _, working in
-      NotificationCenter.default.post(name: .composerBusyChanged, object: nil, userInfo: ["busy": working])
     }
     .onReceive(NotificationCenter.default.publisher(for: .composerFontSizeChanged)) { _ in
       typographyRevision += 1
@@ -212,7 +194,6 @@ struct ComposerCanvas: View {
         // Wash only board content. Drafts, toasts, and active-card overlays stay above the fade so
         // their own surfaces keep their intended contrast.
         CanvasTopFade()
-        compiledOverlay
         toastView
       }
       .frame(width: inner.width, height: inner.height, alignment: .topLeading)
@@ -224,9 +205,7 @@ struct ComposerCanvas: View {
         ActiveCardOverlays(
           card: editing,
           size: proxy.size,
-          isWorking: isWorking,
           currentTint: board.cards.first(where: { $0.id == editing.id })?.tint,
-          onRefine: { refineSelection($0, card: editing) },
           onFormat: { editing.controller.applyMarkdown($0) },
           onTint: { slot in
             // A live text selection inks just that range; a bare caret falls back to whole-card tint.
@@ -235,17 +214,14 @@ struct ComposerCanvas: View {
             } else {
               board.setTint(slot, for: editing.id)
             }
-          },
-          onApplyFix: { editing.controller.applyLintFix(range: $0.range, expecting: $0.phrase, with: $1) },
-          askEngine: resolvedChatEngine(),
-          onEscalate: { askAgent(about: $0, card: editing) }
+          }
         )
         .id(editing.id)
       }
 
-      // Floating chrome: board identity top-left (the pill IS the board manager), agent top-right,
+      // Floating chrome: board identity top-left (the pill IS the board manager), export top-right,
       // everything hands-on (tools, zoom, settings) in one bottom command bar.
-      // The promotion chip floats above the cards but below the command bar/pills and the agent dock
+      // The promotion chip floats above the cards but below the command bar/pills and Settings
       // — it's a whisper over the canvas, not chrome that competes with the tools.
       promotionOverlay(in: inner)
       if !showPalette {
@@ -268,9 +244,6 @@ struct ComposerCanvas: View {
       enterEditingForEntry(reveal: false)
       CanvasBridge.shared.register(board)
       showLatestReportedError()
-      for text in CaptureInbox.shared.drainPending() {
-        ingestQuickCapture(text)
-      }
     }
     .onChange(of: inner) { _, value in lastViewportSize = value }
     // Promotion lifecycle: a tool change starts a fresh intent, so any live chip is stale.
@@ -285,11 +258,8 @@ struct ComposerCanvas: View {
       else if let previous { evaluateTextPromotion(previous) }
     }
     // Selection change away from the offer's card retracts it; a single text selection can arm one.
-    .onChange(of: board.selectedCardIDs) { _, selected in
+    .onChange(of: board.selectedCardIDs) { _, _ in
       promotionSelectionChanged()
-      if let quickCaptureRevealCardID, !selected.contains(quickCaptureRevealCardID) {
-        self.quickCaptureRevealCardID = nil
-      }
     }
   }
 
@@ -311,7 +281,6 @@ struct ComposerCanvas: View {
 
   private var navigationCommandBridge: some View {
     commandAnchor
-      .onReceive(NotificationCenter.default.publisher(for: .composerCompileBoard)) { _ in runCompile() }
       .onReceive(NotificationCenter.default.publisher(for: .composerShowSettings)) { _ in openSettings() }
       .onReceive(NotificationCenter.default.publisher(for: .composerCaptureCompleted)) { note in
         guard let path = note.userInfo?["path"] as? String else { return }
@@ -363,11 +332,6 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerEnterEditing)) { _ in
         enterEditingForEntry(reveal: true)
       }
-      .onReceive(NotificationCenter.default.publisher(for: .composerTextCardLiveFrameChanged)) { note in
-        guard let id = note.object as? UUID, id == quickCaptureRevealCardID else { return }
-        revealCard(id)
-        quickCaptureRevealCardID = nil
-      }
       .onReceive(NotificationCenter.default.publisher(for: .composerSelectTool)) { note in
         if let selectedTool = note.userInfo?["tool"] as? CanvasTool {
           tool = selectedTool
@@ -375,47 +339,12 @@ struct ComposerCanvas: View {
           selectTool(index: index)
         }
       }
-      .onReceive(NotificationCenter.default.publisher(for: .composerToggleAgent)) { _ in
-        toggleAgent()
-      }
       .onReceive(NotificationCenter.default.publisher(for: .composerTogglePalette)) { _ in
         togglePalette()
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerToggleFocus)) { _ in
         toggleFocus()
       }
-      .onReceive(NotificationCenter.default.publisher(for: .composerQuickCapture)) { note in
-        if let text = note.object as? String {
-          ingestQuickCapture(text)
-        }
-      }
-  }
-
-  private func ingestQuickCapture(_ text: String) {
-    // With no selected card, the visible viewport is the active context. BoardViewModel still
-    // prefers an edited/selected card when one exists, then collision-resolves around it.
-    guard let id = board.captureExternalText(
-      text,
-      around: boardPoint(forViewport: viewportCenter)) else { return }
-    quickCaptureRevealCardID = id
-    revealCard(id)
-    show(Toast(
-      text: "Captured on board".localizedUI,
-      symbol: "leaf.fill",
-      tint: Theme.Palette.accent))
-  }
-
-  /// The agent and Settings share the single overlay slot, driven by `showAgent` /
-  /// `store.isSettingsOpen` — they float over the canvas as glass panels.
-  private func toggleAgent() {
-    withAnimation(Theme.Motion.accessory) {
-      if showAgent {
-        showAgent = false
-      } else {
-        showAgent = true
-        store.isSettingsOpen = false
-      }
-    }
   }
 
   private func selectTool(index: Int) {
@@ -469,7 +398,6 @@ struct ComposerCanvas: View {
       BoardCardLayer(
         cards: visibleCards(in: viewportSize),
         board: board,
-        boardTextContext: board.boardTextContext,
         selectedCardIDs: board.selectedCardIDs,
         editingCardID: board.editingCardID,
         primarySelectedCardID: board.primarySelectedCardID,
@@ -477,7 +405,6 @@ struct ComposerCanvas: View {
         // Only the select tool may grab a card. In a drawing tool the card is click-through, so a
         // drag that starts over it draws a new element instead of selecting/moving the card.
         selectable: tool == .select,
-        failedShellCommands: board.failedShellCommands,
         equationDropTargetID: board.equationDropTargetID
       )
       .equatable()
@@ -1146,8 +1073,8 @@ struct ComposerCanvas: View {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
   }
 
-  /// The top-right chrome: an Export pill (hover-expands) to the LEFT of the
-  /// agent pill. `.top` alignment keeps the agent pill anchored while the export pill grows down.
+  /// The top-right chrome: an Export pill that hover-expands downward (`.top` alignment keeps its
+  /// rest label anchored while it grows).
   /// When a scheduled check finds a new release, an Update pill appears at the far left — the one
   /// accent-tinted control in the chrome, so it reads as the single signal, not decoration.
   private func boardActionsPill(in size: CGSize) -> some View {
@@ -1156,8 +1083,6 @@ struct ComposerCanvas: View {
         updatePill(version: version)
       }
       exportMenu
-      SidebarAgentButton(active: showAgent) { toggleAgent() }
-        .chromePill()
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     .padding(.top, WindowChrome.edgeInset)
@@ -1248,9 +1173,8 @@ struct ComposerCanvas: View {
   }
 
   /// Standard-window mode: ONE bottom-center command bar carrying everything hands-on —
-  /// zoom · tools · settings — tldraw-style, so the top stays calm (identity left,
-  /// AI actions right) and the bottom is a single strong grouping instead of scattered pills.
-  /// Grounding moved into the agent chat (AgentDock) and the ⌘K palette.
+  /// zoom · tools · tint · settings — tldraw-style, so the top stays calm (identity left,
+  /// export right) and the bottom is a single strong grouping instead of scattered pills.
   private func bottomCommandBar(fit innerSize: CGSize) -> some View {
     return HStack(spacing: WindowChrome.itemSpacing) {
       SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out".localizedUI) { zoom(0.8, anchoredAt: zoomAnchor) }
@@ -1393,8 +1317,6 @@ struct ComposerCanvas: View {
         card: card,
         interaction: board.interaction(for: id),
         size: size,
-        isWorking: isWorking,
-        askEngine: resolvedChatEngine(),
         onClose: { closeFocus() }
       )
       .id(id)
@@ -1406,8 +1328,6 @@ struct ComposerCanvas: View {
         card: card,
         interaction: board.interaction(for: id),
         size: size,
-        isWorking: isWorking,
-        askEngine: resolvedChatEngine(),
         // Axes→graph promotion opens the label stage straight in graph-config mode; consume the
         // one-shot intent so a later manual edit of the same card doesn't reopen it.
         openGraphConfigOnAppear: openGraphConfigCardID == id,
@@ -1529,28 +1449,10 @@ struct ComposerCanvas: View {
     evaluateTextPromotion(id)
   }
 
-  /// Agent floats over the canvas as a right-docked glass panel; Settings presents as a centered
-  /// glass sheet over a click-away scrim. One slot — they never co-exist.
+  /// Settings presents as a centered glass sheet over a click-away scrim.
   @ViewBuilder
   private func dockOverlay(in size: CGSize) -> some View {
-    if showAgent {
-      let width = min(360, max(300, size.width * 0.32))
-      AgentDock(
-        agent: agent,
-        width: width,
-        draft: $workspace.agentDraft,
-        onClose: { toggleAgent() },
-        onEscape: { handleEscapeBoard() }
-      )
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .padding(.top, size.height * 0.10)
-        .padding(.trailing, WindowChrome.edgeInset)
-        // Stop above the bottom command bar rather than covering its right end.
-        .padding(.bottom, WindowChrome.edgeInset + WindowChrome.controlHeight + WindowChrome.padV * 2 + 8)
-        .shadow(color: Theme.Shadow.panel.color, radius: Theme.Shadow.panel.radius, y: Theme.Shadow.panel.y)
-        .transition(.move(edge: .trailing).combined(with: .opacity))
-        .zIndex(40)
-    } else if store.isSettingsOpen {
+    if store.isSettingsOpen {
       SettingsOverlay(
         canvasSize: size,
         onClose: { toggleSettings() },
@@ -1558,24 +1460,6 @@ struct ComposerCanvas: View {
       )
         .transition(.opacity)
         .zIndex(40)
-    }
-  }
-
-  @ViewBuilder
-  private var compiledOverlay: some View {
-    if let draft = store.compiledDraft {
-      CompiledDraftOverlay(
-        text: draft,
-        onCopy: {
-          if copyToClipboard(draft) {
-            show(Toast(text: "Copied compiled draft".localizedUI, symbol: "doc.on.doc.fill", tint: .accentColor))
-          } else {
-            show(Toast(text: "macOS did not accept the clipboard contents. The compiled draft was not copied.".localizedUI, symbol: "exclamationmark.triangle.fill", tint: .orange))
-          }
-        },
-        onClose: { store.compiledDraft = nil }
-      )
-      .transition(.opacity)
     }
   }
 
@@ -1637,18 +1521,11 @@ struct ComposerCanvas: View {
   /// Whether the board may pan/zoom right now. Stage edits (equation/graph/label) are modal —
   /// events that leak through the scrim (scrollWheel/magnify land on the NSViews beneath SwiftUI
   /// layers) are swallowed so they can't shift the board or tear down an in-flight draft. Inline
-  /// TEXT editing lives ON the board, so pan/zoom stays live there; only the caret-anchored popups
-  /// (mentions, inline search, lint) are dropped first so they don't drift off their anchor.
+  /// TEXT editing lives ON the board, so pan/zoom stays live there.
   private func allowPanZoom() -> Bool {
     guard let id = board.editingCardID,
           let kind = board.cards.first(where: { $0.id == id })?.elementKind else { return true }
-    guard kind == .text else { return false }
-    if let editing = board.editingInteraction {
-      if editing.mentions.isOpen { editing.mentions.isOpen = false; editing.mentions.items = [] }
-      if editing.appSearch.isOpen { editing.appSearch.isOpen = false }
-      if editing.lint.activeFlagID != nil { editing.lint.activeFlagID = nil }
-    }
-    return true
+    return kind == .text
   }
 
   private func zoom(_ factor: CGFloat, anchoredAt point: CGPoint) {
@@ -1780,20 +1657,14 @@ struct ComposerCanvas: View {
 
   // MARK: Board navigation (history stack)
 
-  private var canNavigate: Bool {
-    guard !isWorking, store.compiledDraft == nil else { return false }
-    if let editing = board.editingInteraction, editing.mentions.isOpen || editing.appSearch.isOpen { return false }
-    return true
-  }
-
   private var canEditBoard: Bool {
-    guard !isWorking, !store.isSettingsOpen, store.compiledDraft == nil else { return false }
+    guard !store.isSettingsOpen else { return false }
     return board.editingInteraction == nil
   }
 
-  private func handlePrevDump() { if canNavigate { gotoOlder() } }
-  private func handleNextDump() { if canNavigate { gotoNewer() } }
-  private func handleNewDump() { if canNavigate { newBoard() } }
+  private func handlePrevDump() { gotoOlder() }
+  private func handleNextDump() { gotoNewer() }
+  private func handleNewDump() { newBoard() }
 
   private func handleDeleteSelection() { if canEditBoard { board.deleteSelection() } }
   private func handleDuplicateSelection() { if canEditBoard { board.duplicateSelection() } }
@@ -1814,9 +1685,7 @@ struct ComposerCanvas: View {
       hasBoardPicker: boardPickerOpen,
       hasCommandPalette: showPalette,
       hasFocusedEditor: focusedCardID != nil,
-      hasCompiledOverlay: store.compiledDraft != nil,
       hasPromotion: promotion != nil,
-      hasAgent: showAgent,
       hasSettings: store.isSettingsOpen,
       hasActiveEditor: board.editingInteraction != nil,
       hasActiveVectorEditor: activeEditorKind == .vectorPath,
@@ -1838,8 +1707,6 @@ struct ComposerCanvas: View {
       dismissPalette()
     case .focusedEditor:
       closeFocus()
-    case .compiledOverlay:
-      store.compiledDraft = nil
     case .promotion:
       dismissPromotion()
     case .auxiliaryPanel:
@@ -1980,12 +1847,12 @@ struct ComposerCanvas: View {
   }
 
   /// On panel open: reveal and enter editing on the active (or first) text card so the caret is
-  /// ready to type. A capture remains the primary/editing card, so reopening the board returns to
-  /// that thought instead of preserving a viewport that can no longer see it.
+  /// ready to type. The active card stays primary, so reopening the board returns to that thought
+  /// instead of preserving a viewport that can no longer see it.
   private func enterEditingForEntry(reveal: Bool) {
-    guard !showAgent, !showPalette, focusedCardID == nil,
+    guard !showPalette, focusedCardID == nil,
           pendingBoardDeletion == nil, renamingBoardID == nil,
-          !store.isSettingsOpen, store.compiledDraft == nil, !store.isHistoryOpen else { return }
+          !store.isSettingsOpen else { return }
     let id = board.editingCardID ?? board.primarySelectedCardID ?? board.cards.first?.id
     guard let id, board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
     let interaction = board.interaction(for: id)
@@ -2005,8 +1872,8 @@ struct ComposerCanvas: View {
     }
   }
 
-  /// The sidebar gear toggles Settings the way ⌘J / the rail toggle Agent: a second click on the
-  /// gear while Settings is up closes it again. (⌘, and the menu-bar item still always open.)
+  /// The command-bar gear toggles Settings: a second click while Settings is up closes it again.
+  /// (⌘, always opens.)
   private func toggleSettings() {
     if store.isSettingsOpen {
       withAnimation(Theme.Motion.accessory) { store.isSettingsOpen = false }
@@ -2016,27 +1883,19 @@ struct ComposerCanvas: View {
   }
 
   private func openSettings() {
-    store.isHistoryOpen = false
-    store.compiledDraft = nil
-    withAnimation(Theme.Motion.accessory) {
-      showAgent = false
-      store.isSettingsOpen = true
-    }
+    withAnimation(Theme.Motion.accessory) { store.isSettingsOpen = true }
   }
 
   private func closeAuxiliaryPanel() {
-    guard showAgent || store.isSettingsOpen else { return }
-    withAnimation(Theme.Motion.accessory) {
-      showAgent = false
-      store.isSettingsOpen = false
-    }
+    guard store.isSettingsOpen else { return }
+    withAnimation(Theme.Motion.accessory) { store.isSettingsOpen = false }
   }
 
   // MARK: Command palette (⌘K)
 
   /// A spotlight over the board: a faint scrim catches a click-away dismiss; the palette itself
   /// floats near the top-center, like Spotlight. Lives only in the board window's SwiftUI tree, so
-  /// it never disturbs the board/dock window geometry.
+  /// it never disturbs the window geometry.
   @ViewBuilder
   private func commandPaletteOverlay(in size: CGSize) -> some View {
     if showPalette {
@@ -2061,14 +1920,11 @@ struct ComposerCanvas: View {
 
   private func togglePalette() {
     if showPalette { dismissPalette(); return }
-    // The compiled-draft overlay is a focused modal — dismiss it before opening the palette.
-    guard store.compiledDraft == nil else { return }
     // The picker temporarily sits above the protected-board banner. Collapse it before the palette
     // claims modal ownership at zIndex 50; a failed rename keeps both its editor and attempted value
     // visible instead of opening the palette behind it.
     guard commitBoardRename() else { return }
     closeBoardPicker()
-    store.isHistoryOpen = false
     // Capture the editing card, then end the edit session so its stage (zIndex 70) doesn't sit over
     // the palette (zIndex 50). Cancel hands editing back by reopening the stage on the same card.
     paletteReturnCardID = board.editingCardID
@@ -2192,118 +2048,6 @@ struct ComposerCanvas: View {
     }
   }
 
-  // MARK: Compile + refine
-
-  /// Collapse the whole board into one ordered, paste-ready draft.
-  private func runCompile() {
-    guard !isWorking, store.compiledDraft == nil else { return }
-    let source = board.joinedPlainText()
-    guard !source.trimmed.isEmpty else {
-      show(Toast(text: "Add some cards to compile".localizedUI, symbol: "rectangle.dashed", tint: .orange))
-      return
-    }
-    guard let engine = preferredEngine() else {
-      show(Toast(text: unavailableEngineMessage(), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    isWorking = true
-    Task {
-      do {
-        let result = try await service.compileBoard(source: source, engine: engine)
-        store.compiledDraft = result
-      } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Compiling the board".localizedUI), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      }
-      isWorking = false
-    }
-  }
-
-  /// Refine the active card's current selection in place.
-  private func refineSelection(_ engine: HeadlessEngine, card: CardInteraction) {
-    let snapshot = card.selection
-    guard !snapshot.isEmpty, !isWorking else { return }
-    guard EnginePreferences.isEnabled(engine) else {
-      show(Toast(text: "%@ is disabled in Settings".localizedUI(engine.title), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    guard engineCapabilities.isAvailable(engine) else {
-      show(Toast(text: unavailableEngineMessage(), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    let whole = card.controller.plainText
-    isWorking = true
-    Task {
-      do {
-        let result = try await service.refineSelection(whole: whole, selection: snapshot.text, engine: engine)
-        card.controller.replace(range: snapshot.range, with: result)
-        show(Toast(text: "Refined with %@".localizedUI(engine.title), symbol: "checkmark.circle.fill", tint: .green))
-      } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Refining the selected text with %@".localizedUI(engine.title)), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      }
-      isWorking = false
-    }
-  }
-
-  /// Escalate one flagged phrase on the active card to the chat agent — the same engine the in-canvas
-  /// chat runs on, so the linter's "Refine with …" matches the user's Default Chat Agent pick.
-  private func askAgent(about flag: LintFlag, card: CardInteraction) {
-    guard !isWorking else { return }
-    guard let engine = resolvedChatEngine() else {
-      show(Toast(text: unavailableEngineMessage(), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    let whole = card.controller.plainText
-    isWorking = true
-    card.lint.activeFlagID = nil
-    Task {
-      do {
-        let result = try await service.refineSelection(whole: whole, selection: flag.phrase, engine: engine)
-        card.controller.applyLintFix(range: flag.range, expecting: flag.phrase, with: result)
-        show(Toast(text: "Clarified with %@".localizedUI(engine.title), symbol: "checkmark.circle.fill", tint: .green))
-      } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Clarifying the selected text with %@".localizedUI(engine.title)), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      }
-      isWorking = false
-    }
-  }
-
-  private func preferredEngine() -> HeadlessEngine? {
-    for engine in HeadlessEngine.allCases {
-      if EnginePreferences.isEnabled(engine), engineCapabilities.isAvailable(engine) { return engine }
-    }
-    return nil
-  }
-
-  /// The engine the in-canvas chat — and the linter's "Refine with …" escalation — runs on: the
-  /// Default Chat Agent pick when enabled + available, else the first available engine.
-  private func resolvedChatEngine() -> HeadlessEngine? {
-    EnginePreferences.resolvedEngine(for: .chat, isAvailable: engineCapabilities.isAvailable)
-  }
-
-  private func unavailableEngineMessage() -> String {
-    let enabled = HeadlessEngine.allCases.filter { EnginePreferences.isEnabled($0) }
-    guard !enabled.isEmpty else {
-      return "All engines are disabled in Settings > Runtime. Enable one before using this action.".localizedUI
-    }
-    let reasons = enabled.compactMap { engine -> String? in
-      switch engineCapabilities.status(for: engine) {
-      case .checking: return "%@ is still being checked".localizedUI(engine.title)
-      case let .unavailable(reason): return "%@: %@".localizedUI(engine.title, reason)
-      case .available: return nil
-      }
-    }
-    if reasons.isEmpty {
-      return "No engine could be selected. Open Settings > Runtime > Recheck.".localizedUI
-    }
-    return reasons.joined(separator: " · ")
-  }
-
-  @discardableResult
-  private func copyToClipboard(_ text: String) -> Bool {
-    NSPasteboard.general.clearContents()
-    return NSPasteboard.general.setString(text, forType: .string)
-  }
-
   private func copySelectedCards() {
     let selected = board.selectedCardsForClipboard()
     guard !selected.isEmpty else { return }
@@ -2351,7 +2095,8 @@ struct ComposerCanvas: View {
 
   /// A region captured via "Snap to board" landed: drop it as an image card at the viewport center,
   /// then read it on-device in two stages so the card paints fast — OCR first (the floor), then an
-  /// Apple Intelligence cleanup/classification swaps in when it's ready. Both feed the compiled prompt.
+  /// Apple Intelligence cleanup/classification swaps in when it's ready. Agents read either over the
+  /// canvas API.
   private func addCapturedImage(path: String) {
     let id = board.addImageObject(path: path, at: boardPoint(forViewport: viewportCenter))
     // Reuse the just-captured pixels; only fall back to decoding the PNG if the hand-off missed.
@@ -2362,7 +2107,7 @@ struct ComposerCanvas: View {
         ocr = await ImageUnderstanding.recognizeText(in: captured)
       } else if let understanding = await ImageUnderstanding.analyze(imagePath: path) {
         board.setImageUnderstanding(id, understanding)
-        show(Toast(text: "Screenshot read - ready for the prompt".localizedUI, symbol: "checkmark.circle.fill", tint: .green))
+        show(Toast(text: "Screenshot read - agents can see its text".localizedUI, symbol: "checkmark.circle.fill", tint: .green))
         return
       } else {
         show(Toast(text: "Added screenshot - no text found".localizedUI, symbol: "photo", tint: .accentColor))
@@ -2372,7 +2117,7 @@ struct ComposerCanvas: View {
       // Stage 1: show the OCR text immediately so the card is useful within a beat.
       if !ocr.isEmpty {
         board.setImageUnderstanding(id, "[Screenshot]\n\(ocr)")
-        show(Toast(text: "Screenshot read - ready for the prompt".localizedUI, symbol: "checkmark.circle.fill", tint: .green))
+        show(Toast(text: "Screenshot read - agents can see its text".localizedUI, symbol: "checkmark.circle.fill", tint: .green))
       } else {
         show(Toast(text: "Added screenshot - no text found".localizedUI, symbol: "photo", tint: .accentColor))
       }
@@ -3094,156 +2839,33 @@ private struct PinchZoomCatcher: NSViewRepresentable {
 
 // MARK: - Active-card overlays
 
-/// The caret/selection-anchored chrome for whichever card holds focus: the selection action
-/// bar, the `@`-mention menu, the connector search panel, and the linter popover. Observes the
-/// active card's state objects directly so it re-renders when they change; rebuilt (via `.id`)
-/// when the active card changes.
+/// The selection-anchored chrome for whichever card holds focus: the selection action bar.
+/// Observes the active card's interaction directly so it re-renders when the selection changes;
+/// rebuilt (via `.id`) when the active card changes.
 private struct ActiveCardOverlays: View {
   @ObservedObject var card: CardInteraction
-  @ObservedObject var mentions: MentionState
-  @ObservedObject var appSearch: AppSearchState
-  @ObservedObject var lint: LintState
   let size: CGSize
-  let isWorking: Bool
   let currentTint: Int?
-  /// The engine the linter's "Refine with …" escalation targets (the resolved Chat Agent pick);
-  /// `nil` hides the escalate row.
-  let askEngine: HeadlessEngine?
-  let onRefine: (HeadlessEngine) -> Void
   let onFormat: (MarkdownStyle.Action) -> Void
   let onTint: (Int?) -> Void
-  let onApplyFix: (LintFlag, String) -> Void
-  let onEscalate: (LintFlag) -> Void
-
-  init(card: CardInteraction, size: CGSize, isWorking: Bool,
-       currentTint: Int?,
-       onRefine: @escaping (HeadlessEngine) -> Void,
-       onFormat: @escaping (MarkdownStyle.Action) -> Void,
-       onTint: @escaping (Int?) -> Void,
-       onApplyFix: @escaping (LintFlag, String) -> Void,
-       askEngine: HeadlessEngine?,
-       onEscalate: @escaping (LintFlag) -> Void) {
-    self.card = card
-    self.mentions = card.mentions
-    self.appSearch = card.appSearch
-    self.lint = card.lint
-    self.size = size
-    self.isWorking = isWorking
-    self.currentTint = currentTint
-    self.askEngine = askEngine
-    self.onRefine = onRefine
-    self.onFormat = onFormat
-    self.onTint = onTint
-    self.onApplyFix = onApplyFix
-    self.onEscalate = onEscalate
-  }
 
   var body: some View {
     ZStack(alignment: .topLeading) {
       selectionBar
-      mentionMenu
-      appSearchPanel
-      lintPopover
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .animation(Theme.Motion.accessory, value: card.selection)
-    .animation(Theme.Motion.accessory, value: mentions.isOpen)
-    .animation(Theme.Motion.accessory, value: appSearch.isOpen)
-    .animation(Theme.Motion.accessory, value: lint.activeFlagID)
   }
 
   @ViewBuilder
   private var selectionBar: some View {
-    if !card.selection.isEmpty, !mentions.isOpen, !appSearch.isOpen, let rect = card.selection.rectInView {
-      SelectionActionBar(isWorking: isWorking, onRefine: onRefine, onFormat: onFormat, currentTint: currentTint, onTint: onTint)
+    if !card.selection.isEmpty, let rect = card.selection.rectInView {
+      SelectionActionBar(onFormat: onFormat, currentTint: currentTint, onTint: onTint)
         .fixedSize()
         .position(x: clamp(rect.midX, 120, max(120, size.width - 120)),
                   y: clamp(rect.minY - 22, 30, max(30, size.height - 28)))
         .transition(.opacity)
     }
-  }
-
-  @ViewBuilder
-  private var mentionMenu: some View {
-    if mentions.isOpen, let anchor = mentions.anchorInView {
-      let popup = CGSize(width: Theme.Size.menuWidth, height: mentionMenuHeight)
-      let origin = popupOrigin(anchor: anchor, popup: popup)
-      MentionMenu(mentions: mentions)
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(width: popup.width)
-        .position(x: origin.x + popup.width / 2, y: origin.y + popup.height / 2)
-        .transition(.opacity)
-    }
-  }
-
-  @ViewBuilder
-  private var appSearchPanel: some View {
-    if appSearch.isOpen, let anchor = appSearch.anchorInView {
-      let popup = CGSize(width: 360, height: appSearchPanelHeight)
-      let origin = popupOrigin(anchor: anchor, popup: popup)
-      AppSearchPanel(state: appSearch)
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(width: popup.width)
-        .position(x: origin.x + popup.width / 2, y: origin.y + popup.height / 2)
-        .transition(.opacity)
-    }
-  }
-
-  @ViewBuilder
-  private var lintPopover: some View {
-    if card.selection.isEmpty, !mentions.isOpen, !appSearch.isOpen, let flag = lint.activeFlag, let rect = flag.rectInView {
-      let popup = CGSize(width: 300, height: lintPopoverHeight(flag))
-      let origin = popupOrigin(anchor: CGPoint(x: rect.minX, y: rect.maxY + 1), popup: popup)
-      LintPopover(
-        flag: flag,
-        escalationEngine: askEngine,
-        onPick: { onApplyFix(flag, $0) },
-        onEscalate: { onEscalate(flag) },
-        onHover: { hovering in if hovering { lint.cancelHide?() } else { lint.requestHide?() } }
-      )
-      .fixedSize(horizontal: true, vertical: false)
-      .frame(width: popup.width)
-      .position(x: origin.x + popup.width / 2, y: origin.y + popup.height / 2)
-      .transition(.opacity)
-    }
-  }
-
-  // MARK: Geometry
-
-  private var mentionMenuHeight: CGFloat {
-    let rows = min(CGFloat(max(mentions.items.count, 1)), Theme.Size.menuMaxVisibleRows)
-    return rows * Theme.Size.menuRowHeight + 10 + 26
-  }
-
-  private var appSearchPanelHeight: CGFloat {
-    let content: CGFloat
-    if appSearch.results.isEmpty {
-      content = 42
-    } else {
-      content = min(CGFloat(max(appSearch.results.count, 1)), Theme.Size.menuMaxVisibleRows) * 46 + 10
-    }
-    return 42 + 1 + content + 26
-  }
-
-  private func lintPopoverHeight(_ flag: LintFlag) -> CGFloat {
-    // The escalate row is hidden when no engine is available; each shown block adds its own hairline.
-    let hasButton = askEngine != nil
-    let suggestions = CGFloat(flag.suggestions.count) * 42
-    let button: CGFloat = hasButton ? 42 : 0
-    let dividers = (flag.suggestions.isEmpty ? 0.0 : 1.0) + (hasButton ? 1.0 : 0.0)
-    return min(260, 62 + suggestions + button + dividers)
-  }
-
-  private func popupOrigin(anchor: CGPoint, popup: CGSize) -> CGPoint {
-    let margin: CGFloat = 8
-    let below = anchor.y + 6
-    let above = anchor.y - popup.height - 8
-    let hasRoomBelow = below + popup.height <= size.height - margin
-    let hasMoreRoomAbove = anchor.y > size.height - anchor.y
-    let preferredY = (!hasRoomBelow && hasMoreRoomAbove) ? above : below
-    return CGPoint(
-      x: clamp(anchor.x, margin, max(margin, size.width - popup.width - margin)),
-      y: clamp(preferredY, margin, max(margin, size.height - popup.height - margin)))
   }
 
   private func clamp(_ value: CGFloat, _ lower: CGFloat, _ upper: CGFloat) -> CGFloat {
@@ -3255,11 +2877,10 @@ private struct ActiveCardOverlays: View {
 /// the cards only when something that actually affects how they draw changes — never for a transient
 /// gesture (draw / freehand / selection rect / live pan), which all mutate canvas `@State` that this
 /// layer doesn't depend on. The comparison covers exactly that state: the visible cards themselves,
-/// the selection/editing/primary ids, the zoom, the select-tool gate, and the shell-failure marks.
+/// the selection/editing/primary ids, the zoom, the select-tool gate, and the equation drop target.
 ///
-/// `board` and `onEscape` are excluded from `==` on purpose — the board is one stable instance and
-/// the closure is stable, so comparing them would be meaningless. The immutable text context is
-/// included so a cross-card definition edit refreshes every card exactly once for that revision.
+/// `board` is excluded from `==` on purpose — it is one stable instance, so comparing it would be
+/// meaningless.
 ///
 /// Each `BoardCardView` still observes its own `CardInteraction`, so editing/typing a card re-renders
 /// just that card even while this whole layer is skipped — the same way the capture overlay stays
@@ -3267,26 +2888,22 @@ private struct ActiveCardOverlays: View {
 struct BoardCardLayer: View, Equatable {
   let cards: [CardState]
   let board: BoardViewModel
-  let boardTextContext: BoardTextContext
   let selectedCardIDs: Set<UUID>
   let editingCardID: UUID?
   let primarySelectedCardID: UUID?
   let scale: CGFloat
   let selectable: Bool
-  let failedShellCommands: Set<String>
   /// The graph card a parseable equation is currently dragged over (its accent drop-ring). Included
   /// in `==` so the ring appears/clears mid-drag even though nothing in `cards` changes.
   let equationDropTargetID: UUID?
 
   static func == (lhs: BoardCardLayer, rhs: BoardCardLayer) -> Bool {
     lhs.cards == rhs.cards &&
-      lhs.boardTextContext.definedVariableNames == rhs.boardTextContext.definedVariableNames &&
       lhs.selectedCardIDs == rhs.selectedCardIDs &&
       lhs.editingCardID == rhs.editingCardID &&
       lhs.primarySelectedCardID == rhs.primarySelectedCardID &&
       lhs.scale == rhs.scale &&
       lhs.selectable == rhs.selectable &&
-      lhs.failedShellCommands == rhs.failedShellCommands &&
       lhs.equationDropTargetID == rhs.equationDropTargetID
   }
 
@@ -3300,7 +2917,6 @@ struct BoardCardLayer: View, Equatable {
           isEditing: editingCardID == card.id,
           scale: scale,
           board: board,
-          boardTextContext: boardTextContext,
           selectable: selectable
         )
         .zIndex(Double(card.z) + (primarySelectedCardID == card.id ? 10_000 : 0))

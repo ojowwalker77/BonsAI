@@ -9,7 +9,6 @@ import Network
 ///   GET  /health   → liveness + API version
 ///   GET  /canvas   → the full `CanvasGraph`
 ///   POST /canvas   → one `{ "op": …, … }` mutation, returns `{ "ok": …, … }`
-///   POST /capture  → `{ "text": "…" }` append a card to the open board
 ///   POST /mcp      → JSON-RPC for MCP tools
 final class CanvasServer {
   static let shared = CanvasServer()
@@ -38,11 +37,6 @@ final class CanvasServer {
         try CanvasSessionDescriptor.generate(apiVersion: Self.apiVersion, port: Self.port)
       }
     }
-  }
-
-  /// Raw capability for a child process environment. Callers must never put it in argv or logs.
-  func capabilityForClient() throws -> String {
-    try sessionResult.get().capability
   }
 
   func start() {
@@ -198,28 +192,6 @@ final class CanvasServer {
         }
       }
 
-    case ("POST", "/capture"):
-      let body = self.body(of: buffer, request: request)
-      Task { @MainActor in
-        let payload: [String: Any]
-        do {
-          guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-            self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": "Capture request must be a JSON object.".localizedUI])
-            return
-          }
-          payload = decoded
-        } catch {
-          self.send(connection, status: "400 Bad Request", json: ["ok": false, "error": UserFacingError.message(for: error, while: "Decoding the capture request".localizedUI)])
-          return
-        }
-        let text = payload["text"]
-        var op: [String: Any] = ["op": "capture"]
-        if let text { op["text"] = text }
-        let result = CanvasBridge.shared.apply(op)
-        let ok = (result["ok"] as? Bool) ?? false
-        self.send(connection, status: ok ? "200 OK" : "422 Unprocessable Entity", json: result)
-      }
-
     case ("POST", "/canvas"):
       let body = self.body(of: buffer, request: request)
       Task { @MainActor in
@@ -268,33 +240,8 @@ final class CanvasServer {
         }
       }
 
-    // MCP permission-prompt server: the agent's `--permission-prompt-tool` calls this so a tool
-    // outside the canvas allow-list (an account connector, a built-in) gets a real allow/deny
-    // dialog instead of a silent wall. Separate server name (`composer`) from `/mcp`'s `canvas`
-    // so the model can't reach the arbiter through `--allowedTools mcp__canvas__*`.
-    case ("POST", "/permission"):
-      let body = self.body(of: buffer, request: request)
-      Task { @MainActor in
-        let message: [String: Any]
-        do {
-          guard let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-            self.send(connection, status: "400 Bad Request", json: ["error": "MCP request must be a JSON object.".localizedUI])
-            return
-          }
-          message = decoded
-        } catch {
-          self.send(connection, status: "400 Bad Request", json: ["error": UserFacingError.message(for: error, while: "Decoding the MCP request".localizedUI)])
-          return
-        }
-        if let response = PermissionMCP.handle(message) {
-          self.send(connection, status: "200 OK", json: response)
-        } else {
-          self.send(connection, status: "202 Accepted", data: Data())   // notification: no body
-        }
-      }
-
-    case ("GET", "/mcp"), ("GET", "/permission"):
-      // No server-initiated SSE stream; these servers are request/response only.
+    case ("GET", "/mcp"):
+      // No server-initiated SSE stream; the MCP transport is request/response only.
       send(connection, status: "405 Method Not Allowed", json: ["error": "use POST".localizedUI])
 
     default:

@@ -4,7 +4,6 @@ set -euo pipefail
 MODE="${1:-run}"
 APP_NAME="BonsAI"
 PRODUCT_NAME="Composer"   # SwiftPM executable output; the staged .app binary is renamed to APP_NAME
-AGENT_LAUNCHER_NAME="BonsAIAgentLauncher"
 BUNDLE_ID="dev.jow.BonsAI"
 # Keep in lockstep with the deployment target in Package.swift (.macOS(.v14)). macOS 14 (Sonoma)
 # is the floor set by SwiftData; Tahoe-only features (Apple Intelligence, Liquid Glass) are gated
@@ -28,9 +27,7 @@ DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
-APP_HELPERS="$APP_CONTENTS/Helpers"
 APP_BINARY="$APP_MACOS/$APP_NAME"
-APP_AGENT_LAUNCHER="$APP_HELPERS/$AGENT_LAUNCHER_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 
 cd "$ROOT_DIR"
@@ -50,25 +47,16 @@ pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 swift build -c "$BUILD_CONFIGURATION"
 BUILD_DIR="$(swift build -c "$BUILD_CONFIGURATION" --show-bin-path)"
 BUILD_BINARY="$BUILD_DIR/$PRODUCT_NAME"
-BUILD_AGENT_LAUNCHER="$BUILD_DIR/$AGENT_LAUNCHER_NAME"
-
-if [[ ! -x "$BUILD_AGENT_LAUNCHER" ]]; then
-  echo "error: agent process-group launcher is missing at $BUILD_AGENT_LAUNCHER" >&2
-  exit 1
-fi
 
 rm -rf "$APP_BUNDLE"
-mkdir -p "$APP_MACOS" "$APP_HELPERS"
+mkdir -p "$APP_MACOS"
 cp "$BUILD_BINARY" "$APP_BINARY"
-cp "$BUILD_AGENT_LAUNCHER" "$APP_AGENT_LAUNCHER"
 # SwiftPM's release linker product can still carry debug symbol records. They are unnecessary in
 # the staged app bundle and `strip -S` removes only those records, not executable code.
 if [[ "$BUILD_CONFIGURATION" == "release" ]]; then
   /usr/bin/strip -S "$APP_BINARY"
-  /usr/bin/strip -S "$APP_AGENT_LAUNCHER"
 fi
 chmod +x "$APP_BINARY"
-chmod +x "$APP_AGENT_LAUNCHER"
 # Stage SwiftPM resource bundles in the canonical Contents/Resources: our app resources plus package
 # resources such as SwiftMath's math fonts. Bundle.appResources (our crash-proof resolver) looks here
 # first, and it's the codesign-clean location the release signs and notarizes — so local builds
@@ -160,35 +148,6 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSHighResolutionCapable</key>
   <true/>
-  <key>CFBundleURLTypes</key>
-  <array>
-    <dict>
-      <key>CFBundleURLName</key>
-      <string>$BUNDLE_ID</string>
-      <key>CFBundleURLSchemes</key>
-      <array>
-        <string>bonsai</string>
-      </array>
-    </dict>
-  </array>
-  <key>NSServices</key>
-  <array>
-    <dict>
-      <key>NSMenuItem</key>
-      <dict>
-        <key>default</key>
-        <string>Send to BonsAI</string>
-      </dict>
-      <key>NSMessage</key>
-      <string>captureFromService</string>
-      <key>NSPortName</key>
-      <string>$APP_NAME</string>
-      <key>NSSendTypes</key>
-      <array>
-        <string>public.plain-text</string>
-      </array>
-    </dict>
-  </array>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
   <key>SUFeedURL</key>

@@ -78,10 +78,9 @@ struct CanvasPoint: Codable, Equatable {
   var cgPoint: CGPoint { CGPoint(x: x, y: y) }
 }
 
-/// One text card on a board: its content (plain `@token` text — the source of truth, same
-/// as the single-note era) plus its board-space frame and z-order. The whole board is a
-/// `BoardPayload` serialized as JSON into `Dump.cardsData`. Chips stay a within-session
-/// cosmetic layer; only this plain text persists.
+/// One card on a board: its content (plain text — the source of truth) plus its board-space
+/// frame and z-order. The whole board is a `BoardPayload` serialized as JSON into
+/// `Dump.cardsData`.
 struct CardState: Codable, Identifiable, Equatable {
   struct ChecklistItem: Codable, Equatable, Identifiable {
     var id: UUID = UUID()
@@ -123,8 +122,8 @@ struct CardState: Codable, Identifiable, Equatable {
   /// For `.equation` cards: raw LaTeX math-mode source, without surrounding `$` delimiters.
   var latex: String?
   /// For `.image` cards: the on-device, agent-ready text read out of the screenshot (OCR + a short
-  /// classification, e.g. "Terminal error: …"). This is what an image card contributes to the
-  /// compiled prompt and to `CanvasBridge.snapshot()` — without it a screenshot is invisible to a
+  /// classification, e.g. "Terminal error: …"). This is what an image card contributes to
+  /// `CanvasBridge.snapshot()` — without it a screenshot is invisible to a
   /// coding agent. Nil while still being read (or when nothing legible was found).
   var imageUnderstanding: String?
   /// A superseded idea — kept on the board for lineage but visually faded (provenance).

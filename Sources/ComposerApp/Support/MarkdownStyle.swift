@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Display-only markdown for board text. BonsAI styles the syntax IN PLACE — headings, emphasis,
-/// code, quotes, lists, checkboxes — while the plain text keeps every marker, so agents and
-/// Compile read ordinary markdown and nothing new is persisted. The same span scanner feeds the
+/// code, quotes, lists, checkboxes — while the plain text keeps every marker, so agents read
+/// ordinary markdown and nothing new is persisted. The same span scanner feeds the
 /// live editor (NSAttributedString) and the static card render (SwiftUI AttributedString).
 enum MarkdownStyle {
   /// Formatting actions the selection bar offers; applied as literal markdown syntax.
@@ -45,7 +45,7 @@ enum MarkdownStyle {
 
   /// All markdown spans in the text, in document order. Ranges are UTF-16 offsets into `text`
   /// itself — for board cards the serialized plain text and the visible editor text agree on
-  /// markdown regions (chips only ever replace `@token` runs, which the scanner ignores).
+  /// markdown regions.
   static func spans(in text: String) -> [Span] {
     var spans: [Span] = []
     let ns = text as NSString
@@ -107,17 +107,14 @@ enum MarkdownStyle {
 
   // MARK: Editor styling (NSAttributedString, display-only)
 
-  /// Overlay markdown styles onto the live editor storage. Chip runs are skipped so brand chips
-  /// never restyle. Runs inside the caller's begin/endEditing batch, after the body reset.
+  /// Overlay markdown styles onto the live editor storage. Runs inside the caller's
+  /// begin/endEditing batch, after the body reset.
   static func apply(to storage: NSTextStorage, baseFont: NSFont) {
     for span in spans(in: storage.string) {
       guard span.range.location + span.range.length <= storage.length else { continue }
       let attrs = editorAttributes(for: span.kind, baseFont: baseFont)
       guard !attrs.isEmpty else { continue }
-      storage.enumerateAttribute(.mentionToken, in: span.range) { value, sub, _ in
-        guard value == nil else { return }
-        storage.addAttributes(attrs, range: sub)
-      }
+      storage.addAttributes(attrs, range: span.range)
     }
   }
 

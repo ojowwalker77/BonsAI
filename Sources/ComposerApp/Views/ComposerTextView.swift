@@ -5,13 +5,9 @@ import AppKit
 /// so this override is the only path that ever inserts an image.
 final class ComposerTextView: NSTextView {
 
-  /// Set by the editor coordinator; fired when an interactive app chip is clicked.
-  var onChipClick: ((NSRange) -> Void)?
   /// Fired when this card's text view gains/loses first responder, so the canvas can
-  /// track the active card and route per-card actions (font, selection refine) to it.
+  /// track the active card and route per-card actions (font, formatting) to it.
   var onFocusChange: ((Bool) -> Void)?
-  /// When set, pasted plain text may be turned into connector chips before insertion.
-  weak var smartPasteHandler: ComposerSmartPasteHandling?
 
   override func becomeFirstResponder() -> Bool {
     let became = super.becomeFirstResponder()
@@ -25,13 +21,8 @@ final class ComposerTextView: NSTextView {
     return resigned
   }
 
-  /// Intercept clicks that land on an app chip and open its connector picker
-  /// instead of placing a caret. Other clicks fall through to normal text behavior.
+  /// A click on a markdown checkbox toggles it; other clicks fall through to normal text behavior.
   override func mouseDown(with event: NSEvent) {
-    if let range = appChipRange(at: event) {
-      onChipClick?(range)
-      return
-    }
     if toggleCheckbox(at: event) { return }
     super.mouseDown(with: event)
   }
@@ -67,66 +58,6 @@ final class ComposerTextView: NSTextView {
     return true
   }
 
-  /// The full `.mentionToken` run under the click, but only for interactive app tokens
-  /// and only when the point is actually inside the chip's glyphs (not past line end).
-  private func appChipRange(at event: NSEvent) -> NSRange? {
-    guard let lm = layoutManager, let container = textContainer, let storage = textStorage,
-          storage.length > 0 else { return nil }
-    let point = convert(event.locationInWindow, from: nil)
-    let origin = textContainerOrigin
-    let inContainer = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
-
-    var fraction: CGFloat = 0
-    let glyphIndex = lm.glyphIndex(for: inContainer, in: container, fractionOfDistanceThroughGlyph: &fraction)
-    let charIndex = lm.characterIndexForGlyph(at: glyphIndex)
-    guard charIndex < storage.length else { return nil }
-
-    var range = NSRange()
-    guard let token = storage.attribute(.mentionToken, at: charIndex, longestEffectiveRange: &range,
-                                        in: NSRange(location: 0, length: storage.length)) as? String,
-          AppToken.parse(token) != nil else { return nil }
-
-    // Reject clicks beyond the glyphs (e.g. trailing whitespace area on the line).
-    let glyphRange = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-    let rect = lm.boundingRect(forGlyphRange: glyphRange, in: container).offsetBy(dx: origin.x, dy: origin.y)
-    guard rect.contains(point) else { return nil }
-    return range
-  }
-
-  // MARK: Treat a mention chip as one atomic block when deleting.
-  //
-  // A chip ("@github", "@finder:…") is a single `.mentionToken` run, but visually one
-  // unit — deleting it one character at a time is surprising. When the caret sits next to
-  // a chip (no selection), one press removes the whole run instead of a single glyph.
-
-  override func deleteBackward(_ sender: Any?) {
-    // Mid-IME-composition, Delete edits the marked candidate — let the input system own it.
-    if !hasMarkedText(), deleteChipRun(adjacentTo: selectedRange(), before: true) { return }
-    super.deleteBackward(sender)
-  }
-
-  override func deleteForward(_ sender: Any?) {
-    if !hasMarkedText(), deleteChipRun(adjacentTo: selectedRange(), before: false) { return }
-    super.deleteForward(sender)
-  }
-
-  /// If `selection` is an empty caret touching a mention-token run on the given side,
-  /// delete that entire run undo-safely and return true; otherwise return false.
-  private func deleteChipRun(adjacentTo selection: NSRange, before: Bool) -> Bool {
-    guard selection.length == 0, let storage = textStorage, storage.length > 0 else { return false }
-    let probe = before ? selection.location - 1 : selection.location
-    guard probe >= 0, probe < storage.length else { return false }
-
-    var range = NSRange()
-    guard storage.attribute(.mentionToken, at: probe, longestEffectiveRange: &range,
-                            in: NSRange(location: 0, length: storage.length)) is String else { return false }
-    guard shouldChangeText(in: range, replacementString: "") else { return false }
-    storage.replaceCharacters(in: range, with: "")
-    didChangeText()
-    setSelectedRange(NSRange(location: range.location, length: 0))
-    return true
-  }
-
   /// Required for the PASTE path: the default importsGraphics=false readable list has
   /// no image/file-URL type, so Cmd-V can't prefer an image without prepending these.
   /// (Drag is already accepted via editable + rich-text; this does not affect drag.)
@@ -145,25 +76,7 @@ final class ComposerTextView: NSTextView {
       insertImageAttachment(image)
       return true
     }
-    if let string = pboard.string(forType: .string),
-       let handler = smartPasteHandler,
-       handler.handleSmartPaste(string, in: self) {
-      return true
-    }
     return super.readSelection(from: pboard, type: type)
-  }
-
-  /// Insert a serialized `@token` as a styled chip at the current selection (or replace `range`).
-  func insertTokenChip(_ token: String, replacing range: NSRange? = nil) {
-    let target = range ?? selectedRange()
-    let chip = ChipFactory.make(token: token, font: font ?? Theme.Typography.body)
-    let run = NSMutableAttributedString(attributedString: chip)
-    run.append(NSAttributedString(string: " ", attributes: bodyAttributes()))
-    guard shouldChangeText(in: target, replacementString: run.string) else { return }
-    textStorage?.replaceCharacters(in: target, with: run)
-    didChangeText()
-    setSelectedRange(NSRange(location: target.location + run.length, length: 0))
-    typingAttributes = bodyAttributes()
   }
 
   private func bodyAttributes() -> [NSAttributedString.Key: Any] {
@@ -275,37 +188,6 @@ final class ComposerTextView: NSTextView {
   static func savePNG(_ image: NSImage) -> URL? {
     guard let filename = AssetStore.ingest(image: image) else { return nil }
     return AssetStore.resolve(filename)
-  }
-
-  // MARK: Hover reporting for the semantic linter
-  //
-  // Pure observation: we report the cursor's location so the coordinator can hit-test
-  // it against flagged ranges. We never consume the event, so caret placement, drag
-  // selection, and clicks are completely unaffected.
-
-  /// Called on every move with the point in text-view coords, or nil on exit.
-  var onHoverPoint: ((NSPoint?) -> Void)?
-  private var hoverTracking: NSTrackingArea?
-
-  override func updateTrackingAreas() {
-    super.updateTrackingAreas()
-    if let existing = hoverTracking { removeTrackingArea(existing) }
-    let area = NSTrackingArea(
-      rect: .zero,
-      options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-      owner: self, userInfo: nil)
-    addTrackingArea(area)
-    hoverTracking = area
-  }
-
-  override func mouseMoved(with event: NSEvent) {
-    super.mouseMoved(with: event)
-    onHoverPoint?(convert(event.locationInWindow, from: nil))
-  }
-
-  override func mouseExited(with event: NSEvent) {
-    super.mouseExited(with: event)
-    onHoverPoint?(nil)
   }
 
   // MARK: Re-fit inline images when the panel resizes (bounds-only, cheap).

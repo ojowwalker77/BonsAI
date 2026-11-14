@@ -1,8 +1,8 @@
 # BonsAI canvas API
 
 > Authenticated loopback HTTP API on `http://127.0.0.1:7337`. BonsAI must be running with a board open.
-> External agents (Cursor, Claude Code, Raycast, Alfred, shell scripts) use this to read and shape
-> the live board — the same channel as the in-app agent dock.
+> External agents (Claude Code, Codex, Cursor, shell scripts) use this to read and shape the live
+> board. Settings ▸ Agents can install a short skill doc that teaches each agent this API.
 
 **API version:** `2` (returned by `GET /health`)
 
@@ -75,9 +75,7 @@ Run the helper definition and request in the same shell session.
 | `GET` | `/health` | — | Liveness + `apiVersion` |
 | `GET` | `/canvas` | — | Full board graph (`nodes`, `edges`, `readingOrder`) |
 | `POST` | `/canvas` | `{ "op": "…", … }` | Mutation result `{ "ok": true/false, … }` |
-| `POST` | `/capture` | `{ "text": "…" }` | Append a text card `{ "ok": true, "id": "<uuid>" }` |
-| `POST` | `/mcp` | JSON-RPC | MCP tool transport (used by Claude Code) |
-| `POST` | `/permission` | JSON-RPC | In-app Claude permission prompt transport |
+| `POST` | `/mcp` | JSON-RPC | MCP tool transport (Streamable HTTP, JSON responses only) |
 
 All responses are JSON. The server is bound to **127.0.0.1 only**, validates an exact loopback
 `Host`, rejects foreign and `null` browser origins, and does not enable CORS.
@@ -91,20 +89,6 @@ bonsai_request GET /canvas | jq .
 ```
 
 Each node has `id`, `kind`, `text`, `x/y/w/h`, and `whoWrote` (`1` = human, `2` = agent).
-
----
-
-## Capture text (quick append)
-
-```bash
-bonsai_request POST /capture '{"text":"Fix the race in BoardViewModel"}'
-```
-
-Equivalent canvas op:
-
-```bash
-bonsai_request POST /canvas '{"op":"capture","text":"Fix the race in BoardViewModel"}'
-```
 
 ---
 
@@ -127,39 +111,21 @@ Full tool catalog and graph conventions: [canvas-agent.md](canvas-agent.md).
 Example — add a card:
 
 ```bash
-bonsai_request POST /canvas '{"op":"add_text","text":"Ship smart paste"}'
+bonsai_request POST /canvas '{"op":"add_text","text":"Fix the race in BoardViewModel"}'
 ```
 
 ---
 
-## MCP (Claude Code / Codex with tools)
+## MCP (Claude Code / Codex / Cursor)
 
 Point your agent at `http://127.0.0.1:7337/mcp` and configure its authorization header from an
-environment variable populated with the session capability. BonsAI does this automatically for the
-in-app Claude, Codex, and OpenCode engines. Tools are prefixed `mcp__canvas__*` in Claude Code.
+environment variable populated with the session capability (never inline the capability in a config
+file or command line). Tools are prefixed `mcp__canvas__*` in Claude Code.
 
 See [canvas-agent.md](canvas-agent.md) for the full tool list.
-
----
-
-## URL scheme & Services (macOS)
-
-| Entry point | Usage |
-|-------------|--------|
-| **Menu bar** | Click the leaf → type → ↩ (summons board + new card); double-click → restore and focus the board |
-| **Services** | Select text anywhere → **BonsAI → Send to BonsAI** |
-| **URL** | `open 'bonsai://capture?text=Hello%20world'` |
-
----
-
-## Integrations
-
-- [Raycast](../integrations/raycast/README.md) — append to board, read graph
-- [Alfred](../integrations/alfred/README.md) — workflow scripts
 
 ---
 
 ## See also
 
 - [canvas-agent.md](canvas-agent.md) — graph model, MCP tools, authorship rules
-- [agent-engines.md](agent-engines.md) — Refine / Compile / in-app agent engines

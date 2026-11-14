@@ -1,11 +1,9 @@
 import Foundation
 import Combine
 
-/// Turns failures from tools, HTTP calls, and system APIs into text a person can act on.
+/// Turns failures from system APIs into text a person can act on.
 ///
-/// The important rule is that we never replace a concrete diagnostic with "failed". Some CLIs
-/// (notably current Claude Code) write errors to stdout, so command failures must always inspect
-/// both streams before choosing what to show.
+/// The important rule is that we never replace a concrete diagnostic with "failed".
 enum UserFacingError {
   /// Report an error that happens below a SwiftUI action boundary (autosave, attachment storage,
   /// local server startup). `ComposerCanvas` observes this store and presents the exact message.
@@ -33,43 +31,6 @@ enum UserFacingError {
 
     let code = "\(nsError.domain) \(nsError.code)"
     return "%@ could not complete (%@); the underlying service did not provide a diagnostic.".localizedUI(action, code)
-  }
-
-  static func commandFailure(command: String, result: Shell.Result) -> String {
-    commandFailure(command: command, status: result.status, stdout: result.stdout, stderr: result.stderr)
-  }
-
-  static func commandFailure(command: String, status: Int32, stdout: String, stderr: String) -> String {
-    let diagnostic = commandOutput(stdout: stdout, stderr: stderr)
-    let lower = diagnostic.lowercased()
-
-    if command.localizedCaseInsensitiveCompare("Claude") == .orderedSame {
-      if lower.contains("401") && (lower.contains("auth") || lower.contains("credential")) {
-        return "Claude authentication was rejected by the API (HTTP 401: %@). Run `claude auth login`, then retry.".localizedUI(diagnostic)
-      }
-      if lower.contains("auth") || lower.contains("credential") || lower.contains("login") {
-        return "Claude authentication failed: %@. Run `claude auth login`, then retry.".localizedUI(diagnostic)
-      }
-    }
-
-    guard !diagnostic.isEmpty else {
-      return "%@ exited with code %d but returned no diagnostic.".localizedUI(command, status)
-    }
-    return "%@ exited with code %d: %@".localizedUI(command, status, diagnostic)
-  }
-
-  /// A single, compact diagnostic suitable for the app's error surfaces. Preserve stdout too:
-  /// a command is allowed to write its only error there.
-  static func commandOutput(stdout: String, stderr: String, limit: Int = 900) -> String {
-    var seen = Set<String>()
-    let parts = [stdout, stderr].compactMap { output -> String? in
-      let text = normalized(output)
-      guard !text.isEmpty, seen.insert(text).inserted else { return nil }
-      return text
-    }
-    let combined = parts.joined(separator: " · ")
-    guard combined.count > limit else { return combined }
-    return String(combined.prefix(limit)) + "…"
   }
 
   private static func networkMessage(for error: URLError, while action: String) -> String {
@@ -142,11 +103,5 @@ final class UserFacingErrorStore: ObservableObject {
   func takeLatest() -> Notice? {
     defer { latest = nil }
     return latest
-  }
-}
-
-extension Shell.Result {
-  var diagnostic: String {
-    UserFacingError.commandOutput(stdout: stdout, stderr: stderr)
   }
 }

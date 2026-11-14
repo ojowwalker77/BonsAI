@@ -3,17 +3,6 @@ import XCTest
 
 @MainActor
 final class CanvasWorkspaceSessionTests: XCTestCase {
-  func testAgentDraftBelongsToRemountStableWorkspaceSession() {
-    let session = CanvasWorkspaceSession(
-      store: DumpStore(inMemoryOnly: true, loadInitialContent: false)
-    )
-    session.agentDraft = "Keep this unsent prompt"
-
-    session.prepareForRemount(.theme)
-
-    XCTAssertEqual(session.agentDraft, "Keep this unsent prompt")
-  }
-
   func testEveryFullRemountFlushesLatestBoardAndRetainsIdentityHistoryAndViewport() async throws {
     for trigger in CanvasRemountTrigger.allCases {
       let store = DumpStore(inMemoryOnly: true, loadInitialContent: false)

@@ -1,4 +1,4 @@
-import SwiftUI
+import Foundation
 
 /// Compact relative time — "now", "5m", "2h", "3d", then a date.
 func relativeDumpTime(_ date: Date) -> String {

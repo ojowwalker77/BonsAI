@@ -201,8 +201,8 @@ final class FloatingPanel: NSWindow {
     )
   }
 
-  /// BonsAI has no menu bar, so app-menu shortcuts don't fire. Catch the board's
-  /// shortcuts at the key-window level instead.
+  /// The board's shortcuts are caught at the key-window level rather than relying on
+  /// app-menu items.
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
     let raw = event.charactersIgnoringModifiers?.lowercased()
@@ -267,12 +267,6 @@ final class FloatingPanel: NSWindow {
       return true
     }
 
-    // Compile the whole board into one paste-ready draft: ⌘R (refine→compile) or ⌘↩.
-    if flags == [.command], raw == "r" || raw == "\r" {
-      NotificationCenter.default.post(name: .composerCompileBoard, object: nil)
-      return true
-    }
-
     if flags == [.command], raw == "[" {
       NotificationCenter.default.post(name: .composerPrevDump, object: nil)
       return true
@@ -287,10 +281,6 @@ final class FloatingPanel: NSWindow {
     }
     if flags == [.command], raw == "," {
       NotificationCenter.default.post(name: .composerShowSettings, object: nil)
-      return true
-    }
-    if flags == [.command], raw == "j" {
-      NotificationCenter.default.post(name: .composerToggleAgent, object: nil)
       return true
     }
     // ⌘K summons the command palette.

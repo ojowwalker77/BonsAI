@@ -11,6 +11,26 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Changed
+
+- **BonsAI is now a focused canvas board that your agents drive over a local server.** External
+  agents (Claude Code, Codex, Cursor, scripts) read and shape the board through the loopback HTTP +
+  MCP server on `127.0.0.1:7337`; **Settings ▸ Agents** shows the endpoints and installs the skill
+  docs that teach them the API. Snap-to-board screenshots stay, and are read on-device so agents
+  can see their text.
+
+### Removed
+
+- **The in-app agent chat and its engines** (Claude, Codex, OpenCode runtimes, model pickers, and
+  the permission prompt). Use your agent of choice over the canvas server instead.
+- **Connectors and inline tokens**: `@finder`, `@browser`, `@github`, `@context7`, `@linear`,
+  `@notion`, `@sentry`, `@figma`, `@xcode`, their keychain tokens, `name=(…)` variables, `$(…)` shell
+  tokens, smart paste, and app search.
+- **Quick capture**: the menu-bar item, the summon hotkey, the hidden-Dock-icon mode, the
+  `POST /capture` endpoint, the `bonsai://` URL scheme, the "Send to BonsAI" service, and the
+  Raycast/Alfred integrations.
+- **The semantic linter, Refine, Compile, Describe Board, and Copy Board as prompt.**
+
 ## [1.4.11] - 2026-09-01
 
 ### Added

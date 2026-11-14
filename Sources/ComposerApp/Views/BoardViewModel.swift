@@ -13,19 +13,14 @@ import ImageIO
 final class CardInteraction: ObservableObject, Identifiable {
   let id: UUID
   // A visible non-editing card only needs its serialized text and drag preview. Keep the
-  // AppKit/editor support graph lazy so panning across a large board does not allocate an
-  // NSTextView controller, linter, popover state, and connector search state for every card.
-  lazy var mentions = MentionState()
-  lazy var appSearch = AppSearchState()
+  // AppKit editor controller lazy so panning across a large board does not allocate one per card.
   lazy var controller = EditorController()
-  lazy var lint = LintState()
-  lazy var refine = RefineState()
   private var plainTextCache: String
   private var inkCache: [InkRun] = []
   private var attributedCache: NSAttributedString?
 
   /// The visible string (`tv.string`) — drives count/placeholder/change-detection. NOT the
-  /// persisted form; persistence and compile use `controller.plainText` (tokens preserved).
+  /// persisted form; persistence uses `controller.plainText` (attachments serialized).
   @Published var text: String
   @Published var count: Int
   @Published var selection = EditorSelection()
@@ -39,7 +34,7 @@ final class CardInteraction: ObservableObject, Identifiable {
     self.inkCache = card.ink ?? []
   }
 
-  /// Self-contained plain text (mention tokens serialized back to `@name`). Falls back to
+  /// Self-contained plain text (image attachments serialized as placeholders). Falls back to
   /// the last captured editor value while the heavy AppKit editor is unmounted. `text` is kept
   /// in serialized form while editing, and `captureEditorState()` refreshes this cache before an
   /// editor leaves the view tree, so reading a static card never needs to instantiate its editor.
@@ -88,20 +83,6 @@ final class CardInteraction: ObservableObject, Identifiable {
 
 // MARK: - Board view-model
 
-/// Immutable board-wide text state shared by every card renderer for one text revision.
-///
-/// Rendering consumes ONLY `definedVariableNames` — chips style the card's literal source text and
-/// use the set purely for membership (is `$name` a defined reference?) via
-/// `ShellTemplate.expressions(in:definedNames:)`. Definition VALUES are never rendered; they are
-/// expanded exclusively at copy time (`ShellTemplate.expand`). That's why `BoardCardLayer.==`
-/// compares only the name set: `revision` bumps on nearly every mutation, and including it would
-/// rebuild every card per keystroke — the exact cost this type exists to avoid. `revision` stays
-/// here as the derivation counter proving the context is rebuilt once per text change.
-struct BoardTextContext: Equatable {
-  let revision: UInt64
-  let definedVariableNames: Set<String>
-}
-
 /// Owns the working board: the cards' geometry (`cards`) and their runtime bundles
 /// (`interactions`), plus which card is active. The single `@StateObject` the canvas holds;
 /// the only writer to the store for the current board.
@@ -125,12 +106,8 @@ final class BoardViewModel: ObservableObject {
   /// cards are selected.
   @Published private(set) var primarySelectedCardID: UUID?
   /// The card in text-edit mode (its editor holds first responder). Anchored overlays
-  /// (mentions, connector search, linter, selection bar) route here.
+  /// (the selection bar) route here.
   @Published var editingCardID: UUID?
-
-  /// `$(…)` commands that failed on the last Copy Board, so their tokens render amber. Set by the
-  /// copy; cleared on the next copy and whenever the board text changes.
-  @Published var failedShellCommands: Set<String> = []
 
   /// The graph card a single, parseable equation is currently being dragged over — set while a lone
   /// equation's live center lands inside a graph frame (and its LaTeX parses), cleared when the drag
@@ -166,11 +143,6 @@ final class BoardViewModel: ObservableObject {
   /// `insertText`/`connectCards` calls don't each push their own undo step — the batch registers
   /// exactly one at the top.
   private var suppressUndo = false
-  /// Compound operations can touch many text-bearing cards. Delay the expensive board-wide
-  /// definition scan until the outermost operation finishes while keeping independent mutations
-  /// immediately observable.
-  private var boardTextContextBatchDepth = 0
-  private var boardTextContextInvalidationPending = false
   /// Who authored the next mutation: `Author.human` by default; the canvas bridge flips it to
   /// `Author.agent` while applying an agent's edits, so every card records who last wrote it.
   var nextAuthor = Author.human
@@ -197,10 +169,6 @@ final class BoardViewModel: ObservableObject {
   /// A live editor frame is local rendering state until the edit boundary. Keeping it out of
   /// `cards` prevents every editor layout callback from publishing the whole board layer.
   private var liveTextFrames: [UUID: CGRect] = [:]
-
-  private(set) var boardTextContextDerivationCount = 0
-  @Published private(set) var boardTextContext = BoardTextContext(revision: 0, definedVariableNames: [])
-  private var boardTextRevision: UInt64 = 0
 
   /// Test/diagnostic seam for proving the bounded history policy without exposing the cache itself.
   var cachedHistoryBoardCount: Int { undoCache.count }
@@ -236,8 +204,8 @@ final class BoardViewModel: ObservableObject {
 
   /// Reads the most recent text without creating a runtime/editor bundle for an off-screen card.
   func plainText(for card: CardState) -> String {
-    // An image card contributes its file path so Copy, Compile, and Describe emit a concrete
-    // reference the reader (or a coding agent) can open. An image with no path yet contributes nothing.
+    // An image card contributes its file path so a reader (or a coding agent over the canvas API)
+    // gets a concrete reference it can open. An image with no path yet contributes nothing.
     if card.elementKind == .image { return card.resolvedImageURL?.path ?? card.imagePath ?? "" }
     if card.elementKind == .equation {
       let latex = (card.latex ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -424,7 +392,6 @@ final class BoardViewModel: ObservableObject {
       primarySelectedCardID = nil
     }
     editingCardID = nil
-    invalidateBoardTextContext()
   }
 
   private func cacheHistory(for boardID: PersistentIdentifier,
@@ -444,30 +411,6 @@ final class BoardViewModel: ObservableObject {
         .min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key else { return }
       undoCache.removeValue(forKey: oldestID)
     }
-  }
-
-  private func invalidateBoardTextContext() {
-    if boardTextContextBatchDepth > 0 {
-      boardTextContextInvalidationPending = true
-      return
-    }
-    boardTextRevision &+= 1
-    boardTextContextDerivationCount += 1
-    boardTextContext = BoardTextContext(
-      revision: boardTextRevision,
-      definedVariableNames: ShellTemplate.definedNames(in: joinedPlainText()))
-  }
-
-  private func beginBoardTextContextBatch() {
-    boardTextContextBatchDepth += 1
-  }
-
-  private func endBoardTextContextBatch() {
-    precondition(boardTextContextBatchDepth > 0)
-    boardTextContextBatchDepth -= 1
-    guard boardTextContextBatchDepth == 0, boardTextContextInvalidationPending else { return }
-    boardTextContextInvalidationPending = false
-    invalidateBoardTextContext()
   }
 
   /// Geometry + live plain text, ready to persist.
@@ -504,8 +447,8 @@ final class BoardViewModel: ObservableObject {
   private func persistedText(for card: CardState) -> String {
     switch card.elementKind {
     case .image, .sticky, .checklist, .table:
-      // Structured elements expose a composed Markdown/plain-text representation to Compile and
-      // agents, but their persisted `text` field must remain only their own body/label payload.
+      // Structured elements expose a composed Markdown/plain-text representation to agents, but
+      // their persisted `text` field must remain only their own body/label payload.
       return card.text
     default:
       return plainText(for: card)
@@ -567,7 +510,6 @@ final class BoardViewModel: ObservableObject {
     committedTextNotifications = [:]
     scheduleSave()
     isRestoringHistory = false
-    invalidateBoardTextContext()
   }
 
   func undo() {
@@ -604,7 +546,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = card.id
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -660,7 +601,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -694,7 +634,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -728,7 +667,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -758,7 +696,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -785,7 +722,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -839,7 +775,6 @@ final class BoardViewModel: ObservableObject {
     interactions[card.id] = CardInteraction(card)
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -859,7 +794,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -877,7 +811,6 @@ final class BoardViewModel: ObservableObject {
     cards.append(card)
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -892,7 +825,6 @@ final class BoardViewModel: ObservableObject {
     let bundle = interaction(for: id)
     bundle.text = body
     bundle.cachePlainText(body)
-    invalidateBoardTextContext()
     scheduleSave()
     return true
   }
@@ -905,13 +837,12 @@ final class BoardViewModel: ObservableObject {
     registerUndo()
     cards[i].checklist![itemIndex].isChecked.toggle()
     cards[i].whoWrote = nextAuthor
-    invalidateBoardTextContext()
     scheduleSave()
     return true
   }
 
   /// Apple Notes-style checklist syntax remains ordinary text, so an existing note can opt into
-  /// tappable todos without converting to a different element or losing mentions/markdown.
+  /// tappable todos without converting to a different element or losing markdown.
   func toggleTextChecklistLine(_ id: UUID, lineIndex: Int) {
     guard let i = index(for: id), cards[i].elementKind == .text, !cards[i].locked else { return }
     var lines = plainText(for: cards[i]).components(separatedBy: "\n")
@@ -928,7 +859,7 @@ final class BoardViewModel: ObservableObject {
   func setChecklist(_ id: UUID, _ items: [CardState.ChecklistItem]) -> Bool {
     guard let i = index(for: id), cards[i].elementKind == .checklist, !cards[i].locked else { return false }
     registerUndo(); cards[i].checklist = items; cards[i].whoWrote = nextAuthor
-    invalidateBoardTextContext(); scheduleSave()
+    scheduleSave()
     return true
   }
 
@@ -936,7 +867,7 @@ final class BoardViewModel: ObservableObject {
   func setTable(_ id: UUID, _ spec: CardState.TableSpec) -> Bool {
     guard let i = index(for: id), cards[i].elementKind == .table else { return false }
     registerUndo(); cards[i].table = spec; cards[i].whoWrote = nextAuthor
-    invalidateBoardTextContext(); scheduleSave()
+    scheduleSave()
     return true
   }
 
@@ -956,7 +887,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = nil
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -977,7 +907,6 @@ final class BoardViewModel: ObservableObject {
     if cards[i].elementKind == .equation {
       cards[i].latex = text
       cards[i].whoWrote = nextAuthor
-      invalidateBoardTextContext()
       scheduleSave()
       return
     }
@@ -991,7 +920,6 @@ final class BoardViewModel: ObservableObject {
     bundle.cachePlainText(text)
     if cards[i].elementKind == .text { cards[i].h = Double(Self.fittedTextHeight(text, width: cards[i].w, fontScale: cards[i].textScale)) }
     fitShapeSize(id)
-    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -1216,7 +1144,6 @@ final class BoardViewModel: ObservableObject {
     interactions[cards[i].id] = CardInteraction(cards[i])
     if ConnectorGeometry.isConnector(cards[i]) { bindConnectorIfPossible(id) }
     select(id)
-    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -1245,7 +1172,6 @@ final class BoardViewModel: ObservableObject {
     cards[i].whoWrote = nextAuthor
     interactions[cards[i].id] = CardInteraction(cards[i])
     select(id)
-    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -1290,7 +1216,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = Set(newIDs)
     primarySelectedCardID = newIDs.last
     editingCardID = nil
-    invalidateBoardTextContext()
     refreshBoundConnectors()
     scheduleSave()
   }
@@ -1407,7 +1332,6 @@ final class BoardViewModel: ObservableObject {
     interactions[card.id] = CardInteraction(card)
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
-    invalidateBoardTextContext()
     scheduleSave()
     return card.id
   }
@@ -1480,7 +1404,6 @@ final class BoardViewModel: ObservableObject {
     nextZ += 1
     selectedCardIDs = [target.id]
     primarySelectedCardID = target.id
-    invalidateBoardTextContext()
     scheduleSave()
     return QuickConnectResult(
       connectorID: connector.id,
@@ -1527,10 +1450,8 @@ final class BoardViewModel: ObservableObject {
     guard !specs.isEmpty else { return [:] }
     registerUndo()
     suppressUndo = true
-    beginBoardTextContextBatch()
     defer {
       suppressUndo = false
-      endBoardTextContextBatch()
       refreshBoundConnectors()
       scheduleSave()
     }
@@ -1584,7 +1505,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = Set(keyToID.values)
     primarySelectedCardID = keyToID.values.first
     editingCardID = nil
-    invalidateBoardTextContext()
     return keyToID
   }
 
@@ -1686,97 +1606,10 @@ final class BoardViewModel: ObservableObject {
     insertEquation(latex, at: autoPlacePoint(for: CardState.equationSize))
   }
 
-  /// Append captured text from the menu bar, Services menu, URL scheme, or loopback API.
-  ///
-  /// Prefer the card the user is editing or has selected. When there is no active card, the live
-  /// canvas supplies its viewport center so capture still lands in the area the user is looking at.
-  /// Callers without a viewport (the loopback bridge) retain the below-board fallback.
-  @discardableResult
-  func captureExternalText(_ text: String, around activeBoardPoint: CGPoint? = nil) -> UUID? {
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return nil }
-    let size = Self.capturePlacementSize(trimmed)
-    let activeID = editingCardID ?? primarySelectedCardID
-    let activeFrame = activeID.flatMap { renderingFrame(for: $0) }
-    let point: CGPoint
-    if let activeFrame {
-      point = autoPlacePoint(for: size, near: activeFrame)
-    } else if let activeBoardPoint {
-      point = autoPlacePoint(
-        for: size,
-        near: CGRect(origin: activeBoardPoint, size: .zero),
-        includeAnchor: true)
-    } else {
-      point = autoPlacePoint(for: size)
-    }
-    let id = insertText(trimmed, at: point)
-    beginEditing(id)
-    return id
-  }
-
   /// The frame `insertText` creates before its live editor reports a tighter content hug.
   private static func textInsertionSize(_ text: String) -> CGSize {
     let width = CardState.textDefaultSize.width
     return CGSize(width: width, height: fittedTextHeight(text, width: width))
-  }
-
-  /// Reserve enough room for both the inserted seed frame and the live editor's eventual hug.
-  /// Long single lines can grow 32pt wider than `textDefaultSize` once content padding is applied;
-  /// short captures begin at the seed width before their first layout callback shrinks them.
-  static func capturePlacementSize(_ text: String) -> CGSize {
-    let inserted = textInsertionSize(text)
-    let fitted = fittedTextSize(text, fontScale: 1)
-    return CGSize(width: max(inserted.width, fitted.width),
-                  height: max(inserted.height, fitted.height))
-  }
-
-  /// Find the nearest clear grid slot around an active card or board point. Candidates expand in
-  /// rings, preferring below/right/left/above so a stream of captures reads naturally while still
-  /// escaping a busy cluster. The ordinary no-context auto-placement remains a separate fallback.
-  func autoPlacePoint(for size: CGSize, near anchor: CGRect, includeAnchor: Bool = false) -> CGPoint {
-    let gap: CGFloat = 36
-    let anchorCenter = CGPoint(x: anchor.midX, y: anchor.midY)
-    let stepX = max(size.width + gap, (anchor.width + size.width) / 2 + gap)
-    let stepY = max(size.height + gap, (anchor.height + size.height) / 2 + gap)
-
-    func point(dx: Int, dy: Int) -> CGPoint {
-      CGPoint(
-        x: anchorCenter.x + CGFloat(dx) * stepX - size.width / 2,
-        y: anchorCenter.y + CGFloat(dy) * stepY - size.height / 2)
-    }
-
-    func isClear(_ origin: CGPoint) -> Bool {
-      let candidate = CGRect(origin: origin, size: size).insetBy(dx: -gap / 2, dy: -gap / 2)
-      return cards.allSatisfy { card in
-        !(liveTextFrames[card.id] ?? card.frame).intersects(candidate)
-      }
-    }
-
-    if includeAnchor {
-      let origin = point(dx: 0, dy: 0)
-      if isClear(origin) { return origin }
-    }
-
-    // A square ring of radius r has enough slots to escape ordinary dense clusters without a
-    // board-wide vertical jump. The extra two rings account for large cards covering several slots.
-    let maxRadius = max(4, Int(ceil(sqrt(Double(cards.count + 1)))) + 2)
-    for radius in 1...maxRadius {
-      let preferred = [(0, radius), (radius, 0), (-radius, 0), (0, -radius)]
-      for offset in preferred {
-        let origin = point(dx: offset.0, dy: offset.1)
-        if isClear(origin) { return origin }
-      }
-
-      for dy in (-radius)...radius {
-        for dx in (-radius)...radius where max(abs(dx), abs(dy)) == radius {
-          guard !preferred.contains(where: { $0.0 == dx && $0.1 == dy }) else { continue }
-          let origin = point(dx: dx, dy: dy)
-          if isClear(origin) { return origin }
-        }
-      }
-    }
-
-    return autoPlacePoint(for: size)
   }
 
   /// A clear board point below existing content for an auto-placed element.
@@ -1990,7 +1823,6 @@ final class BoardViewModel: ObservableObject {
     guard abs(previous.width - width) > 0.5 || abs(previous.height - height) > 0.5 else { return previous }
     liveTextFrames[id] = frame
     scheduleSave()
-    NotificationCenter.default.post(name: .composerTextCardLiveFrameChanged, object: id)
     return frame
   }
 
@@ -2042,7 +1874,6 @@ final class BoardViewModel: ObservableObject {
       primarySelectedCardID = fresh.id
     }
     refreshBoundConnectors()
-    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -2091,7 +1922,6 @@ final class BoardViewModel: ObservableObject {
       primarySelectedCardID = fresh.id
     }
     refreshBoundConnectors()
-    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -2163,7 +1993,6 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = Set(ids)
     primarySelectedCardID = ids.last
     editingCardID = nil
-    invalidateBoardTextContext()
     scheduleSave()
     return ids
   }
@@ -2479,8 +2308,6 @@ final class BoardViewModel: ObservableObject {
 
   /// Called when a card's text changed (debounced persistence).
   func noteEdited(cardID: UUID, previousText: String) {
-    // Editing the board can change which commands exist, so last copy's failure marks are stale.
-    if !failedShellCommands.isEmpty { failedShellCommands = [] }
     // A live keystroke edit means the human authored this card now — flip its tag (e.g. when they
     // change a card the agent drew), so the agent can spot what changed on its next read.
     if editingCardID == cardID, let i = cards.firstIndex(where: { $0.id == cardID }), cards[i].whoWrote != Author.human {
@@ -2505,7 +2332,6 @@ final class BoardViewModel: ObservableObject {
       }
       registerUndo(historySnapshot(cards: before))
     }
-    invalidateBoardTextContext()
     scheduleSave()
   }
 
@@ -2518,48 +2344,6 @@ final class BoardViewModel: ObservableObject {
       committedTextNotifications[id] = nil
     }
   }
-
-  // MARK: Derived context
-
-  /// Read-only context for the linter: the OTHER cards' plain text, lightly labeled and
-  /// length-capped so it stays inside the on-device window. `nil` for a lone card.
-  func lintContext(excluding id: UUID) -> String? {
-    let others = readingOrder().filter { $0.id != id }
-      .compactMap { card -> String? in
-        let text = plainText(for: card).trimmed
-        return text.isEmpty ? nil : text
-      }
-    guard !others.isEmpty else { return nil }
-    var budget = 2_400
-    var lines: [String] = []
-    for (index, text) in others.enumerated() {
-      let clipped = String(text.prefix(budget))
-      lines.append("Card \(index + 1): \(clipped)")
-      budget -= clipped.count
-      if budget <= 0 { break }
-    }
-    return lines.joined(separator: "\n")
-  }
-
-  /// Every card's plain text in spatial reading order — the source for both Compile
-  /// (→ engine) and self-contained Copy (→ SelfContainedRenderer).
-  func joinedPlainText() -> String {
-    readingOrder()
-      .compactMap { card -> String? in
-        let text = plainText(for: card).trimmed
-        return text.isEmpty ? nil : text
-      }
-      .joined(separator: "\n\n")
-  }
-
-  var hasContent: Bool {
-    cards.contains { !plainText(for: $0).trimmed.isEmpty }
-  }
-
-  /// Copy-time variables defined anywhere on the board (`name = …` lines). A board is "one thing",
-  /// so a `$name` in one card styles against a definition in any other. Used only for styling.
-  /// The immutable context is derived once per explicit board-text revision.
-  var definedVariableNames: Set<String> { boardTextContext.definedVariableNames }
 
   // MARK: Reading order
 

@@ -1,112 +1,40 @@
 # Contributing to BonsAI
 
 People are genuinely welcome to contribute. Before you open a PR, please
-understand the one idea everything here is measured against:
+understand what BonsAI is, because everything here is measured against it:
 
-> **BonsAI is a bucket for thoughts and ideas.** Its job is to remove friction
-> and shrink the time from *having a thought* to *that thought being an entry in
-> a coding agent*. That is a pillar, not a slogan.
+> **BonsAI is a canvas board with great elements and UX, exposed over a local
+> server so your coding agents can read and shape it.** You think on the board;
+> Claude Code, Codex, Cursor, or a script works on the same board through
+> `127.0.0.1:7337`.
 
-So the bar for any change is simple: **does it reduce friction, or does it add
-bloat?** Thoughtful contributions that sharpen the core loop are exactly what
-this project wants. Features that pull BonsAI toward being a heavier, do-it-all
-app — however clever — will be rejected. That's a promise to everyone who relies
-on it staying fast and quiet, not a judgment of your work.
+So the bar for any change is simple: **does it make the board better to think
+on, or better for agents to use?** Thoughtful contributions that sharpen either
+side are exactly what this project wants. Features that pull BonsAI toward being
+a heavier, do-it-all app — an in-app chat, context connectors, a prompt
+compiler — will be declined; they were tried and removed on purpose.
 
 A few areas where PRs are especially welcome:
 
-## Improve user experience
+## Canvas elements and UX
 
-This is the heart of it. BonsAI is designed to be a bucket for thoughts and
-ideas, and **removing friction — speeding the time from a thought to an entry in
-BonsAI — is one of our pillars.** Anything that makes capture faster, more
-fluid, or more obvious is on-mission: fewer steps, less waiting, less reaching
-for the mouse, less thinking about the tool instead of the idea. If you can shave
-a second or a decision off the path from *brain → board*, that's a great PR.
+This is the heart of it. Better shapes, arrows, ink, equations, graphs, stickies,
+checklists, and tables; smoother selection, snapping, and editing; fewer steps,
+less waiting, less reaching for the mouse. If you can shave a second or a
+decision off thinking on the board, that's a great PR.
 
-## Connectors
+New elements fit when an agent can use them too: a new `CanvasElementKind`
+should round-trip through `CanvasGraph` and, where it makes sense, get a canvas
+op and an MCP tool.
 
-More connectors are welcome. The connector philosophy is simple:
+## The agent server
 
-> **A connector should inject genuinely useful context for an idea.**
-
-But there's a catch worth being precise about, and it's clearest by example:
-*why does a **Context7** connector make sense, while an **Obsidian** connector
-does not?* Two things earn a connector its place:
-
-> **1. It adds a real capability and removes steps** — it's faster and easier
-> than navigating and fetching that context by hand.
-> **2. It doesn't duplicate a broader connector we already have.**
-
-- **Context7 earns its place.** It gives you a purpose-built path to current,
-  version-accurate library docs straight from the card — no opening a browser,
-  searching, finding the right page, and copy-pasting. That's a real capability
-  and real time saved on something you'd otherwise do by hand. (Plenty of context
-  is straightforward enough not to need a connector; this isn't.)
-- **Obsidian does not.** Obsidian notes are just local files, and the broader
-  **@Finder** connector already serves any local file or folder. A dedicated
-  Obsidian connector would duplicate a general capability we already have — more
-  surface area, nothing new. The same logic rules out, say, a Wikipedia
-  connector: a web page is already reachable through **@Browser**, and opening
-  one is straightforward.
-
-So when you propose a connector, ask two things: *does it add a capability and
-save real steps versus doing it by hand, and is it already covered by a broader
-connector?* If it doesn't add capability, or a general connector (**@Finder**,
-**@Browser**) already handles it, it'll be declined — that's how the set stays
-small and sharp.
-
-**How connectors are built.** A connector conforms to `ComposerAppConnector`
-(`Sources/ComposerApp/Support/AppConnectors.swift`) and is registered in
-`AppConnectorRegistry.all`. It owns its own API/CLI details, declares whether it
-needs a secret (`ConnectorAuth` → rendered in Settings, stored via
-`ConnectorSecretStore`), and provides:
-
-- `search(_:context:)` — find candidates for the chip picker, and
-- `render(selection:)` — produce the context block that goes into the prompt,
-  which **must degrade gracefully** to a plain reference line on network/CLI
-  failure (never crash, never block the main actor).
-
-The `@token` serialization is the source of truth for chips, so new connectors
-get round-trip tests alongside the others in `ConnectorTokenTests`.
-
-## Semantic linter layer
-
-This is a newer, more experimental concept, and we'll be honest: we're **not
-fully happy with it yet** — there's a lot of room to improve. The idea is simple,
-though. **What a linter is for a programming language, this is for the meaning of
-your prose.** We lean on Apple Intelligence and on-device Foundation Models to
-*lint semantics* — to quietly flag the phrases in a draft that are too ambiguous
-or underspecified for an AI agent to act on without guessing.
-
-If you want to push on this, read [docs/semanticlinter.md](docs/semanticlinter.md)
-for the full context — the on-device/privacy constraints, the precision bias (a
-wrong squiggle is worse than a missed one), the kinds of ambiguity it flags, and
-where the prompt that drives it lives. This is a great area to experiment in.
-
-## Agent & engine layer
-
-The AI surfaces never ship a model — they shell out to a coding-agent CLI you
-already use (`claude -p`) for Refine and Compile, and spawn `claude` in streaming
-mode with a loopback MCP server for the in-canvas chat agent. Two write-ups cover
-the whole layer:
-
-- [docs/agent-engines.md](docs/agent-engines.md) — the engines (Claude +
-  on-device Apple Intelligence), the one-shot vs streaming execution paths, how an
-  engine is selected, and the `PATH` gotcha for a GUI-launched app. Read this
-  before touching engine selection or adding a CLI integration.
-- [docs/canvas-agent.md](docs/canvas-agent.md) — the board as an agent-readable
-  graph (`CanvasGraph` nodes/edges, reading order, authorship), the loopback
-  server → MCP → bridge plumbing, and the tool catalog. Read this before changing
-  how the agent reads or writes the board.
-
-**A PR adding another engine is welcome.** Today there's one CLI engine (Claude),
-but `HeadlessEngine` and the selection machinery around it are built to take more
-— support for **Codex**, **OpenCode**, **Pi**, or another agent CLI is a
-well-scoped contribution. The
-[Adding an engine](docs/agent-engines.md#adding-an-engine) section lists every
-touch point. One-shot Refine/Compile is the easy win; wiring a non-Claude engine
-into the streaming chat agent is a larger lift.
+The loopback server is how agents see and change the board. Read
+[docs/canvas-agent.md](docs/canvas-agent.md) (the graph, the server → MCP →
+bridge plumbing, the tool catalog) and [docs/canvas-api.md](docs/canvas-api.md)
+(endpoints and authentication) before changing it. Keep it loopback-only and
+capability-gated, keep ops tiny and explicit, and keep the bundled skill docs in
+`Sources/ComposerApp/Resources/AgentSkills/` in sync with any tool you add.
 
 ## Beyond these areas
 
@@ -152,11 +80,12 @@ for maintainers in [docs/releasing.md](docs/releasing.md).
   user-facing (refactors, CI tweaks), apply the `skip-changelog` label instead.
 - **Cover pure logic with tests.** Codecs, parsing, and other deterministic
   logic should get tests like those in `Tests/ComposerAppTests`.
-- **Don't disturb the board + dock composition.** The separate board / dock /
-  toolbar windows and their screen-relative geometry are deliberate and
-  load-bearing. If your change touches panel layout, read [CLAUDE.md](CLAUDE.md)
-  and [AGENTS.md](AGENTS.md) first, and launch the app to verify both Settings
-  and Agent open beside a shrunken board with aligned edges.
+- **Don't disturb the window + floating chrome composition.** One standard
+  window with Liquid Glass pills floating over the canvas is deliberate and
+  load-bearing. If your change touches chrome or window layout, read
+  [CLAUDE.md](CLAUDE.md) first and launch the app to verify the solid canvas,
+  the single bottom command bar, and the top pills aligned on the traffic-light
+  centerline in every theme.
 - **Make CI green.** Run `./script/check` for the fast gate and `./script/verify`
   when packaging, resources, the updater, or release behavior changes.
 

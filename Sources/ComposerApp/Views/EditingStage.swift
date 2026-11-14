@@ -19,9 +19,6 @@ struct EditingStage: View {
   let card: CardState
   @ObservedObject var interaction: CardInteraction
   let size: CGSize
-  let isWorking: Bool
-  /// The engine the linter's "Refine with …" escalation targets on the text stage; nil hides it.
-  let askEngine: HeadlessEngine?
   /// Axes→graph promotion: open the label stage straight in graph-config mode on appear (as if
   /// "Make graph" were tapped). One-shot — `onGraphConfigConsumed` clears the pending intent so a
   /// later manual reopen of the same card lands on the label, not the config.
@@ -352,13 +349,7 @@ struct EditingStage: View {
         onEscape: { onClose() },
         onFocusChange: { _ in },
         onLayoutChange: { _, _ in },
-        boardContext: { board.lintContext(excluding: card.id) },
-        definedVariables: { board.boardTextContext.definedVariableNames },
-        mentions: interaction.mentions,
-        appSearch: interaction.appSearch,
         controller: interaction.controller,
-        lint: interaction.lint,
-        refine: interaction.refine,
         store: DumpStore.shared
       )
       .padding(.horizontal, 28)

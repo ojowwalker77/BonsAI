@@ -1,13 +1,8 @@
 import Foundation
 
 extension Notification.Name {
-  static let composerToggleWindow = Notification.Name("composerToggleWindow")
   static let composerShowWindow = Notification.Name("composerShowWindow")
   static let composerDismiss = Notification.Name("composerDismiss")
-  /// Fires on ⌘R / ⌘↩ — compile the whole board into one paste-ready draft.
-  static let composerCompileBoard = Notification.Name("composerCompileBoard")
-  /// Fires when a refine starts/ends; userInfo["busy"] gates click-away dismissal.
-  static let composerBusyChanged = Notification.Name("composerBusyChanged")
   /// Dump-stack navigation: ⌘[ older, ⌘] newer, ⌘N new dump.
   static let composerPrevDump = Notification.Name("composerPrevDump")
   static let composerNextDump = Notification.Name("composerNextDump")
@@ -38,30 +33,21 @@ extension Notification.Name {
   /// Posted when the panel is summoned or the app becomes active — the canvas reveals and enters
   /// editing on the active card so the caret is ready without double-clicking.
   static let composerEnterEditing = Notification.Name("composerEnterEditing")
-  /// The active AppKit editor reported a new live hug. The quick-capture flow uses this one-shot
-  /// signal to reveal the card again after its final rendered frame replaces the insertion estimate.
-  static let composerTextCardLiveFrameChanged = Notification.Name("composerTextCardLiveFrameChanged")
   /// Number shortcuts use a 1-based `index`; named shortcuts such as P carry a `CanvasTool`.
   static let composerSelectTool = Notification.Name("composerSelectTool")
   /// ⌘K "Add point to graph…": the graph card whose id matches `object` (a UUID) opens its Point
   /// Composer seeded at the middle of its axis ranges.
   static let composerAddGraphPoint = Notification.Name("composerAddGraphPoint")
-  /// ⌘J toggles the separate agent panel.
-  static let composerToggleAgent = Notification.Name("composerToggleAgent")
   /// ⌘K toggles the command palette (board switcher + buried board-level actions).
   static let composerTogglePalette = Notification.Name("composerTogglePalette")
   /// ⇧⌘F expands the current text card into the centered focus-writing sheet (and back).
   static let composerToggleFocus = Notification.Name("composerToggleFocus")
-  /// Opens the separate Settings panel (sidebar gear, ⌘, or the menu-bar item).
+  /// Opens the in-canvas Settings overlay (command-bar gear or ⌘,).
   static let composerShowSettings = Notification.Name("composerShowSettings")
   /// Fires after ⌘+/⌘− or Settings changes the editor point size.
   static let composerFontSizeChanged = Notification.Name("composerFontSizeChanged")
-  /// Fires when MentionStyleCache gains a favicon/brand color (e.g. for the Settings Apps list).
-  static let composerStyleCacheUpdated = Notification.Name("composerStyleCacheUpdated")
-  /// Re-bind the global summon hotkey after the user records a new shortcut in Settings.
+  /// Re-bind the "Snap to board" hotkey after the user records a new shortcut in Settings.
   static let composerShortcutChanged = Notification.Name("composerShortcutChanged")
-  /// Apply the persisted Dock-icon preference immediately without requiring a relaunch.
-  static let composerDockIconVisibilityChanged = Notification.Name("composerDockIconVisibilityChanged")
   /// Fires when the app-wide theme (System / Light / Dark) changes. The board window remounts its
   /// SwiftUI root with the same retained workspace after synchronously flushing pending edits.
   static let composerThemeChanged = Notification.Name("composerThemeChanged")
@@ -77,8 +63,6 @@ extension Notification.Name {
   /// Fires after a region was captured and saved; `userInfo["path"]` is the PNG. The board adds the
   /// image card here and kicks off its on-device understanding.
   static let composerCaptureCompleted = Notification.Name("composerCaptureCompleted")
-  /// Quick capture from the menu bar, Services menu, URL scheme, or loopback API.
-  static let composerQuickCapture = Notification.Name("composerQuickCapture")
 }
 
 /// The single Escape priority order for the board workspace. Keeping the decision independent from
@@ -89,7 +73,6 @@ enum ComposerEscapeTarget: Equatable {
   case boardPicker
   case commandPalette
   case focusedEditor
-  case compiledOverlay
   case promotion
   case auxiliaryPanel
   case activeEditor
@@ -106,9 +89,7 @@ struct ComposerEscapeState: Equatable {
   var hasBoardPicker = false
   var hasCommandPalette = false
   var hasFocusedEditor = false
-  var hasCompiledOverlay = false
   var hasPromotion = false
-  var hasAgent = false
   var hasSettings = false
   var hasActiveEditor = false
   /// Vector editing is inline and can coexist with a newly started Pen draft. In that one case the
@@ -135,12 +116,8 @@ enum ComposerEscapeCoordinator {
     if state.hasBoardPicker { return .boardPicker }
     if state.hasCommandPalette { return .commandPalette }
     if state.hasFocusedEditor { return .focusedEditor }
-    if state.hasCompiledOverlay { return .compiledOverlay }
     if state.hasPromotion { return .promotion }
-    // NOTE: `DumpStore.isHistoryOpen` has no route here on purpose — nothing in the app can set
-    // it to true anymore (the history overlay went with the old floating-panel mode), so an
-    // Escape priority for it would be unreachable dead state.
-    if state.hasAgent || state.hasSettings { return .auxiliaryPanel }
+    if state.hasSettings { return .auxiliaryPanel }
     if state.hasActiveVectorEditor && state.hasDrawingDraft { return .drawingDraft }
     if state.hasActiveEditor { return .activeEditor }
     if state.hasDrawingDraft { return .drawingDraft }

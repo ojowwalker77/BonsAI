@@ -12,17 +12,6 @@ struct EditorSelection: Equatable {
   var isEmpty: Bool { range.length == 0 }
 }
 
-/// Drives the `@` autocomplete overlay.
-@MainActor
-final class MentionState: ObservableObject {
-  @Published var items: [MentionItem] = []
-  @Published var selectedIndex = 0
-  @Published var anchorInView: CGPoint?   // caret point in panel SwiftUI space
-  @Published var isOpen = false
-  /// Set by the coordinator; called by the SwiftUI list on click.
-  var commitRequested: ((MentionItem) -> Void)?
-}
-
 /// A stable handle the canvas uses to drive the editor (focus, replace selection).
 @MainActor
 final class EditorController: ObservableObject {
@@ -39,16 +28,6 @@ final class EditorController: ObservableObject {
     tv.window?.makeFirstResponder(nil)
   }
 
-  func replace(range: NSRange, with string: String) {
-    coordinator?.replace(range: range, with: string)
-  }
-
-  /// Apply a linter quick-fix, but only if the span still reads exactly as flagged
-  /// (guards against the text having shifted under us).
-  func applyLintFix(range: NSRange, expecting phrase: String, with replacement: String) {
-    coordinator?.applyLintFix(range: range, expecting: phrase, with: replacement)
-  }
-
   /// Apply a markdown formatting action (selection bar) to the current selection/line.
   func applyMarkdown(_ action: MarkdownStyle.Action) {
     coordinator?.applyMarkdown(action)
@@ -61,7 +40,7 @@ final class EditorController: ObservableObject {
     coordinator?.applyInk(slot) ?? false
   }
 
-  /// Self-contained plain text with mention tokens serialized back to "@name".
+  /// Self-contained plain text (image attachments serialized as placeholders).
   var plainText: String {
     plainTextIfLoaded ?? ""
   }
@@ -78,20 +57,10 @@ final class EditorController: ObservableObject {
     return tv.attributedString().composerPlainTextAndInk
   }
 
-  /// A lossless copy of the whole document (chips + attachments) for revert.
+  /// A lossless copy of the whole document (ink + attachments).
   var attributedSnapshot: NSAttributedString? {
     guard let storage = coordinator?.textView?.textStorage else { return nil }
     return storage.attributedSubstring(from: NSRange(location: 0, length: storage.length))
-  }
-
-  /// Replace the entire draft with refined plain text (whole-draft refine).
-  func replaceWholeDraft(with string: String) {
-    coordinator?.replaceWholeDraft(with: string)
-  }
-
-  /// Restore a previously captured snapshot — used to revert a refine.
-  func restore(_ snapshot: NSAttributedString) {
-    coordinator?.restore(snapshot)
   }
 }
 
@@ -120,20 +89,10 @@ struct FreeWriteEditor: NSViewRepresentable {
   /// (and line spacing) scale by it so a live edit matches the static render's `fontSize × textScale`.
   /// 1 for a never-scaled card, so the common path is byte-for-byte unchanged.
   var fontScale: CGFloat = 1
-  /// Supplies the rest of the board's text as read-only context for the linter. `nil` ⇒
-  /// behaves exactly as the single-editor era.
-  var boardContext: () -> String? = { nil }
-  /// Board-scoped copy-time variable names, so a `$name` reference highlights even when its
-  /// `name = …` definition lives in another card.
-  var definedVariables: () -> Set<String> = { [] }
   /// The editing card's whole-card tint slot, so clearing range ink restores the card tint's
   /// color (not the flavor body ink) on the cleared span.
   var cardTint: (() -> Int?)? = nil
-  @ObservedObject var mentions: MentionState
-  @ObservedObject var appSearch: AppSearchState
   @ObservedObject var controller: EditorController
-  @ObservedObject var lint: LintState
-  @ObservedObject var refine: RefineState
   @ObservedObject var store: DumpStore
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -164,7 +123,7 @@ struct FreeWriteEditor: NSViewRepresentable {
 
     tv.drawsBackground = false
     tv.backgroundColor = .clear
-    tv.isRichText = true            // keep: styled chips + image attachments persist in-session
+    tv.isRichText = true            // keep: ink + image attachments persist in-session
     tv.importsGraphics = false      // keep FALSE: ComposerTextView is the only image path
     tv.isAutomaticQuoteSubstitutionEnabled = false
     tv.isAutomaticDashSubstitutionEnabled = false
@@ -188,50 +147,40 @@ struct FreeWriteEditor: NSViewRepresentable {
 
     context.coordinator.textView = tv
     controller.coordinator = context.coordinator
-    tv.onChipClick = { [weak coordinator = context.coordinator] range in
-      coordinator?.handleChipClick(range)
-    }
-    tv.onHoverPoint = { [weak coordinator = context.coordinator] point in
-      coordinator?.handleHover(point)
-    }
     tv.onFocusChange = { [weak coordinator = context.coordinator] active in
       coordinator?.parent.onFocusChange(active)
     }
-    tv.smartPasteHandler = context.coordinator
 
     if let initialAttributedText {
       tv.textStorage?.setAttributedString(initialAttributedText)
     } else if !text.isEmpty {
-      // `text` is the serialized form (e.g. "@github") — rebuild it into styled chips so a
-      // reloaded card edits with real chips, not raw tokens.
+      // `text` is the serialized form — rebuild it with its persisted ink runs so a reloaded
+      // card edits with its colors intact.
       tv.textStorage?.setAttributedString(
-        ChipFactory.attributedDocument(fromPlainText: text, font: context.coordinator.baseFont,
-                                       paragraph: context.coordinator.paragraphStyle(),
-                                       ink: initialInk))
+        InkText.attributedDocument(fromPlainText: text, font: context.coordinator.baseFont,
+                                   paragraph: context.coordinator.paragraphStyle(),
+                                   ink: initialInk))
     }
-    // Style what's already there (shell-token highlight, chip restyle) so a focused card shows
-    // its tokens immediately, not only after the first keystroke.
+    // Style what's already there (markdown, ink) so a focused card shows it immediately, not
+    // only after the first keystroke.
     if (tv.textStorage?.length ?? 0) > 0 { context.coordinator.applyCurrentFormatting() }
     context.coordinator.installPlaceholder(in: tv, text: placeholder)
     context.coordinator.updatePlaceholderVisibility()
     context.coordinator.reportHeight(force: true)
-    // Chip restyle on async favicon arrival is wired per-coordinator via the
-    // .composerStyleCacheUpdated notification (see Coordinator.init) so N cards all update,
-    // instead of a single shared closure the last card would clobber.
     return scrollView
   }
 
   func updateNSView(_ scrollView: NSScrollView, context: Context) {
     guard let tv = scrollView.documentView as? NSTextView else { return }
     context.coordinator.parent = self
-    // Compare against the serialized form so chip styling (visible ≠ serialized) isn't mistaken
-    // for an external edit — only a real change to the bound text re-seeds the editor.
+    // Compare against the serialized form so display styling (visible ≠ serialized) isn't
+    // mistaken for an external edit — only a real change to the bound text re-seeds the editor.
     if tv.attributedString().composerPlainText != text {
       let sel = tv.selectedRange()
       tv.textStorage?.setAttributedString(
-        ChipFactory.attributedDocument(fromPlainText: text, font: context.coordinator.baseFont,
-                                       paragraph: context.coordinator.paragraphStyle(),
-                                       ink: initialInk))
+        InkText.attributedDocument(fromPlainText: text, font: context.coordinator.baseFont,
+                                   paragraph: context.coordinator.paragraphStyle(),
+                                   ink: initialInk))
       let length = (tv.string as NSString).length
       tv.setSelectedRange(NSRange(location: min(sel.location, length), length: 0))
     }
@@ -245,18 +194,13 @@ struct FreeWriteEditor: NSViewRepresentable {
 
 extension FreeWriteEditor {
   @MainActor
-  final class Coordinator: NSObject, NSTextViewDelegate, ComposerSmartPasteHandling {
+  final class Coordinator: NSObject, NSTextViewDelegate {
     var parent: FreeWriteEditor
     weak var textView: NSTextView?
     private let placeholderView = NSTextField(labelWithString: "")
     private var selectionWork: DispatchWorkItem?
-    private var lintWork: DispatchWorkItem?
-    private var hideWork: DispatchWorkItem?
     private var fontSizeObserver: NSObjectProtocol?
-    private var styleObserver: NSObjectProtocol?
     private var isNormalizingFormatting = false
-    /// Monotonic guard so a slow analysis can't apply onto newer text.
-    private var lintVersion = 0
     /// Last height pushed up to the card, so repeated layout passes don't thrash the binding.
     private var lastReportedHeight: CGFloat = -1
     private var lastReportedNaturalWidth: CGFloat = -1
@@ -267,28 +211,15 @@ extension FreeWriteEditor {
     init(_ parent: FreeWriteEditor) {
       self.parent = parent
       super.init()
-      parent.mentions.commitRequested = { [weak self] item in self?.commit(item) }
-      parent.lint.cancelHide = { [weak self] in self?.hideWork?.cancel() }
-      parent.lint.requestHide = { [weak self] in self?.scheduleHide() }
       fontSizeObserver = NotificationCenter.default.addObserver(
         forName: .composerFontSizeChanged, object: nil, queue: .main
       ) { [weak self] _ in
         MainActor.assumeIsolated { self?.applyCurrentFormatting() }
       }
-      // Restyle this card's chips when an async favicon/brand color lands. Per-coordinator
-      // (not a single shared closure) so every card on the board updates, not just the last.
-      styleObserver = NotificationCenter.default.addObserver(
-        forName: .composerStyleCacheUpdated, object: nil, queue: .main
-      ) { [weak self] _ in
-        MainActor.assumeIsolated { self?.updateExistingChips() }
-      }
-      // Warm the on-device model so the first pause doesn't pay cold-start latency.
-      SemanticLintService.shared.prewarm()
     }
 
     deinit {
       if let fontSizeObserver { NotificationCenter.default.removeObserver(fontSizeObserver) }
-      if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
     }
 
     // MARK: Typography
@@ -321,7 +252,7 @@ extension FreeWriteEditor {
       bodyAttributes()
     }
 
-    /// Re-apply the current editor font/color to plain text while preserving chips and images.
+    /// Re-apply the current editor font/color to plain text while preserving images.
     /// This strips pasted rich-text colors (the black-on-dark bug) and handles ⌘+/⌘− live.
     func applyCurrentFormatting() {
       guard let tv = textView else { return }
@@ -332,7 +263,6 @@ extension FreeWriteEditor {
       placeholderView.font = baseFont
       placeholderView.textColor = Theme.nsPlaceholderText
       normalizeBodyRuns(in: tv)
-      restyleExistingChips(notifyTextView: false)
       tv.needsDisplay = true
       reportHeight(force: true)
     }
@@ -352,7 +282,7 @@ extension FreeWriteEditor {
       // as the user keeps typing.
       var inkedSpans: [(range: NSRange, slot: Int)] = []
       storage.enumerateAttributes(in: full, options: []) { attributes, range, _ in
-        guard attributes[.mentionToken] == nil, attributes[.attachment] == nil else { return }
+        guard attributes[.attachment] == nil else { return }
         if let slot = attributes[.inkSlot] as? Int { inkedSpans.append((range, slot)) }
         bodyRanges.append(range)
       }
@@ -362,7 +292,6 @@ extension FreeWriteEditor {
       storage.beginEditing()
       for range in bodyRanges { storage.setAttributes(attrs, range: range) }
       MarkdownStyle.apply(to: storage, baseFont: baseFont)
-      highlightShellTokens(in: storage)
       for (range, slot) in inkedSpans {
         storage.addAttribute(.inkSlot, value: slot, range: range)
         if let color = Theme.tintColor(slot) { storage.addAttribute(.foregroundColor, value: color, range: range) }
@@ -372,32 +301,12 @@ extension FreeWriteEditor {
       tv.typingAttributes = attrs
     }
 
-    /// Syntax-highlight the copy-time shell tokens (`{{x = cmd}}`, `{{x}}`, `[sh: cmd]`) so they
-    /// read as live code while you type, matched to the rendered card. Display-only: it changes
-    /// font/color/background on existing characters, never the text, so `composerPlainText` still
-    /// round-trips the literal source. Runs after the body reset (so it wins) and inside the
-    /// caller's begin/endEditing batch.
-    private func highlightShellTokens(in storage: NSTextStorage) {
-      let size = baseFont.pointSize
-      // Board-scoped names ∪ this card's own definitions (so a just-typed `name =` references live).
-      let names = parent.definedVariables().union(ShellTemplate.definedNames(in: storage.string))
-      for expression in ShellTemplate.expressions(in: storage.string, definedNames: names) {
-        let range = expression.range
-        guard range.location + range.length <= storage.length else { continue }
-        storage.addAttributes([
-          .font: ShellTokenStyle.font(for: expression.kind, size: size),
-          .foregroundColor: ShellTokenStyle.tint(for: expression.kind),
-        ], range: range)
-      }
-    }
-
-    // MARK: Text change → binding + count + mention scan
+    // MARK: Text change → binding + count
     func textDidChange(_ notification: Notification) {
       guard let tv = textView else { return }
       // IME composition (Japanese/Chinese/Korean, and dead-key accents): while marked/provisional
       // text is on screen, NSTextView posts textDidChange on every keystroke. Reformatting the
-      // text storage (normalizeBodyRuns) or opening the @-mention menu over that provisional text
-      // corrupts the input session — it strips the IME's marked-text styling and can steal the
+      // text storage (normalizeBodyRuns) over that provisional text corrupts the input session — it strips the IME's marked-text styling and can steal the
       // Return that confirms a candidate — and serializing it would persist text the user may still
       // cancel. Do only the cheap on-screen updates and defer the rest to the commit, which posts
       // one final textDidChange with no marked text.
@@ -412,11 +321,7 @@ extension FreeWriteEditor {
       if parent.text != serialized { parent.text = serialized }
       parent.onCountChange(tv.string.count)
       updatePlaceholderVisibility()
-      refreshMentionMenu(tv)
       publishSelection(tv)
-      // Editing invalidates any existing flags; clear now, re-lint once you pause.
-      resetLint()
-      scheduleLint(tv)
       reportHeight(force: true)
     }
 
@@ -447,7 +352,7 @@ extension FreeWriteEditor {
 
     /// The width this editor would take with NO wrapping (its widest hard line), plus its own
     /// horizontal chrome (container inset + fragment padding). Measured on the live storage so
-    /// chips and per-card font scale count exactly as rendered — this is what makes the card's
+    /// attachments and per-card font scale count exactly as rendered — this is what makes the card's
     /// hugged width agree with where the view actually wraps.
     private func naturalContentWidth(of tv: NSTextView) -> CGFloat {
       guard let storage = tv.textStorage, storage.length > 0 else { return 0 }
@@ -467,11 +372,6 @@ extension FreeWriteEditor {
     // MARK: Selection change → debounced snapshot (anti-flicker on drag)
     func textViewDidChangeSelection(_ notification: Notification) {
       guard let tv = textView else { return }
-      // Caret moved inside the editor (click-away / arrow keys) → dismiss app search.
-      if parent.appSearch.isOpen { closeAppSearch() }
-      // The selection walks forward as IME marked text grows; don't re-scan for @-mentions over a
-      // half-composed candidate. The commit's textDidChange re-checks with settled text.
-      if !tv.hasMarkedText() { refreshMentionMenu(tv) }
       selectionWork?.cancel()
       let work = DispatchWorkItem { [weak self, weak tv] in
         guard let self, let tv else { return }
@@ -489,186 +389,6 @@ extension FreeWriteEditor {
         snap.rectInView = panelRect(fromScreen: screen)
       }
       parent.onSelectionChange(snap)
-    }
-
-    // MARK: Undo-safe programmatic replacement (the Refine path)
-    @discardableResult
-    func replace(range targetRange: NSRange? = nil, with string: String) -> Bool {
-      guard let tv = textView else { return false }
-      let range = targetRange ?? tv.selectedRange()
-      guard tv.shouldChangeText(in: range, replacementString: string) else { return false }
-      tv.textStorage?.replaceCharacters(
-        in: range, with: NSAttributedString(string: string, attributes: bodyAttributes()))
-      tv.didChangeText()
-      tv.setSelectedRange(NSRange(location: range.location, length: (string as NSString).length))
-      parent.text = tv.attributedString().composerPlainText
-      parent.onCountChange(tv.string.count)
-      updatePlaceholderVisibility()
-      publishSelection(tv)
-      return true
-    }
-
-    // MARK: - Whole-draft refine
-
-    /// Replace the entire document with refined plain text, keeping it undo-safe.
-    func replaceWholeDraft(with string: String) {
-      guard let tv = textView else { return }
-      let whole = NSRange(location: 0, length: (tv.string as NSString).length)
-      _ = replace(range: whole, with: string)
-      tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
-    }
-
-    /// Restore a snapshot verbatim (chips + attachments intact) to revert a refine.
-    func restore(_ snapshot: NSAttributedString) {
-      guard let tv = textView, let storage = tv.textStorage else { return }
-      let whole = NSRange(location: 0, length: storage.length)
-      guard tv.shouldChangeText(in: whole, replacementString: snapshot.string) else { return }
-      storage.replaceCharacters(in: whole, with: snapshot)
-      tv.didChangeText()
-      tv.setSelectedRange(NSRange(location: 0, length: 0))
-      tv.typingAttributes = bodyAttributes()
-      parent.text = tv.attributedString().composerPlainText
-      parent.onCountChange(tv.string.count)
-      updatePlaceholderVisibility()
-    }
-
-    // MARK: - Semantic linter
-
-    /// Debounced: only analyze once typing pauses, so the sentinel never fires mid-thought.
-    private func scheduleLint(_ tv: NSTextView) {
-      lintWork?.cancel()
-      guard SemanticLintService.shared.isAvailable else { return }
-      let work = DispatchWorkItem { [weak self, weak tv] in
-        guard let self, let tv else { return }
-        self.runLint(tv)
-      }
-      lintWork = work
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1.1, execute: work)
-    }
-
-    private func runLint(_ tv: NSTextView) {
-      let visibleSnapshot = tv.string
-      let plainSnapshot = tv.attributedString().composerPlainText
-      let boardContext = parent.boardContext()
-      lintVersion &+= 1
-      let version = lintVersion
-      Task { [weak self] in
-        let flags = await SemanticLintService.shared.analyze(
-          visibleText: visibleSnapshot, plainText: plainSnapshot, boardContext: boardContext)
-        guard let self, let tv = self.textView else { return }
-        // Discard if the text changed or a newer pass started while we were thinking.
-        guard version == self.lintVersion,
-              tv.string == visibleSnapshot,
-              tv.attributedString().composerPlainText == plainSnapshot else { return }
-        self.applyLintFlags(flags)
-      }
-    }
-
-    /// Paint the underlines as **temporary attributes** (display-only): they never enter
-    /// the text storage, so they don't serialize, don't dirty undo, and reflow with the text.
-    private func applyLintFlags(_ flags: [LintFlag]) {
-      guard let tv = textView, let lm = tv.layoutManager else { return }
-      clearLintDecorations()
-      let length = (tv.string as NSString).length
-
-      var resolved: [LintFlag] = []
-      for var flag in flags {
-        guard flag.range.location >= 0,
-              flag.range.location + flag.range.length <= length,
-              !intersectsMentionToken(flag.range, in: tv),
-              !intersectsAttachment(flag.range, in: tv) else { continue }
-        lm.addTemporaryAttributes(
-          [.underlineStyle: NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue,
-           .underlineColor: flag.kind.nsTint.withAlphaComponent(0.48),
-           .backgroundColor: flag.kind.nsTint.withAlphaComponent(0.025)],
-          forCharacterRange: flag.range)
-        flag.rectInView = rectInPanel(for: flag.range)
-        resolved.append(flag)
-      }
-
-      parent.lint.flags = resolved
-      if let active = parent.lint.activeFlagID, !resolved.contains(where: { $0.id == active }) {
-        parent.lint.activeFlagID = nil
-      }
-    }
-
-    private func intersectsMentionToken(_ range: NSRange, in tv: NSTextView) -> Bool {
-      guard let storage = tv.textStorage else { return false }
-      var hit = false
-      storage.enumerateAttribute(.mentionToken, in: range, options: []) { value, _, stop in
-        if value != nil { hit = true; stop.pointee = true }
-      }
-      return hit
-    }
-
-    private func intersectsAttachment(_ range: NSRange, in tv: NSTextView) -> Bool {
-      guard let storage = tv.textStorage else { return false }
-      var hit = false
-      storage.enumerateAttribute(.attachment, in: range, options: []) { value, _, stop in
-        if value != nil { hit = true; stop.pointee = true }
-      }
-      return hit
-    }
-
-    /// Full reset on edit: drop decorations and any open popover until the next pause.
-    private func resetLint() {
-      clearLintDecorations()
-      hideWork?.cancel()
-      if !parent.lint.flags.isEmpty { parent.lint.flags = [] }
-      if parent.lint.activeFlagID != nil { parent.lint.activeFlagID = nil }
-    }
-
-    private func clearLintDecorations() {
-      guard let tv = textView, let lm = tv.layoutManager else { return }
-      let full = NSRange(location: 0, length: (tv.string as NSString).length)
-      for key in [NSAttributedString.Key.underlineStyle, .underlineColor, .backgroundColor] {
-        lm.removeTemporaryAttribute(key, forCharacterRange: full)
-      }
-    }
-
-    // MARK: Hover → popover (hit-test against the flagged rects)
-
-    func handleHover(_ point: NSPoint?) {
-      guard let point, !parent.lint.flags.isEmpty else { scheduleHide(); return }
-      let hit = parent.lint.flags.first {
-        guard let r = viewRect(for: $0.range) else { return false }
-        return r.insetBy(dx: -5, dy: -7).contains(point)
-      }
-      guard let flag = hit else { scheduleHide(); return }
-      hideWork?.cancel()
-      if parent.lint.activeFlagID != flag.id { parent.lint.activeFlagID = flag.id }
-    }
-
-    /// Small grace period so the mouse can cross from the underline into the popover.
-    private func scheduleHide() {
-      hideWork?.cancel()
-      let work = DispatchWorkItem { [weak self] in self?.parent.lint.activeFlagID = nil }
-      hideWork = work
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.55, execute: work)
-    }
-
-    func applyLintFix(range: NSRange, expecting phrase: String, with replacement: String) {
-      guard let tv = textView else { return }
-      let ns = tv.string as NSString
-      guard range.location + range.length <= ns.length,
-            ns.substring(with: range) == phrase else { return }
-      _ = replace(range: range, with: replacement)
-      parent.lint.activeFlagID = nil
-    }
-
-    /// Flag rect in the text view's own coordinates (for hover hit-testing).
-    private func viewRect(for range: NSRange) -> CGRect? {
-      guard let tv = textView, let lm = tv.layoutManager, let c = tv.textContainer else { return nil }
-      let glyphs = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-      let rect = lm.boundingRect(forGlyphRange: glyphs, in: c)
-      let origin = tv.textContainerOrigin
-      return rect.offsetBy(dx: origin.x, dy: origin.y)
-    }
-
-    /// Flag rect in panel SwiftUI space (for anchoring the popover).
-    private func rectInPanel(for range: NSRange) -> CGRect? {
-      guard let screen = screenRect(for: range) else { return nil }
-      return panelRect(fromScreen: screen)
     }
 
     // MARK: Geometry — everything resolves through screen space, then the panel frame.
@@ -691,119 +411,19 @@ extension FreeWriteEditor {
                     width: screen.width, height: screen.height)
     }
 
-    // MARK: Smart paste
-
-    func handleSmartPaste(_ pasted: String, in textView: ComposerTextView) -> Bool {
-      if let token = SmartPaste.syncToken(for: pasted) {
-        textView.insertTokenChip(token)
-        parent.text = textView.attributedString().composerPlainText
-        parent.onCountChange(textView.string.count)
-        return true
-      }
-      guard SmartPaste.looksLikeLibraryQuery(pasted) else { return false }
-      let range = textView.selectedRange()
-      guard let insertedRange = insertPlainSmartPaste(pasted, replacing: range, in: textView) else {
-        return false
-      }
-      Task { await resolveContext7Paste(pasted, insertedRange: insertedRange, in: textView) }
-      return true
-    }
-
-    private func insertPlainSmartPaste(_ string: String, replacing range: NSRange, in textView: ComposerTextView) -> NSRange? {
-      guard let storage = textView.textStorage,
-            textView.shouldChangeText(in: range, replacementString: string) else { return nil }
-      let attributed = NSAttributedString(string: string, attributes: bodyAttributes())
-      storage.replaceCharacters(in: range, with: attributed)
-      textView.didChangeText()
-      let insertedRange = NSRange(location: range.location, length: (string as NSString).length)
-      textView.setSelectedRange(NSRange(location: insertedRange.upperBound, length: 0))
-      parent.text = textView.attributedString().composerPlainText
-      parent.onCountChange(textView.string.count)
-      updatePlaceholderVisibility()
-      publishSelection(textView)
-      return insertedRange
-    }
-
-    private func resolveContext7Paste(_ query: String, insertedRange: NSRange, in textView: ComposerTextView) async {
-      if let token = await SmartPaste.context7Token(for: query) {
-        let current = textView.string as NSString
-        guard insertedRange.upperBound <= current.length,
-              current.substring(with: insertedRange) == query else { return }
-        textView.insertTokenChip(token, replacing: insertedRange)
-        parent.text = textView.attributedString().composerPlainText
-        parent.onCountChange(textView.string.count)
-      }
-    }
-
-    // MARK: @-mention detection
-    private func refreshMentionMenu(_ tv: NSTextView) {
-      // A `$word` the user is typing autocompletes board variables — it takes priority over `@`.
-      if let variable = activeVariableQuery(in: tv) {
-        let items = variableMenuItems(matching: variable.text)
-        if !items.isEmpty { openMenu(items: items, at: variable.range, in: tv); return }
-      }
-      guard let query = activeMentionQuery(in: tv) else { closeMenu(); return }
-      let results = MentionCatalog.filtered(query.text)
-      guard !results.isEmpty else { closeMenu(); return }
-      openMenu(items: results, at: query.range, in: tv)
-    }
-
-    private func openMenu(items: [MentionItem], at range: NSRange, in tv: NSTextView) {
-      let screen = tv.firstRect(forCharacterRange: range, actualRange: nil)
-      if let frame = tv.window?.frame {
-        parent.mentions.anchorInView = CGPoint(x: screen.minX - frame.minX,
-                                               y: frame.maxY - screen.minY)
-      }
-      parent.mentions.items = items
-      parent.mentions.selectedIndex = min(parent.mentions.selectedIndex, items.count - 1)
-      parent.mentions.isOpen = true
-    }
-
-    /// Board variables matching `query`, as menu items. The `$`-prefixed id tells `commit` to
-    /// insert plain `$name` text rather than an `@`-style chip. Empty when nothing matches (so a
-    /// `$` typed on a board with no variables — e.g. heading into `$(cmd)` — never pops a menu).
-    private func variableMenuItems(matching query: String) -> [MentionItem] {
-      let names = parent.definedVariables().sorted()
-      let matches = query.isEmpty ? names : names.filter { $0.lowercased().hasPrefix(query.lowercased()) }
-      return matches.map {
-        MentionItem(id: "$\($0)", title: $0.lowercased(), label: "$\($0)",
-                    subtitle: "board variable".localizedUI, symbol: "dollarsign", kind: .skill)
-      }
-    }
-
-    private func closeMenu() {
-      guard parent.mentions.isOpen || !parent.mentions.items.isEmpty else { return }
-      parent.mentions.isOpen = false
-      parent.mentions.items = []
-      parent.mentions.selectedIndex = 0
-      parent.mentions.anchorInView = nil
-    }
-
-    // MARK: Keyboard — Escape always handled; nav keys only while the menu is open
+    // MARK: Keyboard — Escape always handled; Return continues markdown lists
     func textView(_ tv: NSTextView, doCommandBy selector: Selector) -> Bool {
       if selector == #selector(NSResponder.cancelOperation(_:)) {
-        if parent.store.compiledDraft != nil { parent.store.compiledDraft = nil }
-        else if parent.store.isSettingsOpen { parent.store.isSettingsOpen = false }
-        else if parent.mentions.isOpen { closeMenu() }
-        else if parent.store.isHistoryOpen { parent.store.isHistoryOpen = false }
-        else if parent.refine.isMenuOpen { parent.refine.isMenuOpen = false }
-        else if parent.refine.pending != nil { parent.refine.revert?() }
+        if parent.store.isSettingsOpen { parent.store.isSettingsOpen = false }
         else { parent.onEscape() }
         return true
       }
-      if selector == #selector(NSResponder.insertNewline(_:)), !parent.mentions.isOpen,
-         handleMarkdownNewline(tv) {
+      if selector == #selector(NSResponder.insertNewline(_:)), handleMarkdownNewline(tv) {
         return true
       }
-      guard parent.mentions.isOpen else { return false }
-      switch selector {
-      case #selector(NSResponder.moveUp(_:)): move(-1); return true
-      case #selector(NSResponder.moveDown(_:)): move(+1); return true
-      case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
-        commitSelected(); return true
-      default: return false
-      }
+      return false
     }
+
     // MARK: Markdown formatting actions (selection bar)
 
     /// Wrap/unwrap the selection or toggle line prefixes with literal markdown syntax. Every
@@ -821,9 +441,8 @@ extension FreeWriteEditor {
     }
 
     /// Ink the current selection with a theme tint slot: set (or clear, when `slot` is nil) the
-    /// `.inkSlot` attribute and its resolved `.foregroundColor` on every non-chip run in the
-    /// selection. Chip runs keep their brand color. Serialized text is untouched — only display
-    /// attributes change — so `composerPlainTextAndInk` re-derives the runs from the storage.
+    /// `.inkSlot` attribute and its resolved `.foregroundColor` across the selection. Serialized
+    /// text is untouched — only display attributes change — so `composerPlainTextAndInk` re-derives the runs from the storage.
     /// Returns false with no selection so the caller can fall back to whole-card tinting.
     @discardableResult
     func applyInk(_ slot: Int?) -> Bool {
@@ -835,15 +454,12 @@ extension FreeWriteEditor {
       let clearedColor = Theme.tintColor(parent.cardTint?()) ?? Theme.nsBodyText
       let color = slot.flatMap { Theme.tintColor($0) } ?? clearedColor
       storage.beginEditing()
-      storage.enumerateAttribute(.mentionToken, in: range) { value, sub, _ in
-        guard value == nil else { return }   // chips keep their own color
-        if let slot {
-          storage.addAttribute(.inkSlot, value: slot, range: sub)
-        } else {
-          storage.removeAttribute(.inkSlot, range: sub)
-        }
-        storage.addAttribute(.foregroundColor, value: color, range: sub)
+      if let slot {
+        storage.addAttribute(.inkSlot, value: slot, range: range)
+      } else {
+        storage.removeAttribute(.inkSlot, range: range)
       }
+      storage.addAttribute(.foregroundColor, value: color, range: range)
       storage.endEditing()
       tv.didChangeText()
       return true
@@ -951,181 +567,6 @@ extension FreeWriteEditor {
       return true
     }
 
-    private func move(_ delta: Int) {
-      let count = parent.mentions.items.count
-      guard count > 0 else { return }
-      parent.mentions.selectedIndex = (parent.mentions.selectedIndex + delta + count) % count
-    }
-    private func commitSelected() {
-      guard parent.mentions.items.indices.contains(parent.mentions.selectedIndex) else { return }
-      commit(parent.mentions.items[parent.mentions.selectedIndex])
-    }
-
-    // MARK: Insert the chosen mention as an undo-safe chip + trailing space
-    func commit(_ item: MentionItem) {
-      guard let tv = textView else { return }
-      // Board-variable completion: insert plain `$name` (the highlighter tints it), not a chip.
-      if item.id.hasPrefix("$"), let variable = activeVariableQuery(in: tv) {
-        guard tv.shouldChangeText(in: variable.range, replacementString: item.id) else { return }
-        tv.textStorage?.replaceCharacters(in: variable.range, with: NSAttributedString(string: item.id, attributes: bodyAttributes()))
-        tv.setSelectedRange(NSRange(location: variable.range.location + (item.id as NSString).length, length: 0))
-        tv.typingAttributes = bodyAttributes()
-        tv.didChangeText()
-        parent.text = tv.attributedString().composerPlainText
-        parent.onCountChange(tv.string.count)
-        closeMenu()
-        return
-      }
-      guard let query = activeMentionQuery(in: tv) else { return }
-      let chip = ChipFactory.make(token: item.id, font: baseFont)
-      let token = NSMutableAttributedString(attributedString: chip)
-      token.append(NSAttributedString(string: " ", attributes: bodyAttributes()))
-      guard tv.shouldChangeText(in: query.range, replacementString: token.string) else { return }
-      tv.textStorage?.replaceCharacters(in: query.range, with: token)
-      tv.didChangeText()
-      tv.setSelectedRange(NSRange(location: query.range.location + token.length, length: 0))
-      tv.typingAttributes = bodyAttributes()
-      parent.text = tv.attributedString().composerPlainText
-      parent.onCountChange(tv.string.count)
-      closeMenu()
-
-      // Apps don't just tag — open their inline search so the user picks a concrete thing.
-      if item.kind == .app {
-        let chipRange = NSRange(location: query.range.location, length: chip.length)
-        openAppSearch(appID: item.id, targetRange: chipRange, kind: nil)
-      }
-    }
-
-    /// Restyle already-inserted chips in place when async favicons land.
-    func updateExistingChips() {
-      restyleExistingChips(notifyTextView: true)
-    }
-
-    /// Rebuild chip runs with the current font/cache while preserving the selection.
-    /// Edits are applied descending so stored ranges stay valid.
-    private func restyleExistingChips(notifyTextView: Bool) {
-      guard let tv = textView, let storage = tv.textStorage else { return }
-      let saved = tv.selectedRange()
-
-      var edits: [(NSRange, NSAttributedString)] = []
-      storage.enumerateAttribute(.mentionToken,
-                                 in: NSRange(location: 0, length: storage.length),
-                                 options: []) { value, range, _ in
-        guard let token = value as? String else { return }
-        edits.append((range, ChipFactory.make(token: token, font: baseFont)))
-      }
-      guard !edits.isEmpty else { return }
-
-      let full = NSRange(location: 0, length: storage.length)
-      if notifyTextView, !tv.shouldChangeText(in: full, replacementString: tv.string) { return }
-
-      let descending = edits.sorted { $0.0.location > $1.0.location }
-      storage.beginEditing()
-      for (range, rebuilt) in descending {
-        storage.replaceCharacters(in: range, with: rebuilt)
-      }
-      storage.endEditing()
-      if notifyTextView { tv.didChangeText() }
-
-      func adjusted(_ point: Int) -> Int {
-        var value = point
-        for (range, rebuilt) in edits where range.location + range.length <= point {
-          value += rebuilt.length - range.length
-        }
-        return min(max(value, 0), storage.length)
-      }
-
-      let newLocation = adjusted(saved.location)
-      let newEnd = adjusted(saved.location + saved.length)
-      tv.setSelectedRange(NSRange(location: newLocation, length: max(0, newEnd - newLocation)))
-      tv.typingAttributes = bodyAttributes()
-      parent.text = tv.attributedString().composerPlainText
-      parent.onCountChange(tv.string.count)
-    }
-
-    // MARK: - Inline app search (connectors)
-
-    /// Open the search popover for the app token at `targetRange`, anchored under the chip.
-    func openAppSearch(appID: String, targetRange: NSRange, kind: GitHubItemKind?) {
-      guard let anchor = anchorBelow(range: targetRange) else { return }
-      let state = parent.appSearch
-      state.targetRange = targetRange
-      state.appID = appID
-      state.githubKind = kind ?? .issue
-      state.query = ""
-      state.results = []
-      state.selectedIndex = 0
-      state.isLoading = false
-      state.hasSearched = false
-      state.errorText = nil
-      state.anchorInView = anchor
-      state.onCommit = { [weak self] result in self?.resolveSelection(result) }
-      state.onCancel = { [weak self] in self?.closeAppSearchAndFocus() }
-      state.isOpen = true
-      state.reload()
-    }
-
-    /// Clicking an app chip re-opens its search, pre-scoped to its current kind.
-    func handleChipClick(_ range: NSRange) {
-      guard let tv = textView, let storage = tv.textStorage, range.location < storage.length,
-            let token = storage.attribute(.mentionToken, at: range.location, effectiveRange: nil) as? String,
-            let parsed = AppToken.parse(token) else { return }
-      var kind: GitHubItemKind?
-      if case let .github(k, _) = parsed.selection { kind = k }
-      closeMenu()
-      openAppSearch(appID: parsed.appID, targetRange: range, kind: kind)
-    }
-
-    /// Replace the target chip with one resolved to the picked result, keeping one trailing space.
-    func resolveSelection(_ result: AppSearchResult) {
-      guard let tv = textView, let storage = tv.textStorage,
-            let range = parent.appSearch.targetRange,
-            range.location + range.length <= storage.length else { closeAppSearch(); return }
-
-      let token = AppToken.string(appID: parent.appSearch.appID, selection: result.selection)
-      let chip = NSMutableAttributedString(attributedString: ChipFactory.make(token: token, font: baseFont))
-
-      let after = range.location + range.length
-      let hasSpace = after < storage.length &&
-        (storage.string as NSString).substring(with: NSRange(location: after, length: 1)) == " "
-      if !hasSpace { chip.append(NSAttributedString(string: " ", attributes: bodyAttributes())) }
-
-      guard tv.shouldChangeText(in: range, replacementString: chip.string) else { closeAppSearch(); return }
-      storage.replaceCharacters(in: range, with: chip)
-      tv.didChangeText()
-      tv.setSelectedRange(NSRange(location: range.location + chip.length, length: 0))
-      tv.typingAttributes = bodyAttributes()
-      parent.text = tv.attributedString().composerPlainText
-      parent.onCountChange(tv.string.count)
-      closeAppSearch()
-      tv.window?.makeFirstResponder(tv)
-    }
-
-    func closeAppSearch() {
-      let state = parent.appSearch
-      guard state.isOpen else { return }
-      state.isOpen = false
-      state.targetRange = nil
-      state.results = []
-      state.hasSearched = false
-      state.anchorInView = nil
-      state.onCommit = nil
-      state.onCancel = nil
-    }
-
-    func closeAppSearchAndFocus() {
-      closeAppSearch()
-      textView?.window?.makeFirstResponder(textView)
-    }
-
-    /// Panel-space point at the bottom-left of the chip (same geometry as the `@` menu).
-    private func anchorBelow(range: NSRange) -> CGPoint? {
-      guard let tv = textView, let frame = tv.window?.frame else { return nil }
-      let screen = tv.firstRect(forCharacterRange: range, actualRange: nil)
-      guard screen.width.isFinite, screen.minY.isFinite else { return nil }
-      return CGPoint(x: screen.minX - frame.minX, y: frame.maxY - screen.minY)
-    }
-
     // MARK: Placeholder (NSTextView has none of its own)
     func installPlaceholder(in tv: NSTextView, text: String) {
       placeholderView.stringValue = text
@@ -1147,65 +588,4 @@ extension FreeWriteEditor {
       placeholderView.isHidden = !(textView?.string.isEmpty ?? true)
     }
   }
-}
-
-// MARK: - Backward @-query scan
-
-struct MentionQuery { let range: NSRange; let text: String } // range covers "@query" incl. @
-
-/// Scan backward from the caret. nil if there's a real selection, whitespace before an @,
-/// or an @ preceded by an alphanumeric (so "foo@bar" never triggers). UTF-16 units.
-func activeMentionQuery(in tv: NSTextView) -> MentionQuery? {
-  let sel = tv.selectedRange()
-  guard sel.length == 0, sel.location > 0 else { return nil }
-  let ns = tv.string as NSString
-  let caret = sel.location
-  var i = caret - 1
-  while i >= 0 {
-    guard let scalar = UnicodeScalar(ns.character(at: i)) else { return nil }
-    let ch = Character(scalar)
-    if ch == "@" {
-      if i > 0, let prevScalar = UnicodeScalar(ns.character(at: i - 1)) {
-        let prev = Character(prevScalar)
-        if prev.isLetter || prev.isNumber { return nil }
-      }
-      return MentionQuery(
-        range: NSRange(location: i, length: caret - i),
-        text: ns.substring(with: NSRange(location: i + 1, length: caret - i - 1)))
-    }
-    if ch == " " || ch == "\n" || ch == "\t" { return nil }
-    i -= 1
-  }
-  return nil
-}
-
-// MARK: - Backward $-query scan (variable autocomplete)
-
-struct VariableQuery { let range: NSRange; let text: String }   // range covers "$query" incl. $
-
-/// Scan backward from the caret for the `$identifier` being typed. nil unless the caret sits right
-/// after `$` + word characters, with `$` not glued to a preceding letter/number/`$` (so `a$b` and
-/// `$$` never trigger) and nothing but identifier chars between `$` and the caret (so `$(` stops).
-func activeVariableQuery(in tv: NSTextView) -> VariableQuery? {
-  let sel = tv.selectedRange()
-  guard sel.length == 0, sel.location > 0 else { return nil }
-  let ns = tv.string as NSString
-  let caret = sel.location
-  var i = caret - 1
-  while i >= 0 {
-    guard let scalar = UnicodeScalar(ns.character(at: i)) else { return nil }
-    let ch = Character(scalar)
-    if ch == "$" {
-      if i > 0, let prevScalar = UnicodeScalar(ns.character(at: i - 1)) {
-        let prev = Character(prevScalar)
-        if prev.isLetter || prev.isNumber || prev == "$" { return nil }
-      }
-      return VariableQuery(
-        range: NSRange(location: i, length: caret - i),
-        text: ns.substring(with: NSRange(location: i + 1, length: caret - i - 1)))
-    }
-    if ch.isLetter || ch.isNumber || ch == "_" { i -= 1; continue }
-    return nil   // a non-identifier, non-`$` char before the caret ⇒ not in a `$word`
-  }
-  return nil
 }

@@ -8,7 +8,7 @@ struct CanvasGraph: Codable {
     var id: String
     /// text, rectangle, ellipse, diamond, line, arrow, freehand, image, equation (text is LaTeX in $$…$$)
     var kind: String
-    /// Serialized plain text with mention tokens preserved (e.g. "@github:…"). Empty for shapes.
+    /// Serialized plain text (Markdown preserved). Empty for bare shapes.
     var text: String
     var x: Double
     var y: Double
@@ -34,6 +34,6 @@ struct CanvasGraph: Codable {
 
   var nodes: [Node]
   var edges: [Edge]
-  /// Node ids top→bottom, then left→right — the order Compile/Copy read the board in.
+  /// Node ids top→bottom, then left→right — the order agents should read the board in.
   var readingOrder: [String]
 }
