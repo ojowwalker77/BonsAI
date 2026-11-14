@@ -12,7 +12,7 @@ import ImageIO
 @MainActor
 final class CardInteraction: ObservableObject, Identifiable {
   let id: UUID
-  // A visible non-editing card only needs its serialized text and drag preview. Keep the
+  // A visible non-editing card only needs its serialized text. Keep the
   // AppKit editor controller lazy so panning across a large board does not allocate one per card.
   lazy var controller = EditorController()
   private var plainTextCache: String
@@ -24,7 +24,6 @@ final class CardInteraction: ObservableObject, Identifiable {
   @Published var text: String
   @Published var count: Int
   @Published var selection = EditorSelection()
-  @Published var dragDelta: CGSize = .zero
 
   init(_ card: CardState) {
     self.id = card.id
@@ -119,12 +118,36 @@ final class BoardViewModel: ObservableObject {
   /// the hairlines never outlive the gesture.
   @Published private(set) var snapGuides: [SnapEngine.Guide] = []
 
+  /// Geometry a live gesture is showing but has not committed. `cards` stays the committed truth
+  /// until mouse-up — undo, persistence and the agent server never see a half-finished drag — while
+  /// the canvas draws `renderedCards`, so moved elements AND every arrow bound to them follow the
+  /// pointer live. This is the only place in-flight geometry lives.
+  struct GesturePreview: Equatable {
+    /// Whole replacement cards: the moved/resized elements plus each connector rerouted to follow.
+    var cards: [UUID: CardState] = [:]
+    /// A text element being corner-scaled previews as a geometric scale of its laid-out text
+    /// (relaying it out at a new font every frame flickered and shed glyphs); the factor lives here.
+    var textScaleFactors: [UUID: CGFloat] = [:]
+
+    var isEmpty: Bool { cards.isEmpty && textScaleFactors.isEmpty }
+  }
+
+  @Published private(set) var gesturePreview = GesturePreview()
+  /// A card whose interactive overlay (the graph point composer) must paint above its neighbours.
+  @Published var floatingCardID: UUID?
+  /// Bumped whenever the working set is replaced wholesale (board switch, reload, undo/redo). A
+  /// pointer gesture that began on an older generation abandons itself instead of moving cards that
+  /// were not under the pointer when it started.
+  private(set) var boardGeneration = 0
+
   private var interactions: [UUID: CardInteraction] = [:]
   private var movePreviewIDs: Set<UUID> = []
   private var movePreviewDelta: CGSize = .zero
-  /// Set by `beginDragDuplicate` so the drag's finishMovePreview joins the duplicate's undo
-  /// checkpoint instead of opening a second one — the whole ⌥-drag gesture is one intention.
-  private var foldNextMoveUndo = false
+  /// The undo step a whole gesture shares (see `beginTransaction`).
+  private var openTransaction: (snapshot: HistorySnapshot, previousSuppressUndo: Bool)?
+  /// Measured checkbox rects per card, in card-local board units, reported by the renderer so the
+  /// one pointer owner can toggle a row without any card-level gesture.
+  private(set) var checkboxFrames: [UUID: [Int: CGRect]] = [:]
   private var nextZ = 1
   private var undoStack: [HistorySnapshot] = []
   private var redoStack: [HistorySnapshot] = []
@@ -247,7 +270,66 @@ final class BoardViewModel: ObservableObject {
   /// `cards` to avoid publishing the whole board on every layout callback, so viewport consumers
   /// must use this accessor rather than reading the persisted frame directly.
   func renderingFrame(for id: UUID) -> CGRect? {
-    liveTextFrames[id] ?? cards.first(where: { $0.id == id })?.frame
+    liveTextFrames[id] ?? gesturePreview.cards[id]?.frame ?? cards.first(where: { $0.id == id })?.frame
+  }
+
+  /// The board as it is drawn right now: committed cards with any in-flight gesture applied.
+  var renderedCards: [CardState] {
+    guard !gesturePreview.cards.isEmpty else { return cards }
+    return cards.map { gesturePreview.cards[$0.id] ?? $0 }
+  }
+
+  func renderedCard(_ id: UUID) -> CardState? {
+    gesturePreview.cards[id] ?? card(id: id)
+  }
+
+  // MARK: Live gesture preview
+
+  /// Show `frames` (board space) for the given cards without committing them, and reroute every
+  /// connector bound to them so arrows follow the drag live.
+  func previewFrames(_ frames: [UUID: CGRect], textScaleFactors: [UUID: CGFloat] = [:]) {
+    var previewed: [UUID: CardState] = [:]
+    for (id, frame) in frames {
+      guard var card = card(id: id) else { continue }
+      card.frame = frame
+      previewed[id] = card
+    }
+    previewReplacing(previewed, textScaleFactors: textScaleFactors)
+  }
+
+  /// Show whole replacement cards (e.g. a connector mid endpoint-drag), rerouting bound arrows.
+  func previewCards(_ replacements: [CardState]) {
+    previewReplacing(Dictionary(replacements.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }),
+                     textScaleFactors: [:])
+  }
+
+  private func previewReplacing(_ replacements: [UUID: CardState], textScaleFactors: [UUID: CGFloat]) {
+    var previewed = replacements
+    let changed = Set(replacements.keys)
+    let followers = cards.filter { card in
+      ConnectorGeometry.isConnector(card) && !changed.contains(card.id) &&
+        ((card.startBindingID.map(changed.contains) ?? false) ||
+         (card.endBindingID.map(changed.contains) ?? false))
+    }
+    if !followers.isEmpty {
+      let live = cards.map { replacements[$0.id] ?? $0 }
+      for connector in followers {
+        if let rerouted = ConnectorGeometry.rerouted(connector, among: live) {
+          previewed[connector.id] = rerouted
+        }
+      }
+    }
+    let next = GesturePreview(cards: previewed, textScaleFactors: textScaleFactors)
+    if next != gesturePreview { gesturePreview = next }
+  }
+
+  func clearGesturePreview() {
+    if !gesturePreview.isEmpty { gesturePreview = GesturePreview() }
+  }
+
+  /// The renderer reports where each checklist checkbox actually landed (card-local board units).
+  func setCheckboxFrames(_ frames: [Int: CGRect], for id: UUID) {
+    if frames.isEmpty { checkboxFrames[id] = nil } else { checkboxFrames[id] = frames }
   }
 
   private func index(for id: UUID) -> Int? {
@@ -380,6 +462,15 @@ final class BoardViewModel: ObservableObject {
     } else {
       currentBoardID = nextBoardID
     }
+    boardGeneration += 1
+    // A gesture can be mid-flight when the board is replaced (⌥⌘] during a drag, a reload): its
+    // undo step and preview belong to the outgoing board, so retire them before anything loads.
+    if let open = openTransaction {
+      openTransaction = nil
+      suppressUndo = open.previousSuppressUndo
+    }
+    clearMovePreview()
+    floatingCardID = nil
     let loaded = store.currentCards
     cards = loaded
     // Fit every text card's HEIGHT to its content at its stored width and font scale — no live
@@ -499,7 +590,11 @@ final class BoardViewModel: ObservableObject {
 
   private func registerUndo(_ snapshot: HistorySnapshot? = nil) {
     guard !isRestoringHistory, !suppressUndo else { return }
-    undoStack.append(snapshot ?? historySnapshot())
+    pushUndo(snapshot ?? historySnapshot())
+  }
+
+  private func pushUndo(_ snapshot: HistorySnapshot) {
+    undoStack.append(snapshot)
     if undoStack.count > maxHistoryDepth { undoStack.removeFirst(undoStack.count - maxHistoryDepth) }
     redoStack.removeAll()
   }
@@ -508,9 +603,45 @@ final class BoardViewModel: ObservableObject {
     registerUndo()
   }
 
+  // MARK: Transactions (one undo step per gesture)
+
+  /// Open one undo step that a whole gesture shares. Every mutation until `commitTransaction`
+  /// folds into it — an ⌥-drag's copies and their move, a graph marker dragged across many points
+  /// — so ⌘Z always reverses exactly one thing the user did. Nested calls are ignored.
+  func beginTransaction() {
+    guard openTransaction == nil, !isRestoringHistory else { return }
+    openTransaction = (historySnapshot(), suppressUndo)
+    suppressUndo = true
+  }
+
+  /// Close the gesture's undo step. A gesture that changed nothing records nothing.
+  func commitTransaction() {
+    guard let open = openTransaction else { return }
+    openTransaction = nil
+    suppressUndo = open.previousSuppressUndo
+    guard !suppressUndo, open.snapshot.cards != snapshot() else { return }
+    pushUndo(open.snapshot)
+  }
+
+  /// Abandon the gesture (Esc mid-drag): put the board back exactly as it was when it began.
+  func cancelTransaction() {
+    guard let open = openTransaction else { return }
+    openTransaction = nil
+    suppressUndo = open.previousSuppressUndo
+    clearGesturePreview()
+    if open.snapshot.cards != snapshot() { restore(open.snapshot) }
+  }
+
+  var hasOpenTransaction: Bool { openTransaction != nil }
+
   private func restore(_ value: HistorySnapshot) {
     isRestoringHistory = true
+    boardGeneration += 1
     freshTextCheckpoints = [:]
+    if let open = openTransaction {
+      openTransaction = nil
+      suppressUndo = open.previousSuppressUndo
+    }
     cards = value.cards
     interactions = [:]
     liveTextFrames = [:]
@@ -1898,9 +2029,12 @@ final class BoardViewModel: ObservableObject {
     primarySelectedCardID = cards.max(by: { $0.z < $1.z })?.id
   }
 
+  /// Marquee selection: elements lying ENTIRELY inside `rect` (Excalidraw), groups expanded, locked
+  /// elements skipped — a locked background never gets swept up by a drag across it.
   func select(in rect: CGRect, extending: Bool = false, toggling: Bool = false) {
     stopEditing()
-    let hits = expandedGroups(Set(cards.filter { $0.frame.intersects(rect) }.map(\.id)))
+    let inside = CanvasHitTester.contained(in: rect, cards: cards.filter { !$0.locked })
+    let hits = expandedGroups(Set(inside.map(\.id)))
     if toggling {
       selectedCardIDs.formSymmetricDifference(hits)
     } else if extending {
@@ -2022,16 +2156,24 @@ final class BoardViewModel: ObservableObject {
     return ids
   }
 
+  /// Arrow-key nudge and programmatic moves: one undo step each.
   func moveSelected(by delta: CGSize) {
     guard !selectedCardIDs.isEmpty, delta != .zero else { return }
     let moving = unlockedIDs(in: selectedCardIDs)
     guard !moving.isEmpty else { return }
+    applyMove(moving, by: delta)
+  }
+
+  /// Translate `ids` as one rigid unit: a lone equation dropped on a graph is absorbed, a connector
+  /// moved away from a target that stayed put detaches from it, and bound arrows re-anchor.
+  private func applyMove(_ ids: Set<UUID>, by delta: CGSize) {
     registerUndo()
-    for i in cards.indices where moving.contains(cards[i].id) {
+    for i in cards.indices where ids.contains(cards[i].id) {
       cards[i].x += Double(delta.width)
       cards[i].y += Double(delta.height)
     }
-    detachBindingsWhoseTargetsDidNotMove(with: moving)
+    absorbMovedEquationIntoTopmostGraphIfNeeded(ids)
+    detachBindingsWhoseTargetsDidNotMove(with: ids)
     refreshBoundConnectors()
     scheduleSave()
   }
@@ -2077,19 +2219,16 @@ final class BoardViewModel: ObservableObject {
   /// passes `8 / zoom`); `0` disables snapping for callers that don't thread a zoom.
   func updateMovePreview(by rawDelta: CGSize, tolerance: CGFloat) {
     let moving = unlockedIDs(in: selectedCardIDs)
-    // A multi-selection can contain locked cards. Preview the unlocked subset even when it has
-    // only one member, because BoardCardView still commits through finishMovePreview for the
-    // original multi-selection.
+    // A multi-selection can contain locked cards: only the unlocked subset moves.
     guard !moving.isEmpty else { return }
-    if movePreviewIDs != moving {
-      clearMovePreview()
-      movePreviewIDs = moving
-    }
+    movePreviewIDs = moving
     let delta = snappedDelta(for: moving, proposed: rawDelta, tolerance: tolerance)
     movePreviewDelta = delta
-    for id in moving {
-      interactions[id]?.dragDelta = delta
+    var frames: [UUID: CGRect] = [:]
+    for card in cards where moving.contains(card.id) {
+      frames[card.id] = card.frame.offsetBy(dx: delta.width, dy: delta.height)
     }
+    previewFrames(frames)
     // finishMovePreview absorbs a lone unlocked equation into the graph under it, so the drop ring
     // must track this path too (it used to light up only for single-card drags — an absorb the
     // affordance never promised). ⌥-drag duplicates also flow through here.
@@ -2099,38 +2238,101 @@ final class BoardViewModel: ObservableObject {
     }
   }
 
-  /// ⌥-drag duplicate, called once when an option-drag leaves the click dead-zone: snapshot the
-  /// board, leave the pressed selection in place (ids and arrow bindings intact), and insert bare
-  /// in-place copies that become the selection — the rest of the drag moves the copies through the
-  /// regular move preview. The paired finishMovePreview folds into this checkpoint, so one undo
-  /// removes the copies and the gesture entirely.
+  /// ⌥-drag duplicate, called once when an option-drag leaves the click dead-zone: open the
+  /// gesture's transaction, leave the pressed selection in place (ids and arrow bindings intact),
+  /// and insert bare in-place copies that become the selection — the rest of the drag moves the
+  /// copies through the regular move preview. `finishMovePreview` closes the transaction, so one
+  /// undo removes the copies and the move together (and cancelling removes the copies).
   func beginDragDuplicate() {
     let source = selectedCardsForClipboard()
     guard !source.isEmpty else { return }
-    registerUndo()
-    let previousSuppressUndo = suppressUndo
-    suppressUndo = true
+    beginTransaction()
     _ = insertCopies(source, offset: .zero)
-    suppressUndo = previousSuppressUndo
-    foldNextMoveUndo = true
   }
 
   func finishMovePreview(commit: Bool) {
     let ids = movePreviewIDs
     let delta = movePreviewDelta
-    let folded = foldNextMoveUndo
-    foldNextMoveUndo = false
     clearMovePreview()
     clearEquationDropTarget()
-    guard commit, !ids.isEmpty, delta != .zero else { return }
-    if !folded { registerUndo() }
-    for i in cards.indices where ids.contains(cards[i].id) {
-      cards[i].x += Double(delta.width)
-      cards[i].y += Double(delta.height)
+    if commit, !ids.isEmpty, delta != .zero { applyMove(ids, by: delta) }
+    if openTransaction != nil {
+      if commit { commitTransaction() } else { cancelTransaction() }
     }
-    absorbMovedEquationIntoTopmostGraphIfNeeded(ids)
+  }
+
+  // MARK: Resize
+
+  /// Commit one resize gesture: every element's new frame (and, for text, its new font scale)
+  /// lands as ONE undo step, then bound arrows re-anchor to the new outlines.
+  func commitResize(frames: [UUID: CGRect], fontScales: [UUID: Double] = [:]) {
+    let ids = Set(frames.keys.filter { id in card(id: id).map { !$0.locked } ?? false })
+    let changed = ids.contains { id in
+      guard let current = card(id: id) else { return false }
+      return current.frame != frames[id] || fontScales[id].map { $0 != (current.fontScale ?? 1) } ?? false
+    }
+    guard changed else { return }
+    registerUndo()
+    for i in cards.indices where ids.contains(cards[i].id) {
+      guard var frame = frames[cards[i].id] else { continue }
+      if !ConnectorGeometry.isConnector(cards[i]) {
+        let minSize = cards[i].minimumSize
+        frame.size = CGSize(width: max(frame.width, minSize.width), height: max(frame.height, minSize.height))
+      }
+      cards[i].frame = frame
+      if let scale = fontScales[cards[i].id], cards[i].elementKind == .text {
+        cards[i].fontScale = abs(scale - 1) < 0.0001 ? nil : scale
+      }
+    }
     detachBindingsWhoseTargetsDidNotMove(with: ids)
     refreshBoundConnectors()
+    scheduleSave()
+  }
+
+  // MARK: Z-order
+
+  enum ZOrderMove { case forward, backward, toFront, toBack }
+
+  /// Excalidraw's layer commands for the selection. Forward/backward step past the next element
+  /// the selection actually overlaps (stepping past an unrelated element far away would look like
+  /// nothing happened); front/back jump to the extremes. One undo step.
+  func reorderSelection(_ move: ZOrderMove) {
+    let selected = selectedCardIDs
+    guard !selected.isEmpty else { return }
+    let order = cards.enumerated()
+      .sorted { $0.element.z != $1.element.z ? $0.element.z < $1.element.z : $0.offset < $1.offset }
+      .map(\.element)
+    let moving = order.filter { selected.contains($0.id) }
+    let rest = order.filter { !selected.contains($0.id) }
+    let reach = CanvasHitTester.unionBounds(of: moving) ?? .null
+
+    var next: [CardState]
+    switch move {
+    case .toFront:
+      next = rest + moving
+    case .toBack:
+      next = moving + rest
+    case .forward:
+      guard let top = order.lastIndex(where: { selected.contains($0.id) }) else { return }
+      let above = order[(top + 1)...].filter { !selected.contains($0.id) }
+      guard let target = above.first(where: { ElementGeometry.bounds(of: $0).intersects(reach) })
+              ?? above.first,
+            let at = rest.firstIndex(where: { $0.id == target.id }) else { return }
+      next = Array(rest[...at]) + moving + Array(rest[(at + 1)...])
+    case .backward:
+      guard let bottom = order.firstIndex(where: { selected.contains($0.id) }) else { return }
+      let below = order[..<bottom].filter { !selected.contains($0.id) }
+      guard let target = below.last(where: { ElementGeometry.bounds(of: $0).intersects(reach) })
+              ?? below.last,
+            let at = rest.firstIndex(where: { $0.id == target.id }) else { return }
+      next = Array(rest[..<at]) + moving + Array(rest[at...])
+    }
+    let ranks = Dictionary(uniqueKeysWithValues: next.enumerated().map { ($0.element.id, $0.offset + 1) })
+    guard cards.contains(where: { ranks[$0.id] != $0.z }),
+          next.map(\.id) != order.map(\.id) else { return }
+    registerUndo()
+    for i in cards.indices { cards[i].z = ranks[cards[i].id] ?? cards[i].z }
+    nextZ = cards.count + 1
     scheduleSave()
   }
 
@@ -2244,11 +2446,9 @@ final class BoardViewModel: ObservableObject {
   }
 
   private func clearMovePreview() {
-    for id in movePreviewIDs {
-      interactions[id]?.dragDelta = .zero
-    }
     movePreviewIDs = []
     movePreviewDelta = .zero
+    clearGesturePreview()
     // Guides belong to a live drag only — every commit/cancel/clear routes through here, so this is
     // the one place that guarantees the hairlines vanish the instant the gesture ends.
     if !snapGuides.isEmpty { snapGuides = [] }

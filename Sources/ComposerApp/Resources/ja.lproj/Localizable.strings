@@ -172,6 +172,10 @@
 "Make line" = "線にする";
 "Make rectangle" = "長方形にする";
 "Navigate boards" = "ボードを移動";
+"Edit selection" = "選択を編集";
+"Nudge selection" = "選択を微調整";
+"Bring forward / send backward" = "前面へ / 背面へ";
+"Bring to front / send to back" = "最前面へ / 最背面へ";
 "Nothing to export" = "エクスポートするものがありません";
 "ON THE BOARD" = "ボード上";
 "Opening Composer's on-disk board storage" = "Composer のディスク上ボードストレージを開いています";

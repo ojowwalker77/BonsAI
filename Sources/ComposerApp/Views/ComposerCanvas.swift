@@ -36,6 +36,8 @@ struct ComposerCanvas: View {
   /// fires for external content).
   @State private var isImageDropTargeted = false
   @State private var drawingDraftState = CanvasDrawingDraftState()
+  /// A quick-connect drag's rubber band (viewport space), its connector kind, and its bind target.
+  @State private var connectorDraft: QuickConnectDraft?
   /// While drawing a line/arrow, the card its live end will bind to on release — highlighted so the
   /// bind is visible before commit. Shares `board.bindCandidate` with the commit path, so the
   /// preview and the actual binding can never disagree.
@@ -147,6 +149,13 @@ struct ComposerCanvas: View {
   }
 
   private var effectiveScale: CGFloat { scale }
+
+  /// The board ⇄ viewport transform as drawn right now (a live space-pan included). Every
+  /// conversion on the canvas goes through this one value.
+  private var viewport: CanvasViewport {
+    CanvasViewport(scale: scale, pan: CGSize(width: pan.width + panLive.width,
+                                             height: pan.height + panLive.height))
+  }
 
   var body: some View {
     GeometryReader { proxy in canvasRoot(proxy: proxy) }
@@ -302,6 +311,17 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerUngroupSelection)) { _ in handleUngroupSelection() }
       .onReceive(NotificationCenter.default.publisher(for: .composerLockSelection)) { _ in handleLockSelection() }
       .onReceive(NotificationCenter.default.publisher(for: .composerUnlockSelection)) { _ in handleUnlockSelection() }
+      .onReceive(NotificationCenter.default.publisher(for: .composerNudgeSelection)) { note in
+        let dx = (note.userInfo?["dx"] as? CGFloat) ?? 0
+        let dy = (note.userInfo?["dy"] as? CGFloat) ?? 0
+        if canEditBoard, !showPalette { board.moveSelected(by: CGSize(width: dx, height: dy)) }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .composerReorderSelection)) { note in
+        if canEditBoard, !showPalette, let move = note.userInfo?["move"] as? BoardViewModel.ZOrderMove {
+          board.reorderSelection(move)
+        }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .composerEditSelection)) { _ in handleEditSelection() }
   }
 
   private var zoomCommandBridge: some View {
@@ -350,12 +370,12 @@ struct ComposerCanvas: View {
   private func boardContent(viewportSize: CGSize) -> some View {
     ZStack(alignment: .topLeading) {
       BoardViewportInput(
+        board: board,
+        viewport: viewport,
         tool: tool,
         isSpacePressed: isSpacePressed,
+        selectCallbacks: selectGestureCallbacks,
         onTap: handleTap,
-        onDoubleTap: handleDoubleTap,
-        onSelectionChanged: { rect in selectionRect = rect; if promotion != nil { dismissPromotion() } },
-        onSelectionEnded: selectCards(inViewportRect:modifiers:),
         onFreehandChanged: { freehandDraft = $0; if promotion != nil { dismissPromotion() } },
         onFreehandEnded: commitFreehandDraft,
         onVectorNodeChanged: updateVectorNode,
@@ -394,12 +414,11 @@ struct ComposerCanvas: View {
         board: board,
         selectedCardIDs: board.selectedCardIDs,
         editingCardID: board.editingCardID,
-        primarySelectedCardID: board.primarySelectedCardID,
         scale: effectiveScale,
-        // Only the select tool may grab a card. In a drawing tool the card is click-through, so a
-        // drag that starts over it draws a new element instead of selecting/moving the card.
         selectable: tool == .select,
-        equationDropTargetID: board.equationDropTargetID
+        equationDropTargetID: board.equationDropTargetID,
+        textScaleFactors: board.gesturePreview.textScaleFactors,
+        floatingCardID: board.floatingCardID
       )
       .equatable()
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -408,7 +427,9 @@ struct ComposerCanvas: View {
       // Only `pan` translates the whole layer; the scale lives inside the cards now.
       .offset(x: pan.width + panLive.width, y: pan.height + panLive.height)
 
+      SelectionOverlay(chrome: selectionChrome, onDelete: { handleDeleteSelection() })
       selectionRectView
+      connectorDraftView
       freehandDraftView
       vectorDraftView
       elementDraftView
@@ -431,6 +452,43 @@ struct ComposerCanvas: View {
         onDrop: handleImageFileDrop
       )
     )
+  }
+
+  /// The one selection box, laid out from the board as currently drawn.
+  private var selectionChrome: SelectionChrome {
+    let selected = board.renderedCards.filter { board.selectedCardIDs.contains($0.id) }
+    return SelectionChrome.resolve(selected: selected, editingID: board.editingCardID,
+                                   viewport: viewport, interactive: tool == .select)
+  }
+
+  private var selectGestureCallbacks: CanvasSelectGesture.Callbacks {
+    CanvasSelectGesture.Callbacks(
+      marqueeChanged: { rect in selectionRect = rect },
+      doubleClickedEmpty: handleDoubleTap,
+      connectorDraftChanged: { segment, kind, target in
+        connectorDraft = segment.map { QuickConnectDraft(segment: $0, kind: kind, targetID: target) }
+      },
+      openPointComposer: { id, seed in
+        NotificationCenter.default.post(name: .composerAddGraphPoint, object: id, userInfo: ["point": seed])
+      },
+      pressed: { if promotion != nil { dismissPromotion() } })
+  }
+
+  /// A quick-connect drag: the rubber-band connector plus a ring on the card it would bind to.
+  @ViewBuilder
+  private var connectorDraftView: some View {
+    if let draft = connectorDraft {
+      if let target = draft.targetID, let card = board.cards.first(where: { $0.id == target }) {
+        let rect = viewport.viewportRect(card.frame)
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .strokeBorder(Theme.Palette.accent.opacity(0.8), lineWidth: 2)
+          .frame(width: rect.width, height: rect.height)
+          .position(x: rect.midX, y: rect.midY)
+          .allowsHitTesting(false)
+      }
+      ElementDraftPreview(kind: draft.kind, start: draft.segment.start, end: draft.segment.end)
+        .allowsHitTesting(false)
+    }
   }
 
   /// The drop-target treatment shown while an external image drag hovers the canvas: a dashed
@@ -478,11 +536,7 @@ struct ComposerCanvas: View {
       // stays crisp on top. The card frame is mapped into viewport space with the exact card-layer
       // transform (frame × scale, offset by pan + panLive), so the ring lines up with the card.
       if let target = bindTargetID, let card = board.cards.first(where: { $0.id == target }) {
-        let rect = CGRect(
-          x: card.frame.minX * effectiveScale + pan.width + panLive.width,
-          y: card.frame.minY * effectiveScale + pan.height + panLive.height,
-          width: card.frame.width * effectiveScale,
-          height: card.frame.height * effectiveScale)
+        let rect = viewport.viewportRect(card.frame)
         RoundedRectangle(cornerRadius: 8, style: .continuous)
           .strokeBorder(Theme.Palette.accent.opacity(0.8), lineWidth: 2)
           .frame(width: rect.width, height: rect.height)
@@ -603,21 +657,17 @@ struct ComposerCanvas: View {
     return Color(nsColor: Theme.flavor.tints[slot])
   }
 
-  /// A tap on empty board: place a card (Text tool) or clear selection (Select tool).
+  /// A click with a placement tool: drop that element at the click. (Select-tool clicks belong
+  /// to `CanvasSelectGesture`.)
   private func handleTap(at point: CGPoint, modifiers: EventModifiers) {
-    if tool == .select {
-      if !modifiers.contains(.shift), !modifiers.contains(.command) { board.deselectAll() }
-      return
-    }
+    guard tool != .select else { return }
 
     guard let kind = tool.elementKind else { return }
     // A bare click with a line/arrow/freehand tool places nothing (no default diagonal shape drops
     // out of nowhere) and keeps the tool active so the next drag draws. Only box shapes and text
     // are click-to-place; lines are drawn by dragging start→end.
     if kind == .line || kind == .arrow || kind == .freehand || kind == .vectorPath { return }
-    let boardPoint = CGPoint(x: (point.x - pan.width) / effectiveScale,
-                             y: (point.y - pan.height) / effectiveScale)
-    let id = board.addElement(kind, at: boardPoint)
+    let id = board.addElement(kind, at: viewport.boardPoint(point))
     tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
     // Editing state is established synchronously so navigation cannot race the stage's own focus
     // delay and persist an abandoned structured card before its editor mounts.
@@ -745,22 +795,6 @@ struct ComposerCanvas: View {
     vectorDraft = nil
     guard board.addVectorPath(placement) != nil else { return }
     tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
-  }
-
-  private func selectCards(inViewportRect rect: CGRect, modifiers: EventModifiers) {
-    defer { selectionRect = nil }
-    let s = max(effectiveScale, 0.01)
-    let boardRect = CGRect(
-      x: (rect.minX - pan.width) / s,
-      y: (rect.minY - pan.height) / s,
-      width: rect.width / s,
-      height: rect.height / s
-    )
-    board.select(
-      in: boardRect,
-      extending: modifiers.contains(.shift),
-      toggling: modifiers.contains(.command)
-    )
   }
 
   // MARK: Floating chrome
@@ -1481,7 +1515,6 @@ struct ComposerCanvas: View {
 
   /// Board zoom is clamped to 10%–400% (Fit applies its own ≤100% cap so it never enlarges). The
   /// low end lets Fit frame a large board; the dot grid thins itself to stay inside its budget.
-  private func clampZoom(_ value: CGFloat) -> CGFloat { min(max(value, 0.1), 4) }
 
   private var viewportCenter: CGPoint {
     CGPoint(x: lastViewportSize.width / 2, y: lastViewportSize.height / 2)
@@ -1516,18 +1549,11 @@ struct ComposerCanvas: View {
   /// Change the zoom while keeping the board point under `point` fixed on screen.
   private func setScale(_ target: CGFloat, anchoredAt point: CGPoint) {
     guard allowViewportTransform() else { return }
-    let oldScale = max(scale, 0.01)
-    let nextScale = clampZoom(target)
-    guard nextScale != scale else { return }
-    let boardPoint = CGPoint(
-      x: (point.x - pan.width) / oldScale,
-      y: (point.y - pan.height) / oldScale
-    )
-    scale = nextScale
-    pan = CGSize(
-      width: point.x - boardPoint.x * nextScale,
-      height: point.y - boardPoint.y * nextScale
-    )
+    let current = CanvasViewport(scale: scale, pan: pan)
+    let next = current.zoomed(to: target, anchoredAt: point)
+    guard next.scale != scale else { return }
+    scale = next.scale
+    pan = next.pan
   }
 
   private func handleScroll(_ delta: CGSize) {
@@ -1557,16 +1583,8 @@ struct ComposerCanvas: View {
   }
 
   private func visibleCards(in viewportSize: CGSize) -> [CardState] {
-    let margin: CGFloat = 240
-    let s = max(effectiveScale, 0.01)
-    let currentPan = CGSize(width: pan.width + panLive.width, height: pan.height + panLive.height)
-    let visible = CGRect(
-      x: (-currentPan.width / s) - margin,
-      y: (-currentPan.height / s) - margin,
-      width: (viewportSize.width / s) + margin * 2,
-      height: (viewportSize.height / s) + margin * 2
-    )
-    return board.cards.filter {
+    let visible = viewport.visibleBoardRect(in: viewportSize, margin: 240)
+    return board.renderedCards.filter {
       $0.frame.intersects(visible) ||
       board.selectedCardIDs.contains($0.id) ||
       board.editingCardID == $0.id
@@ -1581,16 +1599,14 @@ struct ComposerCanvas: View {
     let selected = forceAll ? [] : board.cards.filter { board.selectedCardIDs.contains($0.id) }
     let target = selected.isEmpty ? board.cards : selected
     guard !target.isEmpty else { scale = 1; pan = .zero; return }
-    let minX = target.map(\.x).min() ?? 0
-    let minY = target.map(\.y).min() ?? 0
-    let maxX = target.map { $0.x + $0.w }.max() ?? Double(size.width)
-    let maxY = target.map { $0.y + $0.h }.max() ?? Double(size.height)
-    let contentW = max(maxX - minX, 1), contentH = max(maxY - minY, 1)
+    guard let content = CanvasHitTester.unionBounds(of: target) else { return }
     let margin: CGFloat = 40
     let avail = CGSize(width: max(size.width - 2 * margin, 1), height: max(size.height - 2 * margin, 1))
-    let s = clampZoom(min(avail.width / contentW, avail.height / contentH, 1))
+    let s = CanvasViewport.clampScale(
+      min(avail.width / max(content.width, 1), avail.height / max(content.height, 1), 1))
     scale = s
-    pan = CGSize(width: margin - CGFloat(minX) * s, height: margin - CGFloat(minY) * s)
+    // Centre the content in the viewport (it used to pin to the top-left margin).
+    pan = CGSize(width: size.width / 2 - content.midX * s, height: size.height / 2 - content.midY * s)
   }
 
   /// Keyboard and menu reset commands obey the same pointer-ownership gate as wheel/pinch input.
@@ -1658,6 +1674,7 @@ struct ComposerCanvas: View {
   private func handlePasteSelection() { if canEditBoard { pasteSelectedCards() } }
   private func handleSelectAllCards() { if canEditBoard { board.selectAll() } }
   private func handleEscapeBoard() {
+    guard CanvasKeyState.shared.viewportDragMode != .manipulating else { return }
     guard !escapeHandledThisTurn else { return }
     escapeHandledThisTurn = true
     DispatchQueue.main.async { escapeHandledThisTurn = false }
@@ -1724,6 +1741,20 @@ struct ComposerCanvas: View {
       return
     }
   }
+  /// Enter edits the lone selected element (Excalidraw); with the pen it finishes the open path.
+  private func handleEditSelection() {
+    guard canEditBoard, !showPalette else { return }
+    if tool == .vectorPen {
+      commitOpenVectorDraft()
+      return
+    }
+    guard board.editingCardID == nil, board.selectedCardIDs.count == 1,
+          let id = board.selectedCardIDs.first,
+          let card = board.cards.first(where: { $0.id == id }),
+          !card.locked, card.elementKind.supportsEditing else { return }
+    board.beginEditing(id)
+  }
+
   private func handleUndoBoard() { if canEditBoard { dismissPromotion(); board.undo() } }
   private func handleRedoBoard() { if canEditBoard { dismissPromotion(); board.redo() } }
   private func handleGroupSelection() { if canEditBoard { board.groupSelection() } }
@@ -2166,8 +2197,7 @@ struct ComposerCanvas: View {
 
 
   private func boardPoint(forViewport point: CGPoint) -> CGPoint {
-    CGPoint(x: (point.x - pan.width) / effectiveScale,
-            y: (point.y - pan.height) / effectiveScale)
+    viewport.boardPoint(point)
   }
 
   private enum ImageInput {
@@ -2298,19 +2328,14 @@ final class ViewportEventThrottle {
 
 // MARK: - Native viewport input
 
-/// Shared, view-independent latch for the space-to-pan key. The board's viewport input owns the
-/// notification-driven state, but a card's own pointer catcher sits ABOVE the viewport in the card
-/// layer, so it must consult the same latch to know when to fall through — otherwise space-pan dies
-/// anywhere a card sits. AppKit re-creates neither NSView on a space press, so a plain singleton
-/// they both poll (in `hitTest` / `mouseDown`) keeps them in lockstep. The window resets it on
-/// losing key so a space held while focus leaves doesn't stick the board in pan mode.
-///
-/// Not `@MainActor`: it's a single `Bool` mutated and read only on the main thread (from
-/// notification handlers and AppKit's `hitTest`/`mouseDown`), and staying nonisolated lets the
-/// AppKit NSView overrides poll it without concurrency ceremony.
+/// What the board's one pointer owner is doing with the current press. Mirrored into
+/// `CanvasKeyState` so the board-wide pinch monitor and the scroll throttle can refuse to move the
+/// viewport out from under a draft whose transform was captured at press time.
 enum CanvasViewportDragMode: Equatable {
   case maybeTap
   case selecting
+  /// The Select tool's pointer controller owns this press (select, move, resize, marquee…).
+  case manipulating
   case drawing
   case vectorPress
   case vectorDrawing
@@ -2357,7 +2382,7 @@ enum CanvasViewportTransformPolicy {
   static func allowsPanOrZoom(during mode: CanvasViewportDragMode) -> Bool {
     switch mode {
     case .drawing, .vectorPress, .vectorDrawing, .placing: false
-    case .maybeTap, .selecting, .panning: true
+    case .maybeTap, .selecting, .manipulating, .panning: true
     }
   }
 }
@@ -2373,6 +2398,9 @@ enum CanvasPointerPressMode {
   }
 }
 
+/// Shared latch the window-level key routing, the pinch monitor and the input view all read. Not
+/// `@MainActor`: it is mutated and read only on the main thread (notification handlers and AppKit
+/// overrides), and staying nonisolated lets AppKit callbacks poll it without ceremony.
 final class CanvasKeyState: @unchecked Sendable {
   static let shared = CanvasKeyState()
   private init() {}
@@ -2381,12 +2409,12 @@ final class CanvasKeyState: @unchecked Sendable {
 }
 
 private struct BoardViewportInput: NSViewRepresentable {
+  let board: BoardViewModel
+  let viewport: CanvasViewport
   let tool: CanvasTool
   let isSpacePressed: Bool
+  let selectCallbacks: CanvasSelectGesture.Callbacks
   let onTap: (CGPoint, EventModifiers) -> Void
-  let onDoubleTap: (CGPoint) -> Void
-  let onSelectionChanged: (CGRect?) -> Void
-  let onSelectionEnded: (CGRect, EventModifiers) -> Void
   let onFreehandChanged: ([CGPoint]?) -> Void
   let onFreehandEnded: ([CGPoint]) -> Void
   let onVectorNodeChanged: (CGPoint, CGPoint) -> Void
@@ -2402,7 +2430,7 @@ private struct BoardViewportInput: NSViewRepresentable {
   let onZoom: (CGFloat, CGPoint) -> Void
 
   func makeNSView(context: Context) -> InputView {
-    let view = InputView()
+    let view = InputView(board: board)
     view.state = state
     return view
   }
@@ -2413,12 +2441,11 @@ private struct BoardViewportInput: NSViewRepresentable {
 
   private var state: InputView.State {
     InputView.State(
+      viewport: viewport,
       tool: tool,
       isSpacePressed: isSpacePressed,
+      selectCallbacks: selectCallbacks,
       onTap: onTap,
-      onDoubleTap: onDoubleTap,
-      onSelectionChanged: onSelectionChanged,
-      onSelectionEnded: onSelectionEnded,
       onFreehandChanged: onFreehandChanged,
       onFreehandEnded: onFreehandEnded,
       onVectorNodeChanged: onVectorNodeChanged,
@@ -2435,14 +2462,16 @@ private struct BoardViewportInput: NSViewRepresentable {
     )
   }
 
+  /// The board's single pointer owner. Every press on the canvas lands here — cards are
+  /// render-only — and is routed once: Select-tool presses to `CanvasSelectGesture`, drawing tools
+  /// to their drafts, Space-drag to panning.
   final class InputView: NSView {
     struct State {
+      var viewport = CanvasViewport()
       var tool: CanvasTool = .select
       var isSpacePressed = false
+      var selectCallbacks = CanvasSelectGesture.Callbacks()
       var onTap: (CGPoint, EventModifiers) -> Void = { _, _ in }
-      var onDoubleTap: (CGPoint) -> Void = { _ in }
-      var onSelectionChanged: (CGRect?) -> Void = { _ in }
-      var onSelectionEnded: (CGRect, EventModifiers) -> Void = { _, _ in }
       var onFreehandChanged: ([CGPoint]?) -> Void = { _ in }
       var onFreehandEnded: ([CGPoint]) -> Void = { _ in }
       var onVectorNodeChanged: (CGPoint, CGPoint) -> Void = { _, _ in }
@@ -2460,11 +2489,18 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     var state = State() {
       didSet {
+        selectGesture.callbacks = state.selectCallbacks
         if state.isSpacePressed != oldValue.isSpacePressed || state.tool != oldValue.tool {
           window?.invalidateCursorRects(for: self)
         }
+        // The board panned or zoomed under a live drag: keep the grabbed element under the pointer.
+        // Deferred out of SwiftUI's view update, which must not publish state of its own.
+        if state.viewport != oldValue.viewport {
+          DispatchQueue.main.async { [weak self] in self?.selectGesture.viewportChanged() }
+        }
       }
     }
+    private let selectGesture: CanvasSelectGesture
     private var dragStart: CGPoint?
     private var dragModifiers: EventModifiers = []
     /// Refresh the cursor whenever the drag mode changes, so the open-hand grab flips to a closed
@@ -2489,11 +2525,16 @@ private struct BoardViewportInput: NSViewRepresentable {
     private var draftCancelled = false
     private var escapeObserver: NSObjectProtocol?
     private var pointerTrackingArea: NSTrackingArea?
+    /// The cursor last set for Select hover, so it is only set when it changes — and re-set after
+    /// another view (a text field's I-beam) took the pointer.
+    private var lastHoverCursor: CanvasHoverCursor?
 
-    override init(frame frameRect: NSRect) {
-      super.init(frame: frameRect)
-      // Esc while drawing abandons the in-flight shape/freehand: drop this drag so the pending
-      // mouse-up can't commit it. The canvas clears its preview state on the same notification.
+    init(board: BoardViewModel) {
+      selectGesture = CanvasSelectGesture(board: board, viewport: { CanvasViewport() })
+      super.init(frame: .zero)
+      selectGesture.viewport = { [weak self] in self?.state.viewport ?? CanvasViewport() }
+      // Esc mid-gesture abandons it: drop this drag so the pending mouse-up can't commit it. The
+      // canvas clears its own preview state on the same notification.
       escapeObserver = NotificationCenter.default.addObserver(
         forName: .composerEscapeBoard, object: nil, queue: .main
       ) { [weak self] _ in
@@ -2521,9 +2562,13 @@ private struct BoardViewportInput: NSViewRepresentable {
       pointerTrackingArea = area
     }
 
-    /// Abandon a placing/freehand drag in progress (Esc). Leaves the mode intact so the eventual
-    /// mouse-up still tears the gesture down cleanly, but flags it so nothing is committed.
+    /// Abandon the gesture in progress (Esc). Leaves the mode intact so the eventual mouse-up still
+    /// tears the gesture down cleanly, but flags it so nothing is committed.
     private func cancelActiveDraft() {
+      if dragMode == .manipulating {
+        selectGesture.cancel()
+        return
+      }
       guard dragMode == .placing || dragMode == .drawing || dragMode == .vectorPress
               || dragMode == .vectorDrawing else { return }
       draftCancelled = true
@@ -2535,23 +2580,82 @@ private struct BoardViewportInput: NSViewRepresentable {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
+    /// Torn down mid-gesture (a theme rebuild): abandon the gesture so no preview or open undo
+    /// step outlives the view that owned it.
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if window == nil {
+        selectGesture.cancel()
+        CanvasPointerHover.shared.boardPoint = nil
+      }
+    }
+
+    private var selectGestureOwnsPointer: Bool { state.tool == .select && !state.isSpacePressed }
+
+    /// Whether the pointer is over the bare canvas rather than a view floating above it (a field,
+    /// a pill, an editor). The tracking area reports moves everywhere in the visible rect.
+    private func pointerIsOverCanvas(_ event: NSEvent) -> Bool {
+      guard let content = window?.contentView else { return false }
+      let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+      return content.hitTest(point) === self
+    }
+
     override func mouseMoved(with event: NSEvent) {
-      guard state.tool == .vectorPen, !state.isSpacePressed else { return }
-      state.onVectorHoverChanged(convert(event.locationInWindow, from: nil))
+      let point = convert(event.locationInWindow, from: nil)
+      let overCanvas = pointerIsOverCanvas(event)
+      CanvasPointerHover.shared.boardPoint = overCanvas ? state.viewport.boardPoint(point) : nil
+      if state.tool == .vectorPen, !state.isSpacePressed {
+        state.onVectorHoverChanged(point)
+        return
+      }
+      guard selectGestureOwnsPointer, overCanvas else {
+        lastHoverCursor = nil
+        return
+      }
+      let hover = selectGesture.hover(at: point)
+      guard hover != lastHoverCursor else { return }
+      lastHoverCursor = hover
+      Self.cursor(for: hover).set()
     }
 
     override func mouseExited(with event: NSEvent) {
+      CanvasPointerHover.shared.boardPoint = nil
+      lastHoverCursor = nil
       if state.tool == .vectorPen { state.onVectorHoverChanged(nil) }
     }
 
     // Cursor feedback for the current mode: a closed grab while actually panning (space + drag), an
     // open grab while space is merely held (pan is armed), and a crosshair for every drawing tool so
-    // the canvas reads as "ready to place". Select tool with no space held keeps the arrow.
+    // the canvas reads as "ready to place". Select uses live hover feedback from `mouseMoved`.
     override func resetCursorRects() {
       if state.isSpacePressed {
         addCursorRect(bounds, cursor: dragMode == .panning ? .closedHand : .openHand)
       } else if state.tool.elementKind != nil {
         addCursorRect(bounds, cursor: .crosshair)
+      }
+    }
+
+    private static func cursor(for hover: CanvasHoverCursor) -> NSCursor {
+      switch hover {
+      case .arrow: return .arrow
+      case .endpoint: return .crosshair
+      case .port: return .pointingHand
+      case .resize(let handle):
+        switch handle {
+        case .left, .right: return .resizeLeftRight
+        case .top, .bottom: return .resizeUpDown
+        default:
+          if #available(macOS 15.0, *) {
+            let position: NSCursor.FrameResizePosition = switch handle {
+            case .topLeft: .topLeft
+            case .topRight: .topRight
+            case .bottomLeft: .bottomLeft
+            default: .bottomRight
+            }
+            return NSCursor.frameResize(position: position, directions: .all)
+          }
+          return .crosshair
+        }
       }
     }
 
@@ -2565,9 +2669,15 @@ private struct BoardViewportInput: NSViewRepresentable {
       lastPan = .zero
       freehandPoints = []
       draftCancelled = false
+      if selectGestureOwnsPointer {
+        dragMode = .manipulating
+        // A double-click only means "edit / type here" when the sequence began with Select.
+        let clicks = firstClickTool == .select ? event.clickCount : 1
+        selectGesture.press(at: point, modifiers: dragModifiers, clickCount: clicks)
+        return
+      }
       dragMode = CanvasPointerPressMode.resolve(
         tool: state.tool, isSpacePressed: state.isSpacePressed)
-      state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
       state.onElementDraftCancelled()
       if state.tool == .vectorPen, !state.isSpacePressed {
@@ -2577,16 +2687,18 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     override func mouseDragged(with event: NSEvent) {
       guard let start = dragStart else { return }
-      // Esc cancelled this placing/freehand drag — ignore the rest of it until mouse-up.
-      if draftCancelled { lastDragPoint = convert(event.locationInWindow, from: nil); return }
       let point = convert(event.locationInWindow, from: nil)
+      if dragMode == .manipulating {
+        selectGesture.drag(to: point, modifiers: EventModifiers(event.modifierFlags))
+        return
+      }
+      // Esc cancelled this placing/freehand drag — ignore the rest of it until mouse-up.
+      if draftCancelled { lastDragPoint = point; return }
       let delta = CGSize(width: point.x - start.x, height: point.y - start.y)
       let distance = hypot(delta.width, delta.height)
 
       if (dragMode == .maybeTap || dragMode == .vectorPress), distance >= 4 {
-        if state.tool == .select {
-          dragMode = .selecting
-        } else if state.tool == .freehand {
+        if state.tool == .freehand {
           dragMode = .drawing
           freehandPoints = [start]
           state.onFreehandChanged(freehandPoints)
@@ -2596,15 +2708,12 @@ private struct BoardViewportInput: NSViewRepresentable {
           dragMode = .placing
         }
         // Click-to-place tools (text, equation, sticky, checklist, table) stay a tap however far
-        // the press wanders and place at the press point on mouse-up — a slightly moved click used
-        // to pan the board instead. Panning is Space-drag or scroll.
+        // the press wanders and place at the press point on mouse-up. Panning is Space-drag or scroll.
       }
 
       switch dragMode {
-      case .maybeTap, .vectorPress:
+      case .maybeTap, .vectorPress, .selecting, .manipulating:
         break
-      case .selecting:
-        state.onSelectionChanged(Self.normalizedRect(from: start, to: point))
       case .drawing:
         if freehandPoints.last.map({ hypot($0.x - point.x, $0.y - point.y) >= 1.5 }) ?? true {
           freehandPoints.append(point)
@@ -2638,10 +2747,12 @@ private struct BoardViewportInput: NSViewRepresentable {
       return end
     }
 
-    /// Pressing/releasing Shift mid-drag updates the draft immediately, without waiting for the
-    /// next mouse movement.
+    /// Pressing/releasing Shift or ⌥ mid-drag updates the gesture immediately, without waiting for
+    /// the next mouse movement.
     override func flagsChanged(with event: NSEvent) {
-      if dragMode == .placing, let start = dragStart, let current = lastDragPoint {
+      if dragMode == .manipulating {
+        selectGesture.modifiersChanged(EventModifiers(event.modifierFlags))
+      } else if dragMode == .placing, let start = dragStart, let current = lastDragPoint {
         state.onElementDraftChanged(start, constrained(current, from: start, flags: event.modifierFlags))
       }
       super.flagsChanged(with: event)
@@ -2650,6 +2761,11 @@ private struct BoardViewportInput: NSViewRepresentable {
     override func mouseUp(with event: NSEvent) {
       guard let start = dragStart else { return }
       let point = convert(event.locationInWindow, from: nil)
+      if dragMode == .manipulating {
+        selectGesture.release(at: point, modifiers: EventModifiers(event.modifierFlags))
+        resetDragState()
+        return
+      }
       let delta = CGSize(width: point.x - start.x, height: point.y - start.y)
       let distance = hypot(delta.width, delta.height)
 
@@ -2661,20 +2777,11 @@ private struct BoardViewportInput: NSViewRepresentable {
       }
 
       switch dragMode {
-      case .maybeTap, .vectorPress:
+      case .maybeTap, .vectorPress, .selecting, .manipulating:
         if state.tool == .vectorPen {
           state.onVectorNodeEnded(start, start)
-        } else if dragClickCount >= 2 {
-          if firstClickTool == .select { state.onDoubleTap(start) }
-        } else {
+        } else if dragClickCount < 2 {
           state.onTap(start, dragModifiers)
-        }
-      case .selecting:
-        if distance < 5 {
-          state.onSelectionChanged(nil)
-          state.onTap(start, dragModifiers)
-        } else {
-          state.onSelectionEnded(Self.normalizedRect(from: start, to: point), dragModifiers)
         }
       case .drawing:
         if freehandPoints.last != point { freehandPoints.append(point) }
@@ -2705,14 +2812,14 @@ private struct BoardViewportInput: NSViewRepresentable {
       freehandPoints = []
       lastDragPoint = nil
       draftCancelled = false
-      state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
     }
 
     override func scrollWheel(with event: NSEvent) {
       // Panning mid-draw would shift the board out from under a draft whose start point was captured
       // at the old pan, so the committed shape lands away from the preview. Swallow scroll-pan while
-      // a shape/freehand drag is live; two-finger pan resumes the moment the draw ends.
+      // a shape/freehand drag is live; two-finger pan resumes the moment the draw ends. Moving and
+      // resizing re-resolve the pointer in board space, so they keep scrolling live.
       guard CanvasViewportTransformPolicy.allowsPanOrZoom(during: dragMode) else { return }
       switch CanvasScrollInput(event) {
       case .pan(let delta): state.onScroll(delta)
@@ -2726,15 +2833,6 @@ private struct BoardViewportInput: NSViewRepresentable {
         return
       }
       super.keyDown(with: event)
-    }
-
-    private static func normalizedRect(from start: CGPoint, to end: CGPoint) -> CGRect {
-      CGRect(
-        x: min(start.x, end.x),
-        y: min(start.y, end.y),
-        width: abs(end.x - start.x),
-        height: abs(end.y - start.y)
-      )
     }
   }
 }
@@ -2777,17 +2875,6 @@ private extension URL {
       return NSImage.imageTypes.contains { UTType($0)?.preferredFilenameExtension == pathExtension.lowercased() }
     }
     return NSImage.imageTypes.contains { UTType($0).map { type.conforms(to: $0) } ?? false }
-  }
-}
-
-private extension EventModifiers {
-  init(_ flags: NSEvent.ModifierFlags) {
-    var modifiers: EventModifiers = []
-    if flags.contains(.shift) { modifiers.insert(.shift) }
-    if flags.contains(.command) { modifiers.insert(.command) }
-    if flags.contains(.option) { modifiers.insert(.option) }
-    if flags.contains(.control) { modifiers.insert(.control) }
-    self = modifiers
   }
 }
 
@@ -2890,21 +2977,25 @@ struct BoardCardLayer: View, Equatable {
   let board: BoardViewModel
   let selectedCardIDs: Set<UUID>
   let editingCardID: UUID?
-  let primarySelectedCardID: UUID?
   let scale: CGFloat
   let selectable: Bool
   /// The graph card a parseable equation is currently dragged over (its accent drop-ring). Included
   /// in `==` so the ring appears/clears mid-drag even though nothing in `cards` changes.
   let equationDropTargetID: UUID?
+  /// Text elements mid corner-scale (see `BoardViewModel.GesturePreview`).
+  let textScaleFactors: [UUID: CGFloat]
+  /// A card whose interactive overlay is open (a graph's point composer) and must stay on top.
+  var floatingCardID: UUID? = nil
 
   static func == (lhs: BoardCardLayer, rhs: BoardCardLayer) -> Bool {
     lhs.cards == rhs.cards &&
       lhs.selectedCardIDs == rhs.selectedCardIDs &&
       lhs.editingCardID == rhs.editingCardID &&
-      lhs.primarySelectedCardID == rhs.primarySelectedCardID &&
       lhs.scale == rhs.scale &&
       lhs.selectable == rhs.selectable &&
-      lhs.equationDropTargetID == rhs.equationDropTargetID
+      lhs.equationDropTargetID == rhs.equationDropTargetID &&
+      lhs.textScaleFactors == rhs.textScaleFactors &&
+      lhs.floatingCardID == rhs.floatingCardID
   }
 
   var body: some View {
@@ -2917,9 +3008,14 @@ struct BoardCardLayer: View, Equatable {
           isEditing: editingCardID == card.id,
           scale: scale,
           board: board,
-          selectable: selectable
+          selectable: selectable,
+          textPreviewScale: textScaleFactors[card.id] ?? 1
         )
-        .zIndex(Double(card.z) + (primarySelectedCardID == card.id ? 10_000 : 0))
+        // Paint order is the board's z-order: selecting an element never lifts it above the
+        // elements covering it (the old +10 000 selection lift reordered the board on every
+        // click). Only a live editor — the inline text editor, a graph's point composer — floats
+        // on top, as Excalidraw's does, so what you type is never hidden under a shape.
+        .zIndex(Double(card.z) + (editingCardID == card.id || floatingCardID == card.id ? 1_000_000 : 0))
       }
     }
   }
@@ -2929,6 +3025,13 @@ struct BoardCardLayer: View, Equatable {
 struct DragSegment: Equatable {
   var start: CGPoint
   var end: CGPoint
+}
+
+/// A quick-connect drag in flight: the rubber band, its connector kind, and its bind target.
+struct QuickConnectDraft: Equatable {
+  var segment: DragSegment
+  var kind: CanvasElementKind
+  var targetID: UUID?
 }
 
 /// Transient drawing state belongs to exactly one loaded board. Board replacement resets this

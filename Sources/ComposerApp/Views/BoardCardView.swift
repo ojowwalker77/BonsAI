@@ -3,120 +3,66 @@ import ImageIO
 import SwiftMath
 import SwiftUI
 
-/// One text card on the board, with Excalidraw-style interaction:
-/// • single click selects (ring + corner resize handles), • drag the body moves it,
-/// • double-click edits the text, • corner handles resize,
-/// • ✕ deletes. The body is the unmodified `FreeWriteEditor`; it only receives mouse events
-/// while editing, so a drag on a non-editing card moves it instead of selecting text.
+/// One element on the board — RENDER ONLY. Selection, moving, resizing, connector endpoints and
+/// quick-connect all belong to the canvas's single pointer owner (`CanvasSelectGesture`) and its
+/// one `SelectionOverlay`; this view never grabs the mouse except inside a live edit session (the
+/// inline text editor, the vector node editor) and the graph's own legend / point composer.
+///
+/// `card` arrives with any in-flight gesture already applied (`BoardViewModel.renderedCards`), so a
+/// drag's preview and its commit are drawn by exactly the same code.
 struct BoardCardView: View {
   let card: CardState
   @ObservedObject var interaction: CardInteraction
   let isSelected: Bool
   let isEditing: Bool
-  /// Board zoom — gesture translations are divided by it so moves/resizes track the cursor.
+  /// Board zoom: content lays out at screen size (crisp) rather than being a stretched bitmap.
   let scale: CGFloat
   let board: BoardViewModel
-  /// True only in the select tool. When false (any drawing tool) the card is pointer-transparent,
-  /// so a drag starting over it falls through to the canvas and draws a new element instead of
-  /// grabbing this card — selection/move/resize belong to the select tool alone.
+  /// True only in the select tool, where a selected graph shows its interactive legend.
   let selectable: Bool
+  /// A text element mid corner-scale previews as a geometric scale of its laid-out text.
+  var textPreviewScale: CGFloat = 1
 
-  @State private var moveDelta: CGSize = .zero
-  @GestureState private var resize: ResizeSession?
-  /// Connector endpoints preview locally during a drag, then cross the model seam once on mouse-up
-  /// so the entire detach/rebind is one undoable mutation.
-  @GestureState private var endpointDrag: ConnectorEndpointDragSession?
   /// Vector control previews remain local for the entire drag. Mouse-up commits the refitted spec
   /// and frame once through `BoardViewModel`, preserving one undo checkpoint per gesture.
   @GestureState private var vectorControlDrag: VectorControlDragSession?
-  /// Quick-connect chooses line versus arrow when the gesture begins. Reading global modifiers on
-  /// mouse-up would let releasing Option mid-drag silently change the requested connector kind.
-  @State private var quickConnectDrag: QuickConnectDragSession?
-  /// Text-only side resize: changes the wrapping width while preserving font scale. Corner resize
-  /// remains proportional type scaling; the two gestures intentionally solve different jobs.
-  @GestureState private var textWidthResize: TextWidthResizeSession?
-  @State private var hovering = false
   /// The editor's live hug is local until editing ends. Publishing it through the board's cards
   /// array would rebuild every visible card for each NSTextView layout callback.
   @State private var liveTextFrame: CGRect?
   /// The ⌥-click Point Composer: prefilled X/Y (from the click's data coords), a label, and a tint
   /// swatch. Non-nil while the strip is up.
   @State private var pointComposer: PointComposerDraft?
-  /// True when a plain (unmodified) press armed this card for a same-gesture move: one press then
-  /// drag both selects (if needed) and moves the card, no separate "click to select, click again to
-  /// move" step. A modified press (shift/command toggles selection) leaves this false so the drag
-  /// doesn't move the card.
-  @State private var armedForMove = false
-  /// ⌥ was down on the arming press; the duplicate itself waits for the drag to leave the 4px
-  /// dead-zone so a bare ⌥-click never spawns copies.
-  @State private var duplicateDragArmed = false
-  @State private var duplicateDragStarted = false
-  /// The graph marker currently being dragged (series id + point index), armed on a plain press that
-  /// lands on a marker of a selected graph card. While set, drags move the point, not the card.
-  @State private var markerDrag: (seriesID: UUID, index: Int)?
   /// Real rendered checkbox bounds in this card's screen-space coordinate system. Using measured
   /// symbols avoids guessing row strides when text wraps or a text card has its own font scale.
   @State private var checklistCheckboxFrames: [Int: CGRect] = [:]
 
-  /// The content's corner radius, so the selection ring hugs each element shape correctly
-  /// (a too-round ring around a square image is what reads as "wrong").
-  private var radius: CGFloat {
-    switch card.elementKind {
-    case .text: 12
-    case .equation: 12
-    case .image: 8
-    case .sticky: 14
-    case .checklist, .table: 10
-    case .rectangle: 8
-    default: 6
-    }
-  }
-  private var minW: CGFloat { card.minimumSize.width }
-  private var minH: CGFloat { card.minimumSize.height }
+  private var radius: CGFloat { SelectionChrome.cornerRadius(for: card.elementKind) }
   private var zoom: CGFloat { max(scale, 0.01) }
   private var isTextElement: Bool { card.elementKind == .text }
-  private var isEquationElement: Bool { card.elementKind == .equation }
   private var isGraphElement: Bool { card.elementKind == .graph }
   private var checklistCoordinateSpace: String { "checklist-\(card.id.uuidString)" }
-  private var isVectorPath: Bool { card.elementKind == .vectorPath }
-  /// An empty text card is just a place to write, not a placed object — so it shows no chrome.
-  private var isEmptyText: Bool { isTextElement && interaction.text.trimmed.isEmpty }
-  /// Suppress chrome (ring, handles, delete ✕) on an empty text card ONLY while it's being edited —
-  /// a bare writing caret needs no box. Once merely selected (e.g. picked by marquee), an empty text
-  /// card must show its selection chrome so it's visibly deletable rather than an invisible ghost.
-  private var suppressEmptyChrome: Bool { isEmptyText && isEditing }
 
-  /// The frame to draw right now — base frame plus any in-flight move or resize.
+  /// The frame to draw right now: the (preview-applied) card frame, or a live edit's own geometry.
   private var liveFrame: CGRect {
     if isEditing, let liveTextFrame { return liveTextFrame }
     if isEditing, let liveVectorPlacement { return liveVectorPlacement.frame }
-    if let resize { return applyResize(resize.corner, translation: resize.translation, to: card.frame) }
-    if let textWidthResize {
-      return textWidthFrame(textWidthResize.edge, translation: textWidthResize.translation, in: card.frame)
-    }
-    var f = card.frame
-    f.origin.x += moveDelta.width / zoom
-    f.origin.y += moveDelta.height / zoom
-    f.origin.x += interaction.dragDelta.width
-    f.origin.y += interaction.dragDelta.height
-    return f
+    return card.frame
   }
 
   var body: some View {
     cardBody
       .opacity(card.isArchived ? 0.4 : 1)   // superseded ideas fade but stay for lineage
       .frame(width: liveFrame.width * zoom, height: liveFrame.height * zoom, alignment: .topLeading)
-      .background(surface)
       .overlay(graphDropRing)
-      .overlay(selectionChrome)
-      .overlay(deleteButton, alignment: .topTrailing)
-      .overlay(editAffordance, alignment: .bottomTrailing)
       .overlay(lockBadge, alignment: .topLeading)
       .overlay(pointComposerPopover, alignment: .bottom)
       .offset(x: liveFrame.minX * zoom, y: liveFrame.minY * zoom)
       .onAppear { board.setCardMounted(card.id, true) }
-      .onDisappear { board.setCardMounted(card.id, false) }
-      .onHover { hovering = $0 }
+      .onDisappear {
+        board.setCardMounted(card.id, false)
+        board.setCheckboxFrames([:], for: card.id)
+        if board.floatingCardID == card.id { board.floatingCardID = nil }
+      }
       .onChange(of: interaction.text) { oldValue, newValue in
         // FreeWriteEditor writes serialized text here. Keeping the plain-text cache current lets
         // static cards and persistence read it without materializing an NSTextView controller.
@@ -125,7 +71,12 @@ struct BoardCardView: View {
       }
       .onChange(of: isSelected) { _, selected in
         // The Point Composer belongs to a selected graph; drop it if the card loses selection.
-        if !selected { pointComposer = nil }
+        if !selected { closePointComposer() }
+      }
+      .onChange(of: pointComposer != nil) { _, open in
+        // An open composer hangs below the graph; float the graph so neighbours never cover it.
+        if open { board.floatingCardID = card.id }
+        else if board.floatingCardID == card.id { board.floatingCardID = nil }
       }
       .onChange(of: card.tint) { _, _ in applyEditorTint() }
       .onChange(of: isEditing) { _, editing in
@@ -137,25 +88,28 @@ struct BoardCardView: View {
         }
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerAddGraphPoint)) { note in
-        // The ⌘K "Add point to graph…" command targets a graph card by id; only that card responds,
-        // ensures it's selected, and opens the composer seeded at the middle of its axis ranges.
+        // ⌘K "Add point to graph…" and ⌥-click on the plot target a graph card by id; only that
+        // card responds, ensures it's selected, and opens the composer — at the clicked data point
+        // when one is given, else at the middle of its axis ranges.
         guard isGraphElement, note.object as? UUID == card.id else { return }
         board.select(card.id)
+        if let seed = note.userInfo?["point"] as? CardState.GraphPoint {
+          openPointComposer(at: seed)
+          return
+        }
         let spec = card.graph ?? CardState.GraphSpec()
-        let mid = CardState.GraphPoint(x: (spec.xMin + spec.xMax) / 2, y: (spec.yMin + spec.yMax) / 2)
         openPointComposer(at: CardState.GraphPoint(
-          x: Self.roundToStep(mid.x, span: spec.xMax - spec.xMin),
-          y: Self.roundToStep(mid.y, span: spec.yMax - spec.yMin)))
+          x: GraphGeometry.roundToStep((spec.xMin + spec.xMax) / 2, span: spec.xMax - spec.xMin),
+          y: GraphGeometry.roundToStep((spec.yMin + spec.yMax) / 2, span: spec.yMax - spec.yMin)))
       }
   }
 
-  // MARK: Body (editor + move/select catcher)
+  // MARK: Body
 
   /// TEXT edits inline, on the board — writing is the core act and it stays in place; only the
   /// structured editors (equation, graph, labels) present in the centered `EditingStage`, and the
   /// writing sheet remains an explicit ⇧⌘F summon. So: a text card being edited mounts the live
-  /// editor right here; every other kind renders statically while its stage floats above (the graph
-  /// carve-outs — ⌥-click points, marker drag — are gestures, not edit sessions, and stay live).
+  /// editor right here; every other kind renders statically while its stage floats above.
   private var cardBody: some View {
     ZStack(alignment: .topLeading) {
       if isEditing, isTextElement {
@@ -200,85 +154,42 @@ struct BoardCardView: View {
         // Non-editing cards render from the serialized plain text (image placeholders like
         // "[image: …]" included). Fonts/padding scale with zoom so the text is laid out at screen
         // size (crisp), not stretched.
-        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id, connectorPoints: liveConnectorPoints, vectorSpec: liveVectorPlacement?.spec, checklistCoordinateSpace: checklistCoordinateSpace)
+        CanvasElementContent(card: card, text: interaction.plainText, ink: board.ink(for: card), zoom: zoom * card.textScale, graphSelected: isGraphElement && isSelected && !isEditing, graphDropTarget: isGraphElement && board.equationDropTargetID == card.id, vectorSpec: liveVectorPlacement?.spec, checklistCoordinateSpace: checklistCoordinateSpace)
           .padding(.horizontal, (isTextElement ? 16 : 0) * zoom)
           .padding(.vertical, (isTextElement ? 18 : 0) * zoom)
           .allowsHitTesting(false)
           // An in-flight corner drag on a text card previews as a GEOMETRIC transform: the text
           // keeps its base layout and scales as a whole. Re-laying it out at a new font size every
-          // gesture frame flickered and shed glyph fragments (1.4.5 feedback). Both the layout
-          // frame and the scale pin top-leading — the preview frame already moved its origin for
-          // the drag's anchor corner, so its top-left IS the scaled content's top-left.
-          .frame(width: staticLayoutSize.width * zoom, height: staticLayoutSize.height * zoom, alignment: .topLeading)
-          .scaleEffect(resizeScaleFactor, anchor: .topLeading)
+          // gesture frame flickered and shed glyph fragments (1.4.5 feedback). The layout frame is
+          // the pre-drag size and the scale pins top-leading — the preview frame already moved its
+          // origin for the drag's anchor corner, so its top-left IS the scaled content's top-left.
+          .frame(width: liveFrame.width / textPreviewScale * zoom,
+                 height: liveFrame.height / textPreviewScale * zoom,
+                 alignment: .topLeading)
+          .scaleEffect(textPreviewScale, anchor: .topLeading)
       }
-
-      // Select on mouse-down so handles appear immediately. SwiftUI's separate
-      // single/double tap recognizers wait out the double-click interval first.
-      CardPointerCatcher(
-        onPress: { modifiers, localPoint in
-          if !card.locked, card.elementKind == .checklist, modifiers.isEmpty {
-            if let index = ChecklistInteraction.itemIndex(
-              at: localPoint, renderedFrames: checklistCheckboxFrames) {
-              board.toggleChecklistItem(card.id, index: index)
-              armedForMove = false
-              return .consumed
-            }
-          }
-          if !card.locked, card.elementKind == .text, modifiers.isEmpty {
-            let lines = interaction.plainText.components(separatedBy: "\n")
-            if let line = ChecklistInteraction.itemIndex(
-              at: localPoint, renderedFrames: checklistCheckboxFrames),
-               lines.indices.contains(line), lines[line].hasPrefix("- [") {
-              board.toggleTextChecklistLine(card.id, lineIndex: line)
-              armedForMove = false
-              return .consumed
-            }
-          }
-          // Graph cards intercept ⌥-click (add/remove a data point) and — when selected — a plain
-          // press that starts on a marker (drag that marker instead of the card). A consumed press
-          // suppresses select/move for this gesture.
-          if let disposition = graphPressDisposition(modifiers: modifiers, localPoint: localPoint) {
-            armedForMove = false
-            return disposition
-          }
-          // Shift- and Command-click both TOGGLE this card's membership in the selection (shift no
-          // longer pure-unions), so clicking an already-picked card in a multi-selection drops it.
-          let toggling = modifiers.contains(.shift) || modifiers.contains(.command)
-          // A plain press selects (if needed) AND arms the move, so one press + drag moves the
-          // card in a single gesture. The 4px drag dead-zone keeps a plain click from nudging it.
-          armedForMove = !toggling
-          // ⌥-drag duplicates: armed here, triggered when the drag leaves the dead-zone, so a
-          // bare ⌥-click stays a plain select. Graphs never reach this line with ⌥ held — their
-          // disposition consumed it above for data points.
-          duplicateDragArmed = !toggling && modifiers.contains(.option)
-          if toggling || !isSelected {
-            board.select(card.id, toggling: toggling)
-          }
-          return .passthrough
-        },
-        onDoubleClick: enterEditing,
-        onDragChanged: updateMovePreview,
-        onDragEnded: commitMove,
-        onMarkerDrag: updateMarkerDrag,
-        onMarkerDragEnded: endMarkerDrag
-      )
-      .allowsHitTesting(!isEditing && selectable)
 
       if VectorPathNodeEditorPolicy.isVisible(isEditing: isEditing, kind: card.elementKind) {
         vectorNodeEditor
       }
 
-      // Selected graph cards get a live interaction layer ABOVE the catcher: the ✕-legend (its
-      // small top-right region claims clicks) and a passive hover crosshair/readout. Plot-area
-      // presses (⌥-click, marker drag) still fall through to the catcher below.
+      // Selected graph cards get a live interaction layer: the ✕-legend (its small top-right
+      // region claims clicks) and a passive hover crosshair/readout. Plot-area presses (⌥-click,
+      // marker drag) fall through to the canvas input view underneath.
       if isGraphElement, isSelected, !isEditing, selectable {
-        GraphInteractionOverlay(spec: card.graph ?? CardState.GraphSpec(), board: board, graphID: card.id)
+        GraphInteractionOverlay(spec: card.graph ?? CardState.GraphSpec(), board: board, graphID: card.id,
+                                cardOrigin: liveFrame.origin, zoom: zoom)
       }
     }
     .coordinateSpace(name: checklistCoordinateSpace)
     .onPreferenceChange(ChecklistCheckboxFramesPreferenceKey.self) { frames in
-      if checklistCheckboxFrames != frames { checklistCheckboxFrames = frames }
+      guard checklistCheckboxFrames != frames else { return }
+      checklistCheckboxFrames = frames
+      // Hand the measured rows to the pointer owner in card-local BOARD units, so a press
+      // converts the same way at any zoom.
+      board.setCheckboxFrames(frames.mapValues { rect in
+        CGRect(x: rect.minX / zoom, y: rect.minY / zoom, width: rect.width / zoom, height: rect.height / zoom)
+      }, for: card.id)
     }
   }
 
@@ -313,17 +224,6 @@ struct BoardCardView: View {
     }
   }
 
-  /// Double-click opens the card's editing session — the centered `EditingStage` (keyed off
-  /// `board.editingCardID`) takes it from here: seeding its draft, showing the right editor, and
-  /// owning focus/commit/Esc. This just arms edit mode; freehand/image kinds have no stage, so the
-  /// canvas guards `beginEditing` for them (a double-click there does nothing).
-  private func enterEditing() {
-    guard !card.locked, card.elementKind.supportsEditing else { return }
-    // Text edits inline; its editor takes the caret when it mounts. Stage kinds focus their own
-    // fields on appear.
-    board.beginEditing(card.id)
-  }
-
   /// Recolor the LIVE editor's text to the card's tint: every run except per-range ink (marked
   /// with `.inkSlot`) takes the ink, and the typing
   /// attributes follow so new text matches. Inked spans keep their own color so a whole-card tint
@@ -343,174 +243,6 @@ struct BoardCardView: View {
     tv.insertionPointColor = Theme.tintColor(card.tint) ?? Theme.Palette.nsAccent
   }
 
-  private func commitMove(_ translation: CGSize) {
-    moveDelta = .zero
-    board.clearEquationDropTarget()
-    // Retire guides on every drag end — including the click and ⌥-duplicate branches below that
-    // never reach the single-card snap commit.
-    board.clearSnapGuides()
-    let wasDuplicating = duplicateDragStarted
-    duplicateDragStarted = false
-    duplicateDragArmed = false
-    guard armedForMove else { return }
-    // The gesture is over: the catcher's trailing zero-translation reset must not re-run the
-    // single-card snap (which nudged a merely clicked card up to 8pt toward a neighbour and left
-    // its guides on screen without ever committing).
-    armedForMove = false
-    // An ⌥-drag moved the freshly inserted copies through the board preview (the selection is the
-    // copies, not this card), so it always commits through finishMovePreview — whose undo folds
-    // into the duplicate's checkpoint.
-    if wasDuplicating {
-      board.finishMovePreview(commit: true)
-      return
-    }
-    // A plain click (no real drag) on a card inside a multi-selection collapses the selection to
-    // just this card — resolved here on mouse-UP, so a genuine group drag (translation ≥ 4px) still
-    // moves the whole group. The press left the group intact precisely so this decision waits.
-    if hypot(translation.width, translation.height) < 4 {
-      if board.selectedCardIDs.count > 1, board.selectedCardIDs.contains(card.id) {
-        board.select(card.id)
-      }
-      return
-    }
-    guard !card.locked else { return }
-    if board.selectedCardIDs.contains(card.id), board.selectedCardIDs.count > 1 {
-      board.finishMovePreview(commit: true)
-    } else {
-      // Snap the committed frame through the same helper the preview used, so what landed on screen
-      // is what commits (preview==commit). The helper also clears its guides via the setFrame path
-      // below, but we clear explicitly so a no-op commit still retires the hairlines.
-      let proposed = CGSize(width: translation.width / zoom, height: translation.height / zoom)
-      let snapped = board.snappedDelta(for: [card.id], proposed: proposed, tolerance: 8 / zoom)
-      board.clearSnapGuides()
-      board.setFrame(card.id, CGRect(
-        x: card.x + snapped.width,
-        y: card.y + snapped.height,
-      width: card.w, height: card.h))
-      // The single-card path skips finishMovePreview, so it needs its own equation→graph drop.
-      if isEquationElement { board.absorbEquationDropIfNeeded(card.id) }
-    }
-  }
-
-  private func updateMovePreview(_ translation: CGSize) {
-    // A zero translation is the catcher's reset (after mouse-up, before a double-click edit), not
-    // a drag position: clear the local preview and never snap or start a board preview from it.
-    if translation == .zero {
-      moveDelta = .zero
-      return
-    }
-    guard armedForMove, !card.locked else { return }
-    // ⌥-drag: once past the click dead-zone, drop in-place copies and hand the rest of the gesture
-    // to the board preview — the copies are the selection now, so this card stays put underneath.
-    if duplicateDragArmed, !duplicateDragStarted, hypot(translation.width, translation.height) >= 4 {
-      board.beginDragDuplicate()
-      duplicateDragStarted = true
-    }
-    if duplicateDragStarted {
-      board.updateMovePreview(by: CGSize(width: translation.width / zoom, height: translation.height / zoom), tolerance: 8 / zoom)
-      return
-    }
-    if board.selectedCardIDs.contains(card.id), board.selectedCardIDs.count > 1 {
-      board.updateMovePreview(by: CGSize(width: translation.width / zoom, height: translation.height / zoom), tolerance: 8 / zoom)
-    } else {
-      // Single card: snap in board space through the shared helper (which publishes the guides),
-      // then scale back to screen space — `liveFrame` divides `moveDelta` by zoom, so the card
-      // sticks to exactly the snapped position the commit will land on.
-      let proposed = CGSize(width: translation.width / zoom, height: translation.height / zoom)
-      let snapped = board.snappedDelta(for: [card.id], proposed: proposed, tolerance: 8 / zoom)
-      moveDelta = CGSize(width: snapped.width * zoom, height: snapped.height * zoom)
-    }
-    // A lone equation dragged onto a graph gets a drop-target highlight; the absorb itself is the
-    // engine's on the move-commit. Only equations bother computing this (updateEquationDropTarget bails otherwise).
-    if isEquationElement, !(board.selectedCardIDs.contains(card.id) && board.selectedCardIDs.count > 1) {
-      board.updateEquationDropTarget(movedID: card.id, center: CGPoint(x: liveFrame.midX, y: liveFrame.midY))
-    }
-  }
-
-  // MARK: Graph plot interaction (⌥-click points, marker drag)
-
-  /// The graph plot geometry for a catcher-local point. The catcher fills the card frame at screen
-  /// scale (× zoom) while GraphCardView renders its plot inside a 2pt inset, so we size the geometry
-  /// to the card frame (screen space, minus the 4pt padding) and shift the point in by 2pt. Returns
-  /// the geometry and the plot-space (pre-inset) point.
-  private func graphGeometry(forCatcher point: CGPoint) -> (geom: GraphGeometry, local: CGPoint)? {
-    guard isGraphElement, let spec = card.graph else { return nil }
-    let size = CGSize(width: liveFrame.width * zoom - 4, height: liveFrame.height * zoom - 4)
-    guard size.width > 1, size.height > 1 else { return nil }
-    return (GraphGeometry(spec: spec, size: size), CGPoint(x: point.x - 2, y: point.y - 2))
-  }
-
-  /// The series id + index of a marker within 10 view points of a catcher-local point, or nil.
-  private func markerHit(atCatcher point: CGPoint) -> (seriesID: UUID, index: Int)? {
-    guard let (geom, local) = graphGeometry(forCatcher: point), let spec = card.graph else { return nil }
-    for series in spec.series {
-      for (index, p) in (series.points ?? []).enumerated() {
-        let vp = geom.viewPoint(p)
-        if hypot(vp.x - local.x, vp.y - local.y) <= 14 { return (series.id, index) }
-      }
-    }
-    return nil
-  }
-
-  /// Decide whether a graph card should intercept this press. ⌥-click adds a point (or removes the
-  /// one under the cursor) and consumes the event; a plain press on a marker of a SELECTED graph card
-  /// arms a marker drag. Returns nil when the press should fall through to normal select/move.
-  private func graphPressDisposition(modifiers: EventModifiers, localPoint: CGPoint) -> CardPointerCatcher.PressDisposition? {
-    guard isGraphElement, let (geom, local) = graphGeometry(forCatcher: localPoint) else { return nil }
-    if modifiers.contains(.option) {
-      if let hit = markerHit(atCatcher: localPoint) {
-        // ⌥-click on an existing marker keeps the fast remove.
-        board.removeGraphPoint(card.id, seriesID: hit.seriesID, index: hit.index)
-      } else if geom.contains(local) {
-        // ⌥-click on empty plot opens the Point Composer, prefilled from the click's data coords,
-        // instead of adding a point instantly.
-        openPointComposer(at: roundedPoint(geom.clampedData(local), geom: geom))
-      } else {
-        return nil
-      }
-      return .consumed
-    }
-    if isSelected, let hit = markerHit(atCatcher: localPoint) {
-      board.registerUndoCheckpoint()
-      markerDrag = hit
-      return .marker
-    }
-    return nil
-  }
-
-  private func updateMarkerDrag(_ localPoint: CGPoint) {
-    guard let markerDrag, let (geom, local) = graphGeometry(forCatcher: localPoint) else { return }
-    // Preserve the dragged marker's own label and tint — only its coordinates move.
-    var moved = geom.clampedData(local)
-    if let points = card.graph?.series.first(where: { $0.id == markerDrag.seriesID })?.points,
-       points.indices.contains(markerDrag.index) {
-      moved.label = points[markerDrag.index].label
-      moved.tint = points[markerDrag.index].tint
-    }
-    board.setGraphPoint(card.id, seriesID: markerDrag.seriesID, index: markerDrag.index,
-                        to: roundedPoint(moved, geom: geom), undoable: false)
-  }
-
-  private func endMarkerDrag() { markerDrag = nil }
-
-  /// Round a dragged/added point to the axes' tick-step precision (2 significant decimals of the
-  /// step) so a placed point reads as a clean value rather than a long float.
-  private func roundedPoint(_ point: CardState.GraphPoint, geom: GraphGeometry) -> CardState.GraphPoint {
-    CardState.GraphPoint(x: Self.roundToStep(point.x, span: geom.xMax - geom.xMin),
-                         y: Self.roundToStep(point.y, span: geom.yMax - geom.yMin),
-                         label: point.label, tint: point.tint)
-  }
-
-  private static func roundToStep(_ value: Double, span: Double) -> Double {
-    guard span > 0 else { return value }
-    // The tick step (1/2/5 × 10ⁿ over ~5 ticks); round to a hundredth of it for 2 extra decimals.
-    let exponent = floor(log10(span / 5))
-    let step = pow(10, exponent)
-    let quantum = step / 100
-    guard quantum > 0 else { return value }
-    return (value / quantum).rounded() * quantum
-  }
-
   // MARK: Point Composer (⌥-click)
 
   /// Open the Point Composer for a fresh point at `seed`'s (already tick-rounded) coordinates.
@@ -523,157 +255,18 @@ struct BoardCardView: View {
   private func commitPointComposer() {
     guard let draft = pointComposer else { return }
     board.addGraphPoint(card.id, at: draft.resolved())
-    pointComposer = nil
+    closePointComposer()
   }
 
   private func cancelPointComposer() {
+    closePointComposer()
+  }
+
+  private func closePointComposer() {
     pointComposer = nil
   }
 
-  // MARK: Selection ring + resize handles
-
-  /// Px the selection ring sits outside the content, so it frames the element with a little
-  /// breathing room instead of crowding it (and the handles ride that same expanded rect).
-  private let selectionGap: CGFloat = 5
-
-  @ViewBuilder
-  private var selectionChrome: some View {
-    // An empty text card stays bare — a writing spot, not a boxed object. While you type into
-    // a text card it's chromeless too; the ring returns only once it's a placed object you
-    // select to move or resize. Shapes keep their ring while editing.
-    if (isSelected || isEditing) && !suppressEmptyChrome {
-      let isConnector = ConnectorGeometry.isConnector(card)
-      let showRing = !isConnector && (!isTextElement || (isSelected && !isEditing))
-      // Image cards draw their own rounded border, so a ring sitting `selectionGap` px outside reads
-      // as an ugly double border with a gap. Hug the image's own edge instead — a single clean
-      // accent outline. Other elements (text, shapes, lines) keep the offset ring.
-      let hugsContent = card.elementKind == .image
-      let ringGap: CGFloat = hugsContent ? 1 : selectionGap
-      let ringRadius: CGFloat = hugsContent ? radius : radius + selectionGap
-      // Handles only grab in the select tool — in a drawing tool a corner drag should draw, not resize.
-      let showHandles = isSelected && !isEditing && !card.locked && selectable
-      GeometryReader { geo in
-        ZStack {
-          if showRing {
-            RoundedRectangle(cornerRadius: ringRadius, style: .continuous)
-              .strokeBorder(Theme.Palette.accent.opacity(isEditing ? 0.9 : 0.7), lineWidth: hugsContent ? 1.5 : 1)
-              .frame(width: geo.size.width + ringGap * 2, height: geo.size.height + ringGap * 2)
-              .position(x: geo.size.width / 2, y: geo.size.height / 2)
-              .allowsHitTesting(false)
-          }
-          if showHandles {
-            if isConnector {
-              ForEach(ConnectorEndpoint.allCases, id: \.self) { endpoint in
-                connectorHandle
-                  .position(connectorHandlePoint(endpoint, in: geo.size))
-                  .gesture(connectorEndpointGesture(endpoint))
-                  .onHover { inside in
-                    if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
-                  }
-                  .help("Drag connector endpoint".localizedUI)
-              }
-            } else {
-              ForEach(Corner.allCases, id: \.self) { corner in
-                handleDot
-                  .position(handlePoint(corner, in: geo.size))
-                  .gesture(resizeGesture(corner))
-                  // A diagonal resize cursor over each corner handle, restored on exit. Pushing/popping
-                  // keeps the cursor correct even as SwiftUI reuses the handle views across cards.
-                  .onHover { inside in
-                    if inside { corner.resizeCursor.push() } else { NSCursor.pop() }
-                  }
-              }
-              if isTextElement {
-                ForEach(HorizontalEdge.allCases, id: \.self) { edge in
-                  textWidthHandle
-                    .position(textWidthHandlePoint(edge, in: geo.size))
-                    .gesture(textWidthResizeGesture(edge))
-                    .onHover { inside in
-                      if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-                    }
-                    .help("Drag to change text wrapping width".localizedUI)
-                  }
-              }
-              if isQuickConnectSource {
-                ForEach(ConnectorDirection.allCases, id: \.self) { direction in
-                  quickConnectHandle(direction)
-                    .position(quickConnectHandlePoint(direction, in: geo.size))
-                    .gesture(quickConnectGesture(direction))
-                    .onHover { inside in
-                      if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                    }
-                    .contextMenu {
-                      Button("Create linked line".localizedUI) {
-                        board.quickConnect(from: card.id, direction: direction, kind: .line)
-                      }
-                    }
-                    .help("Click to create a linked shape; drag to connect; hold Option for a line".localizedUI)
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  private func handlePoint(_ corner: Corner, in size: CGSize) -> CGPoint {
-    switch corner {
-    case .topLeading: CGPoint(x: -selectionGap, y: -selectionGap)
-    case .topTrailing: CGPoint(x: size.width + selectionGap, y: -selectionGap)
-    case .bottomLeading: CGPoint(x: -selectionGap, y: size.height + selectionGap)
-    case .bottomTrailing: CGPoint(x: size.width + selectionGap, y: size.height + selectionGap)
-    }
-  }
-
-  private func textWidthHandlePoint(_ edge: HorizontalEdge, in size: CGSize) -> CGPoint {
-    CGPoint(x: edge == .leading ? -selectionGap : size.width + selectionGap, y: size.height / 2)
-  }
-
-  private var isQuickConnectSource: Bool {
-    isSelected &&
-    board.selectedCardIDs.count == 1 &&
-    !card.locked &&
-    [.rectangle, .ellipse, .diamond].contains(card.elementKind)
-  }
-
-  private func quickConnectHandlePoint(_ direction: ConnectorDirection, in size: CGSize) -> CGPoint {
-    // Keep a sliver of the padded hit target inside the card's bounds so SwiftUI routes drags that
-    // begin on the outward-facing control, while the visible 15pt circle stays outside the ring.
-    let offset = QuickConnectDragSession.screenHandleOffset
-    return switch direction {
-    case .up: CGPoint(x: size.width / 2, y: -offset)
-    case .right: CGPoint(x: size.width + offset, y: size.height / 2)
-    case .down: CGPoint(x: size.width / 2, y: size.height + offset)
-    case .left: CGPoint(x: -offset, y: size.height / 2)
-    }
-  }
-
-  /// Actual stored endpoints, expressed in the card's current screen-space layout. In particular,
-  /// the end handle of an arrow sits on its tip instead of on the connector's padded frame corner.
-  private func connectorHandlePoint(_ endpoint: ConnectorEndpoint, in size: CGSize) -> CGPoint {
-    let points = liveConnectorPoints ?? card.points ?? CardState.defaultLinePoints()
-    let point = endpoint == .start ? points.first : points.dropFirst().first
-    let normalized = point?.cgPoint ?? (endpoint == .start
-      ? CGPoint(x: 0.06, y: 0.88)
-      : CGPoint(x: 0.94, y: 0.12))
-    return CGPoint(x: normalized.x * size.width, y: normalized.y * size.height)
-  }
-
-  private var liveConnectorPoints: [CanvasPoint]? {
-    guard ConnectorGeometry.isConnector(card) else { return nil }
-    guard let endpoints = ConnectorGeometry.endpoints(of: card), let endpointDrag else {
-      return card.points ?? CardState.defaultLinePoints()
-    }
-    var preview = endpoints
-    preview[endpointDrag.endpoint] = ConnectorEndpointDrag.boardPoint(
-      from: endpoints[endpointDrag.endpoint], translation: endpointDrag.translation, zoom: zoom)
-    return [preview.start, preview.end].map { point in
-      CanvasPoint(
-        x: Double((point.x - card.frame.minX) / max(card.frame.width, 1)),
-        y: Double((point.y - card.frame.minY) / max(card.frame.height, 1)))
-    }
-  }
+  // MARK: Vector node editor (an edit session, so it owns its own handles)
 
   private var liveVectorPlacement: VectorPathPlacement? {
     guard isEditing,
@@ -780,293 +373,19 @@ struct BoardCardView: View {
       }
   }
 
-  /// A small white square with a hairline accent edge and a soft shadow — reads as a crisp,
-  /// premium resize handle on the dark glass rather than a flat blue block.
-  private var handleDot: some View {
-    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-      .fill(Color.white)
-      .frame(width: 8, height: 8)
-      .overlay(RoundedRectangle(cornerRadius: 2.5, style: .continuous).strokeBorder(Theme.Palette.accent.opacity(0.9), lineWidth: 1))
-      .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
-      .padding(9)
-      .contentShape(Rectangle())
-  }
-
-  /// Circular endpoint furniture is deliberately distinct from the square box-resize furniture.
-  /// Its padded hit target remains easy to acquire without making a selected connector noisy.
-  private var connectorHandle: some View {
-    Circle()
-      .fill(Theme.Palette.labelChipFill)
-      .frame(width: 9, height: 9)
-      .overlay(Circle().strokeBorder(Theme.Palette.accent, lineWidth: 1.5))
-      .shadow(color: Theme.Palette.elementShadow, radius: 2, y: 1)
-      .padding(9)
-      .contentShape(Circle())
-  }
-
-  private func quickConnectHandle(_ direction: ConnectorDirection) -> some View {
-    Image(systemName: direction.symbolName)
-      .font(.system(size: 8, weight: .semibold))
-      .foregroundStyle(Theme.Palette.accent)
-      .frame(width: 15, height: 15)
-      .background(Circle().fill(Theme.Palette.windowCanvas.opacity(0.94)))
-      .overlay(Circle().strokeBorder(Theme.Palette.accent.opacity(0.62), lineWidth: 1))
-      .shadow(color: Theme.Palette.elementShadow, radius: 2, y: 1)
-      .padding(7)
-      .contentShape(Circle())
-  }
-
-  /// A vertical pill distinguishes reflow handles from the four square scale handles. The visible
-  /// mark stays quiet while its padded hit target remains easy to acquire with a pointer.
-  private var textWidthHandle: some View {
-    Capsule()
-      .fill(Color.white)
-      .frame(width: 6, height: 18)
-      .overlay(Capsule().strokeBorder(Theme.Palette.accent.opacity(0.9), lineWidth: 1))
-      .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 7)
-      .contentShape(Rectangle())
-  }
-
-  private func textWidthResizeGesture(_ edge: HorizontalEdge) -> some Gesture {
-    DragGesture(minimumDistance: 3, coordinateSpace: .local)
-      .updating($textWidthResize) { value, state, _ in
-        state = TextWidthResizeSession(edge: edge, translation: value.translation)
-      }
-      .onEnded { value in
-        board.setFrame(card.id, textWidthFrame(edge, translation: value.translation, in: card.frame))
-      }
-  }
-
-  private func resizeGesture(_ corner: Corner) -> some Gesture {
-    DragGesture(minimumDistance: 4, coordinateSpace: .local)
-      .updating($resize) { value, state, _ in state = ResizeSession(corner: corner, translation: value.translation) }
-      .onEnded { value in
-        if isTextElement {
-          // Text cards SCALE their font (Apple Freeform), not reflow a box (issue #77): commit the
-          // new absolute scale, then correct the frame to hug the text at that scale with the drag's
-          // anchor corner (opposite the handle) kept fixed. One undo restores scale + frame.
-          let factor = textResizeFactor(corner, translation: value.translation, base: card.frame)
-          let newScale = Double(card.textScale * factor)
-          let fitted = BoardViewModel.fittedTextSize(board.plainText(for: card), fontScale: CGFloat(newScale))
-          board.scaleTextCard(card.id, fontScale: newScale,
-                              frame: anchoredFrame(handle: corner, size: fitted, in: card.frame))
-        } else {
-          board.setFrame(card.id, applyResize(corner, translation: value.translation, to: card.frame))
-        }
-      }
-  }
-
-  private func connectorEndpointGesture(_ endpoint: ConnectorEndpoint) -> some Gesture {
-    DragGesture(minimumDistance: 2, coordinateSpace: .local)
-      .updating($endpointDrag) { value, state, _ in
-        state = ConnectorEndpointDragSession(endpoint: endpoint, translation: value.translation)
-      }
-      .onEnded { value in
-        guard let endpoints = ConnectorGeometry.endpoints(of: card) else { return }
-        let destination = ConnectorEndpointDrag.boardPoint(
-          from: endpoints[endpoint], translation: value.translation, zoom: zoom)
-        board.setConnectorEndpoint(endpoint, of: card.id, to: destination)
-      }
-  }
-
-  private func quickConnectGesture(_ direction: ConnectorDirection) -> some Gesture {
-    DragGesture(minimumDistance: 0, coordinateSpace: .local)
-      .onChanged { _ in
-        if quickConnectDrag == nil {
-          quickConnectDrag = QuickConnectDragSession(
-            optionPressed: NSEvent.modifierFlags.contains(.option))
-        }
-      }
-      .onEnded { value in
-        let session = quickConnectDrag ?? QuickConnectDragSession(
-          optionPressed: NSEvent.modifierFlags.contains(.option))
-        quickConnectDrag = nil
-        let distance = hypot(value.translation.width, value.translation.height)
-        if distance <= 4 {
-          board.quickConnect(from: card.id, direction: direction, kind: session.connectorKind)
-          return
-        }
-        let destination = session.destination(
-          from: card.frame,
-          direction: direction,
-          translation: value.translation,
-          zoom: zoom)
-        guard let targetID = board.bindCandidate(at: destination, excluding: [card.id]) else { return }
-        board.quickConnect(
-          from: card.id,
-          direction: direction,
-          kind: session.connectorKind,
-          to: targetID)
-      }
-  }
-
-  /// The live font-scale factor from an in-flight corner drag on THIS text card (issue #77) — 1
-  /// unless a resize is scaling it. Feeds both the preview frame (`applyResize`) and the content's
-  /// `scaleEffect`, so the text visibly scales during the drag without relayout.
-  private var resizeScaleFactor: CGFloat {
-    guard isTextElement, let resize else { return 1 }
-    return textResizeFactor(resize.corner, translation: resize.translation, base: card.frame)
-  }
-
-  /// The size the static content LAYS OUT at: the live frame — except during a text-card resize
-  /// preview, where content keeps the base frame's layout and `scaleEffect` stretches it into the
-  /// preview box (see cardBody).
-  private var staticLayoutSize: CGSize {
-    (isTextElement && resize != nil) ? card.frame.size : liveFrame.size
-  }
-
-  /// Reflow a text card at a user-chosen width, keeping the opposite side anchored and deriving
-  /// height from the existing text metrics. Font scale is deliberately untouched.
-  private func textWidthFrame(_ edge: HorizontalEdge, translation: CGSize, in base: CGRect) -> CGRect {
-    let dx = translation.width / zoom
-    let proposedWidth = edge == .trailing ? base.width + dx : base.width - dx
-    let width = max(proposedWidth, CardState.textMinSize.width)
-    let x = edge == .leading ? base.maxX - width : base.minX
-    let text = board.plainText(for: card)
-    let height = text.trimmed.isEmpty
-      ? max(base.height, CardState.textMinSize.height)
-      : BoardViewModel.fittedTextHeight(text, width: width, fontScale: card.textScale)
-    return CGRect(x: x, y: base.minY, width: width, height: height)
-  }
-
-  /// Proportional font-scale factor from a corner drag on a text card: aspect-locked to the drag's
-  /// dominant axis, then clamped so the RESULTING `fontScale` stays in 0.4…6.0. All math in board
-  /// space (translations divided by `zoom`).
-  private func textResizeFactor(_ corner: Corner, translation t: CGSize, base: CGRect) -> CGFloat {
-    guard base.width > 0, base.height > 0 else { return 1 }
-    let dx = t.width / zoom, dy = t.height / zoom
-    let widthSign: CGFloat = (corner == .topTrailing || corner == .bottomTrailing) ? 1 : -1
-    let heightSign: CGFloat = (corner == .bottomLeading || corner == .bottomTrailing) ? 1 : -1
-    let ratio = abs(dx) >= abs(dy)
-      ? (base.width + widthSign * dx) / base.width
-      : (base.height + heightSign * dy) / base.height
-    let current = card.textScale
-    let clamped = min(max(current * ratio, 0.4), 6.0)
-    return clamped / current
-  }
-
-  /// A frame of `size` that keeps the corner OPPOSITE `handle` (the drag anchor) pinned where it sits
-  /// in `base`, so scaling grows/shrinks toward the handle the way Freeform does.
-  private func anchoredFrame(handle: Corner, size: CGSize, in base: CGRect) -> CGRect {
-    switch handle {
-    case .bottomTrailing: return CGRect(x: base.minX, y: base.minY, width: size.width, height: size.height)
-    case .topLeading:     return CGRect(x: base.maxX - size.width, y: base.maxY - size.height, width: size.width, height: size.height)
-    case .topTrailing:    return CGRect(x: base.minX, y: base.maxY - size.height, width: size.width, height: size.height)
-    case .bottomLeading:  return CGRect(x: base.maxX - size.width, y: base.minY, width: size.width, height: size.height)
-    }
-  }
-
-  /// New frame for a corner drag, clamped to the minimum size by pushing the moving edge back. Text
-  /// cards instead scale their font (issue #77): the live preview frame is `base` scaled about the
-  /// anchor corner by `textResizeFactor`, so the box tracks the font growing under the handle.
-  private func applyResize(_ corner: Corner, translation t: CGSize, to base: CGRect) -> CGRect {
-    if isTextElement {
-      let factor = textResizeFactor(corner, translation: t, base: base)
-      return anchoredFrame(handle: corner, size: CGSize(width: base.width * factor, height: base.height * factor), in: base)
-    }
-    let dx = t.width / zoom, dy = t.height / zoom
-    var minX = base.minX, minY = base.minY, maxX = base.maxX, maxY = base.maxY
-    switch corner {
-    case .topLeading: minX += dx; minY += dy
-    case .topTrailing: maxX += dx; minY += dy
-    case .bottomLeading: minX += dx; maxY += dy
-    case .bottomTrailing: maxX += dx; maxY += dy
-    }
-    if maxX - minX < minW {
-      if corner == .topLeading || corner == .bottomLeading { minX = maxX - minW } else { maxX = minX + minW }
-    }
-    if maxY - minY < minH {
-      if corner == .topLeading || corner == .topTrailing { minY = maxY - minH } else { maxY = minY + minH }
-    }
-    // Shift constrains box shapes to a square: grow the smaller side to match the larger, anchored
-    // at the corner opposite the handle. Read live off the current flags, so pressing/releasing
-    // Shift mid-resize snaps the very next update.
-    if card.elementKind.constrainsToSquare, NSEvent.modifierFlags.contains(.shift) {
-      let side = max(maxX - minX, maxY - minY)
-      switch corner {
-      case .topLeading: minX = maxX - side; minY = maxY - side
-      case .topTrailing: maxX = minX + side; minY = maxY - side
-      case .bottomLeading: minX = maxX - side; maxY = minY + side
-      case .bottomTrailing: maxX = minX + side; maxY = minY + side
-      }
-    }
-    return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
-  }
-
-  // MARK: Delete
-
-  /// A small hover-only invitation to the editing surface. It stays inside the card so it does not
-  /// fight resize handles, and only appears under Select — drawing tools keep every card pointer-
-  /// transparent so a new stroke can begin anywhere.
-  @ViewBuilder
-  private var editAffordance: some View {
-    if hovering, selectable, !isEditing, !card.locked,
-       CanvasEditAffordancePolicy.isAvailable(
-         for: card.elementKind, whileSelected: isSelected) {
-      Button(action: enterEditing) {
-        ZStack {
-          Circle()
-            .fill(Theme.Palette.labelChipFill)
-            .frame(width: 20, height: 20)
-            .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 0.75))
-          Image(systemName: "pencil")
-            .font(.system(size: 9.5, weight: .semibold))
-            .foregroundStyle(Theme.Palette.menuDesc)
-        }
-        .frame(
-          width: CanvasEditAffordancePolicy.minimumHitSide,
-          height: CanvasEditAffordancePolicy.minimumHitSide)
-        .contentShape(Circle())
-      }
-      .buttonStyle(.plain)
-      .padding(4)
-      .help("Edit element".localizedUI)
-      .transition(.opacity)
-    }
-  }
-
-  @ViewBuilder
-  private var deleteButton: some View {
-    if isSelected && !isEditing && !card.locked && !suppressEmptyChrome && selectable {
-      Button(action: { board.delete(card.id) }) {
-        Image(systemName: "xmark")
-          .font(.system(size: 9, weight: .bold))
-          .foregroundStyle(Theme.Palette.chromeGlyphHover)
-          .frame(width: 18, height: 18)
-          .background(Circle().fill(Theme.Palette.labelChipFill))
-          .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 0.5))
-          .shadow(color: Theme.Palette.elementShadow, radius: 2, y: 1)
-          .contentShape(Circle())
-      }
-      .buttonStyle(.plain)
-      .help("Delete card".localizedUI)
-      // Stacked ABOVE the top-trailing resize handle (centred on (w + gap, -gap)), never on it: the
-      // old placement covered that handle, so resizing from the corner deleted the element.
-      .offset(x: selectionGap + 9, y: -(selectionGap + 9 + 22))
-    }
-  }
-
   @ViewBuilder
   private var lockBadge: some View {
     if card.locked {
       Image(systemName: "lock.fill")
         .font(.system(size: 10, weight: .bold))
-        .foregroundStyle(Color.white.opacity(0.82))
+        .foregroundStyle(Theme.Palette.menuDesc)
         .frame(width: 20, height: 20)
-        .background(Circle().fill(Color.black.opacity(0.45)))
-        .overlay(Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 1))
+        .background(Circle().fill(Theme.Palette.labelChipFill))
+        .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
         .offset(x: -7, y: -7)
         .allowsHitTesting(false)
     }
   }
-
-  // MARK: Surface
-
-  // Text writes directly on the canvas — no filled "text box" behind it. Shapes and images
-  // draw their own fills in CanvasElementContent, so every card's frame stays transparent here.
-  private var surface: some View { Color.clear }
 }
 
 // MARK: - Element rendering
@@ -1145,9 +464,9 @@ private struct CanvasElementContent: View {
               if let understanding = card.imageUnderstanding, !understanding.isEmpty {
                 Image(systemName: "text.viewfinder")
                   .font(.system(size: 11, weight: .semibold))
-                  .foregroundStyle(.white)
+                  .foregroundStyle(Theme.Palette.menuDesc)
                   .padding(5)
-                  .background(Color.black.opacity(0.55), in: Circle())
+                  .background(Theme.Palette.labelChipFill, in: Circle())
                   .padding(6)
                   .help("Read on-device - agents can read this screenshot's text".localizedUI)
               }
@@ -1461,7 +780,7 @@ private struct CanvasLabel: View {
           .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
             .strokeBorder(Theme.Palette.panelHairline, lineWidth: 1))
       )
-      .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+      .shadow(color: Theme.Palette.elementShadow, radius: 4, y: 1)
       .padding(8)
       .allowsHitTesting(false)
   }
@@ -1585,7 +904,7 @@ private struct VectorPathShape: View {
 // MARK: - Graph card
 
 /// The plot rectangle + data⇄view mapping for a graph card, computed identically wherever it's
-/// needed (curve/marker rendering, hover snapping, and the CardPointerCatcher's ⌥-click / marker
+/// needed (curve/marker rendering, hover snapping, and the canvas pointer owner's ⌥-click / marker
 /// drag). One source of truth so a marker never lands off its own dot.
 struct GraphGeometry {
   static let leftGutter: CGFloat = 30
@@ -1600,7 +919,7 @@ struct GraphGeometry {
   let yMax: Double
 
   /// `size` is the graph content's size in its own local space (before the outer 2pt padding, which
-  /// the GeometryReader below already excludes). For CardPointerCatcher hit-testing the point must be
+  /// the GeometryReader below already excludes). For pointer hit-testing the point must be
   /// in that same local space (see `plotPoint(inCatcher:size:)`).
   init(spec: CardState.GraphSpec, size: CGSize) {
     plot = CGRect(
@@ -2046,6 +1365,9 @@ private struct GraphInteractionOverlay: View {
   let spec: CardState.GraphSpec
   let board: BoardViewModel
   let graphID: UUID
+  /// The card's board-space origin and the zoom, to place the canvas pointer in plot space.
+  let cardOrigin: CGPoint
+  let zoom: CGFloat
 
   @State private var hover: HoverReadout?
 
@@ -2062,23 +1384,10 @@ private struct GraphInteractionOverlay: View {
       // Shift into the plot's own space (the plot renders inside GraphCardView's 2pt inset).
       ZStack(alignment: .topLeading) {
         if let hover {
-          hoverLayer(hover, geom: geom).offset(x: 2, y: 2)
+          hoverLayer(hover, geom: geom)
+            .offset(x: 2, y: 2)
+            .allowsHitTesting(false)
         }
-        // Hover tracker fills the plot rect only; `onContinuousHover` is passive so the catcher keeps
-        // its clicks. Placed before the legend so the ✕ stays clickable.
-        Color.clear
-          .contentShape(Rectangle())
-          .frame(width: geom.plot.width, height: geom.plot.height)
-          .offset(x: geom.plot.minX + 2, y: geom.plot.minY + 2)
-          .onContinuousHover(coordinateSpace: .local) { phase in
-            switch phase {
-            case .active(let location):
-              let local = CGPoint(x: location.x - 2, y: location.y - 2)
-              hover = geom.contains(local) ? readout(at: local, geom: geom) : nil
-            case .ended:
-              hover = nil
-            }
-          }
         if !spec.series.isEmpty {
           GraphLegend(series: spec.series, color: GraphFormat.seriesColor,
                       onRemove: { board.removeGraphSeries(graphID, seriesID: $0) })
@@ -2086,6 +1395,14 @@ private struct GraphInteractionOverlay: View {
             .padding(.top, geom.plot.minY + 2 + 2)
             .padding(.trailing, GraphGeometry.rightGutter + 4 + 2)
         }
+      }
+      // The readout follows the pointer the canvas input view reports, so nothing on the plot is
+      // hit-testable: presses there reach the board (move the graph, drag a marker, ⌥-click).
+      .onReceive(CanvasPointerHover.shared.$boardPoint) { boardPoint in
+        guard let boardPoint else { hover = nil; return }
+        let local = CGPoint(x: (boardPoint.x - cardOrigin.x) * zoom - 2,
+                            y: (boardPoint.y - cardOrigin.y) * zoom - 2)
+        hover = geom.contains(local) ? readout(at: local, geom: geom) : nil
       }
     }
   }
@@ -2538,171 +1855,6 @@ private final class CanvasImageCache {
 
 // MARK: - Immediate pointer catcher
 
-private struct CardPointerCatcher: NSViewRepresentable {
-  /// How a press was handled: `.passthrough` runs the normal select/move gesture, `.consumed`
-  /// swallows the click (⌥-click on a graph — no select/move/drag), `.marker` swallows select/move
-  /// but routes subsequent drags to the marker-drag callbacks instead of the card move.
-  enum PressDisposition { case passthrough, consumed, marker }
-
-  var onPress: (EventModifiers, CGPoint) -> PressDisposition
-  var onDoubleClick: () -> Void
-  var onDragChanged: (CGSize) -> Void
-  var onDragEnded: (CGSize) -> Void
-  var onMarkerDrag: (CGPoint) -> Void = { _ in }
-  var onMarkerDragEnded: () -> Void = {}
-
-  func makeNSView(context: Context) -> CatcherView {
-    let view = CatcherView()
-    view.callbacks = callbacks
-    return view
-  }
-
-  func updateNSView(_ nsView: CatcherView, context: Context) {
-    nsView.callbacks = callbacks
-  }
-
-  private var callbacks: CatcherView.Callbacks {
-    CatcherView.Callbacks(
-      onPress: onPress,
-      onDoubleClick: onDoubleClick,
-      onDragChanged: onDragChanged,
-      onDragEnded: onDragEnded,
-      onMarkerDrag: onMarkerDrag,
-      onMarkerDragEnded: onMarkerDragEnded
-    )
-  }
-
-  final class CatcherView: NSView {
-    struct Callbacks {
-      var onPress: (EventModifiers, CGPoint) -> PressDisposition = { _, _ in .passthrough }
-      var onDoubleClick: () -> Void = {}
-      var onDragChanged: (CGSize) -> Void = { _ in }
-      var onDragEnded: (CGSize) -> Void = { _ in }
-      var onMarkerDrag: (CGPoint) -> Void = { _ in }
-      var onMarkerDragEnded: () -> Void = {}
-    }
-
-    var callbacks = Callbacks()
-    /// Drag origin in WINDOW space. The catcher lives inside the card's own moving/scaling
-    /// layer, so reading translation in its local space feeds the move back into itself and the
-    /// card jitters (and leaves ghost trails). Window space stays put as the card moves.
-    private var dragStart: NSPoint?
-    private var lastTranslation: CGSize = .zero
-    /// A small dead-zone so a click with a touch of jitter doesn't read as a move.
-    private var passedThreshold = false
-    /// Set when the press was consumed (⌥-click) or armed a marker drag — the normal card move is
-    /// suppressed for the whole gesture, and drags route to the marker-drag callbacks when `.marker`.
-    private var disposition: PressDisposition = .passthrough
-
-    override var isFlipped: Bool { true }
-
-    // While Space is held the whole board pans, starting anywhere — including over a card. Going
-    // transparent to hit-testing here lets the press fall through to the viewport's pan handler
-    // instead of this catcher grabbing it (which killed space-pan wherever a card sat).
-    override func hitTest(_ point: NSPoint) -> NSView? {
-      CanvasKeyState.shared.isSpaceDown ? nil : super.hitTest(point)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-      let local = convert(event.locationInWindow, from: nil)
-      dragStart = event.locationInWindow
-      lastTranslation = .zero
-      passedThreshold = false
-      disposition = callbacks.onPress(EventModifiers(event.modifierFlags), local)
-      // A consumed press (⌥-click) is a one-shot: no drag, no double-click.
-      if disposition == .consumed { dragStart = nil; return }
-      if event.clickCount >= 2 {
-        dragStart = nil
-        callbacks.onDragChanged(.zero)
-        callbacks.onDoubleClick()
-      }
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-      guard let dragStart else { return }
-      let p = event.locationInWindow
-      if !passedThreshold {
-        guard hypot(p.x - dragStart.x, p.y - dragStart.y) >= 4 else { return }
-        passedThreshold = true
-      }
-      if disposition == .marker {
-        callbacks.onMarkerDrag(convert(p, from: nil))
-        return
-      }
-      // Window y is up; the board is y-down, so negate dy. Divided by zoom downstream.
-      let translation = CGSize(width: p.x - dragStart.x, height: dragStart.y - p.y)
-      lastTranslation = translation
-      callbacks.onDragChanged(translation)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-      guard dragStart != nil else { return }
-      dragStart = nil
-      passedThreshold = false
-      if disposition == .marker {
-        callbacks.onMarkerDragEnded()
-        disposition = .passthrough
-        return
-      }
-      callbacks.onDragEnded(lastTranslation)
-      callbacks.onDragChanged(.zero)
-      lastTranslation = .zero
-    }
-
-    // A non-editing card sits above the board's scroll surface, so without these the cursor
-    // hovering a card would dead-end two-finger scroll / pinch. Forward them to the canvas so
-    // panning and zooming work everywhere; the card is still draggable once you grab it.
-    override func scrollWheel(with event: NSEvent) {
-      let userInfo: [String: Any]
-      switch CanvasScrollInput(event) {
-      case .pan(let delta): userInfo = ["dx": delta.width, "dy": delta.height]
-      case .zoom(let factor): userInfo = ["zoom": factor]
-      }
-      NotificationCenter.default.post(name: .composerCanvasScroll, object: nil, userInfo: userInfo)
-    }
-
-    // Pinch-zoom is handled board-wide by PinchZoomCatcher's event monitor, so cards don't need to
-    // forward magnify (which anchored inconsistently at the viewport center).
-  }
-}
-
-// MARK: - Corner geometry
-
-private enum Corner: CaseIterable, Hashable {
-  case topLeading, topTrailing, bottomLeading, bottomTrailing
-
-  func point(in size: CGSize) -> CGPoint {
-    switch self {
-    case .topLeading: CGPoint(x: 0, y: 0)
-    case .topTrailing: CGPoint(x: size.width, y: 0)
-    case .bottomLeading: CGPoint(x: 0, y: size.height)
-    case .bottomTrailing: CGPoint(x: size.width, y: size.height)
-    }
-  }
-
-  /// The diagonal resize cursor for this corner. `NSCursor.frameResize(position:directions:)` is
-  /// macOS 15+, so older systems fall back to a crosshair rather than the (nonexistent) diagonal.
-  var resizeCursor: NSCursor {
-    if #available(macOS 15.0, *) {
-      let position: NSCursor.FrameResizePosition = {
-        switch self {
-        case .topLeading: .topLeft
-        case .topTrailing: .topRight
-        case .bottomLeading: .bottomLeft
-        case .bottomTrailing: .bottomRight
-        }
-      }()
-      return NSCursor.frameResize(position: position, directions: .all)
-    }
-    return .crosshair
-  }
-}
-
-private struct ResizeSession: Equatable {
-  let corner: Corner
-  var translation: CGSize
-}
-
 struct ConnectorEndpointDrag {
   static func boardPoint(from origin: CGPoint, translation: CGSize, zoom: CGFloat) -> CGPoint {
     let safeZoom = max(zoom, 0.01)
@@ -2749,44 +1901,8 @@ enum VectorPathNodeEditorPolicy {
   }
 }
 
-private struct ConnectorEndpointDragSession: Equatable {
-  let endpoint: ConnectorEndpoint
-  var translation: CGSize
-}
-
 private struct VectorControlDragSession: Equatable {
   let nodeIndex: Int
   let control: VectorPathControl
   var translation: CGSize
-}
-
-private enum HorizontalEdge: CaseIterable, Hashable {
-  case leading, trailing
-}
-
-private struct TextWidthResizeSession: Equatable {
-  let edge: HorizontalEdge
-  var translation: CGSize
-}
-
-private extension ConnectorDirection {
-  var symbolName: String {
-    switch self {
-    case .up: "arrow.up"
-    case .right: "arrow.right"
-    case .down: "arrow.down"
-    case .left: "arrow.left"
-    }
-  }
-}
-
-private extension EventModifiers {
-  init(_ flags: NSEvent.ModifierFlags) {
-    var modifiers: EventModifiers = []
-    if flags.contains(.shift) { modifiers.insert(.shift) }
-    if flags.contains(.command) { modifiers.insert(.command) }
-    if flags.contains(.option) { modifiers.insert(.option) }
-    if flags.contains(.control) { modifiers.insert(.control) }
-    self = modifiers
-  }
 }

@@ -172,6 +172,10 @@
 "Make line" = "선 만들기";
 "Make rectangle" = "사각형 만들기";
 "Navigate boards" = "보드 탐색";
+"Edit selection" = "선택 항목 편집";
+"Nudge selection" = "선택 항목 미세 이동";
+"Bring forward / send backward" = "앞으로 / 뒤로";
+"Bring to front / send to back" = "맨 앞으로 / 맨 뒤로";
 "Nothing to export" = "내보낼 항목 없음";
 "ON THE BOARD" = "보드에서";
 "Opening Composer's on-disk board storage" = "Composer의 디스크 보드 저장소 여는 중";

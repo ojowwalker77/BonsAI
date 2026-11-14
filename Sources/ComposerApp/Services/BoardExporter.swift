@@ -62,10 +62,10 @@ enum BoardExporter {
       board: board,
       selectedCardIDs: [],
       editingCardID: nil,
-      primarySelectedCardID: nil,
       scale: 1,
       selectable: false,
-      equationDropTargetID: nil
+      equationDropTargetID: nil,
+      textScaleFactors: [:]
     )
     .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
     .offset(x: -bounds.minX, y: -bounds.minY)

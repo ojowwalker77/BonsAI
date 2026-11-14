@@ -21,6 +21,25 @@ under the new version heading.
 - **Tool shortcuts now match Excalidraw exactly.** 1/V select, 2/R rectangle, 3/D diamond,
   4/O ellipse, 5/A arrow, 6/L line, 7/P/X freehand, 8/T text, 9 equation, B pen, and Q keeps the
   drawing tool active. The toolbar is in the same order, and every tooltip shows its keys.
+- **One selection box for the whole board, as in Excalidraw.** Press and drag any element to
+  move it, or drag a corner or edge of the box to resize. Shift keeps the aspect ratio (it used to
+  force a square), ⌥ resizes from the centre, and images keep their proportions unless you hold
+  Shift. Several selected elements scale together from the corners. Arrows bound to what you drag
+  now follow it live instead of jumping on release.
+- **Clicks hit what is drawn.** Arrows, lines, and pen strokes are picked by their stroke, and
+  ellipses and diamonds by their outline, not by the invisible box around them. The topmost
+  element always wins. Dragging across a locked element sweeps a selection instead of moving it,
+  and a click still selects it so it can be unlocked.
+- **The selection marquee picks only what lies entirely inside it,** so sweeping across part of
+  a large background shape no longer grabs it.
+- **New keys:**
+  - Enter edits the selected element.
+  - Arrow keys nudge the selection (Shift for 5 points).
+  - ⌘] / ⌘[ bring forward and send backward.
+  - ⇧⌘] / ⇧⌘[ bring to front and send to back.
+  - Shift-drag moves along one axis.
+  - Switching boards moves to ⌥⌘[ / ⌥⌘].
+- **Zoom to fit centres the board** instead of pinning it to the top-left corner.
 
 ### Fixed
 
@@ -43,6 +62,13 @@ under the new version heading.
   element** instead of panning, and double-clicking with a shape tool no longer also adds a text
   card.
 - **An empty text card you abandon leaves no undo step,** so ⌘Z no longer brings back a ghost.
+- **Selecting an element no longer lifts it above everything else.** Selection never changes
+  the board's layering.
+- **Every move, resize, endpoint drag, and ⌥-duplicate is exactly one undo step,** and Esc
+  mid-drag puts everything back as it was.
+- **Scrolling or zooming during a drag keeps the element under the pointer.**
+- **Handles can no longer fight the element they belong to.** Every press is resolved once, on
+  the board, so a grab near a handle never moves the card by mistake.
 
 ### Removed
 
@@ -55,6 +81,7 @@ under the new version heading.
   `POST /capture` endpoint, the `bonsai://` URL scheme, the "Send to BonsAI" service, and the
   Raycast/Alfred integrations.
 - **The semantic linter, Refine, Compile, Describe Board, and Copy Board as prompt.**
+- **The hover pencil on elements.** Press Enter or double-click to edit.
 
 ## [1.4.11] - 2026-09-01
 

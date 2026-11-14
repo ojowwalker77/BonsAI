@@ -267,12 +267,19 @@ final class FloatingPanel: NSWindow {
       return true
     }
 
-    if flags == [.command], raw == "[" {
+    // ⌥⌘[ / ⌥⌘] step through boards; plain ⌘[ / ⌘] are Excalidraw's layer order below.
+    if flags == [.command, .option], raw == "[" {
       NotificationCenter.default.post(name: .composerPrevDump, object: nil)
       return true
     }
-    if flags == [.command], raw == "]" {
+    if flags == [.command, .option], raw == "]" {
       NotificationCenter.default.post(name: .composerNextDump, object: nil)
+      return true
+    }
+    // Layer order, as in Excalidraw: ⌘] forward, ⌘[ backward, ⇧⌘] to front, ⇧⌘[ to back. Shift
+    // turns the bracket into a brace in `charactersIgnoringModifiers`, so both spellings count.
+    if !textIsEditing, let raw, let move = Self.zOrderMove(flags: flags, key: raw) {
+      NotificationCenter.default.post(name: .composerReorderSelection, object: nil, userInfo: ["move": move])
       return true
     }
     if flags == [.command], raw == "n" {
@@ -317,6 +324,28 @@ final class FloatingPanel: NSWindow {
     return super.performKeyEquivalent(with: event)
   }
 
+  static func zOrderMove(flags: NSEvent.ModifierFlags, key: String) -> BoardViewModel.ZOrderMove? {
+    switch (flags, key) {
+    case ([.command], "]"): .forward
+    case ([.command], "["): .backward
+    case ([.command, .shift], "]"), ([.command, .shift], "}"): .toFront
+    case ([.command, .shift], "["), ([.command, .shift], "{"): .toBack
+    default: nil
+    }
+  }
+
+  /// Arrow keys nudge the selection 1pt, Shift for 5 (Excalidraw's steps).
+  static func nudge(keyCode: UInt16, shift: Bool) -> CGSize? {
+    let step: CGFloat = shift ? 5 : 1
+    switch keyCode {
+    case 123: return CGSize(width: -step, height: 0)
+    case 124: return CGSize(width: step, height: 0)
+    case 125: return CGSize(width: 0, height: step)
+    case 126: return CGSize(width: 0, height: -step)
+    default: return nil
+    }
+  }
+
   /// The event's characters WITH modifiers applied — how "⌘⇧=" reads as "⌘+" on layouts where
   /// "+" lives on shifted "=".
   private func modifiedCharacters(_ event: NSEvent) -> String? {
@@ -341,6 +370,18 @@ final class FloatingPanel: NSWindow {
     }
     if !textIsEditing, raw == "\u{7f}" || raw == "\u{08}" {
       NotificationCenter.default.post(name: .composerDeleteSelection, object: nil)
+      return
+    }
+    if !textIsEditing, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+       let delta = Self.nudge(keyCode: event.keyCode, shift: event.modifierFlags.contains(.shift)) {
+      NotificationCenter.default.post(
+        name: .composerNudgeSelection, object: nil,
+        userInfo: ["dx": delta.width, "dy": delta.height])
+      return
+    }
+    if !textIsEditing, event.keyCode == 36 || event.keyCode == 76,
+       event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
+      NotificationCenter.default.post(name: .composerEditSelection, object: nil)
       return
     }
     // Bare digits and letters pick tools exactly as in Excalidraw (CanvasToolbarCatalog), and Q

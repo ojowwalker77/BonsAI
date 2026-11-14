@@ -2,7 +2,7 @@ import Foundation
 
 extension Notification.Name {
   static let composerShowWindow = Notification.Name("composerShowWindow")
-  /// Dump-stack navigation: ⌘[ older, ⌘] newer, ⌘N new dump.
+  /// Board navigation: ⌥⌘[ older, ⌥⌘] newer, ⌘N new board.
   static let composerPrevDump = Notification.Name("composerPrevDump")
   static let composerNextDump = Notification.Name("composerNextDump")
   static let composerNewDump = Notification.Name("composerNewDump")
@@ -56,6 +56,12 @@ extension Notification.Name {
   /// Fires on the capture hotkey ("Snap to board") — grab a screen region, understand it on-device,
   /// and drop it on the board as an agent-ready card.
   /// Q: toggle whether a drawing tool stays active after each placement (Excalidraw's tool lock).
+  /// Arrow-key nudge of the selection; userInfo `dx`/`dy` in board points.
+  static let composerNudgeSelection = Notification.Name("composerNudgeSelection")
+  /// Layer order of the selection; userInfo `move` is a `BoardViewModel.ZOrderMove`.
+  static let composerReorderSelection = Notification.Name("composerReorderSelection")
+  /// Enter: start editing the lone selected element.
+  static let composerEditSelection = Notification.Name("composerEditSelection")
   static let composerToggleToolLock = Notification.Name("composerToggleToolLock")
   static let composerCaptureToBoard = Notification.Name("composerCaptureToBoard")
   /// Fires after a region was captured and saved; `userInfo["path"]` is the PNG. The board adds the

@@ -172,6 +172,10 @@
 "Make line" = "Make line";
 "Make rectangle" = "Make rectangle";
 "Navigate boards" = "Navigate boards";
+"Edit selection" = "Edit selection";
+"Nudge selection" = "Nudge selection";
+"Bring forward / send backward" = "Bring forward / send backward";
+"Bring to front / send to back" = "Bring to front / send to back";
 "Nothing to export" = "Nothing to export";
 "ON THE BOARD" = "ON THE BOARD";
 "Opening Composer's on-disk board storage" = "Opening Composer's on-disk board storage";

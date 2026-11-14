@@ -172,6 +172,10 @@
 "Make line" = "生成线条";
 "Make rectangle" = "生成矩形";
 "Navigate boards" = "导航画板";
+"Edit selection" = "编辑所选";
+"Nudge selection" = "微移所选";
+"Bring forward / send backward" = "上移一层 / 下移一层";
+"Bring to front / send to back" = "置于顶层 / 置于底层";
 "Nothing to export" = "没有可导出的内容";
 "ON THE BOARD" = "画板上";
 "Opening Composer's on-disk board storage" = "正在打开 Composer 的磁盘画板存储";
