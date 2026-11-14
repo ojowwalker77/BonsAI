@@ -9,6 +9,21 @@ final class ComposerTextView: NSTextView {
   /// track the active card and route per-card actions (font, formatting) to it.
   var onFocusChange: ((Bool) -> Void)?
 
+  /// Editors are mounted only for an active edit session (a card being edited, or the ⇧⌘F focus
+  /// sheet), so attaching to a window means "the user is about to type here": take the caret on
+  /// the next turn of the run loop, once SwiftUI has finished the layout pass that mounted us.
+  /// This is the one place focus is acquired, so no caller races the mount with timers.
+  var focusesWhenAttached = false
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    guard focusesWhenAttached, window != nil else { return }
+    DispatchQueue.main.async { [weak self] in
+      guard let self, let window = self.window, window.firstResponder !== self else { return }
+      window.makeFirstResponder(self)
+    }
+  }
+
   override func becomeFirstResponder() -> Bool {
     let became = super.becomeFirstResponder()
     if became { onFocusChange?(true) }

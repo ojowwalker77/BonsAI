@@ -195,16 +195,16 @@
 "unknown tool: %@" = "未知工具：%@";
 
 /* Localization coverage pass */
-"Select  ·  move & edit cards  1" = "选择  ·  移动和编辑卡片  1";
-"Text  ·  click the board, then type  2" = "文本  ·  点击画板后输入  2";
-"Rectangle  ·  drag to draw  3" = "矩形  ·  拖动绘制  3";
-"Ellipse  ·  drag to draw  4" = "椭圆  ·  拖动绘制  4";
-"Diamond  ·  drag to draw  5" = "菱形  ·  拖动绘制  5";
-"Line  ·  drag to draw  6" = "线条  ·  拖动绘制  6";
-"Arrow  ·  drag to draw  7" = "箭头  ·  拖动绘制  7";
-"Freehand stroke  ·  drag to draw  8" = "手绘笔画  ·  拖动绘制  8";
-"Pen  ·  click corners, drag curves, Return commits  P" = "钢笔  ·  点击创建角点，拖动创建曲线，Return 提交  P";
-"Equation  ·  click the board, then type LaTeX  9" = "方程  ·  点击画板后输入 LaTeX  9";
+"Select  ·  move & edit cards" = "选择  ·  移动和编辑卡片";
+"Text  ·  click the board, then type" = "文本  ·  点击画板后输入";
+"Rectangle  ·  drag to draw" = "矩形  ·  拖动绘制";
+"Ellipse  ·  drag to draw" = "椭圆  ·  拖动绘制";
+"Diamond  ·  drag to draw" = "菱形  ·  拖动绘制";
+"Line  ·  drag to draw" = "线条  ·  拖动绘制";
+"Arrow  ·  drag to draw" = "箭头  ·  拖动绘制";
+"Freehand stroke  ·  drag to draw" = "手绘笔画  ·  拖动绘制";
+"Pen  ·  click corners, drag curves, Return commits" = "钢笔  ·  点击创建角点，拖动创建曲线，Return 提交";
+"Equation  ·  click the board, then type LaTeX" = "方程  ·  点击画板后输入 LaTeX";
 "Heading  ·  cycles # / ## / ###" = "标题  ·  循环切换 # / ## / ###";
 "Bold  ·  **text**" = "粗体  ·  **text**";
 "Italic  ·  *text*" = "斜体  ·  *text*";
@@ -265,3 +265,4 @@
 "GLOBAL" = "全局";
 "Read on-device - agents can read this screenshot's text" = "已在设备上读取 - 智能体可以读取这张截图中的文字";
 "Screenshot read - agents can see its text" = "截图已读取 - 智能体可以看到其中的文字";
+"Keep tool active" = "保持工具选中";

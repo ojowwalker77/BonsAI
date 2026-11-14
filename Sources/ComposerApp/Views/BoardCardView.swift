@@ -319,12 +319,9 @@ struct BoardCardView: View {
   /// canvas guards `beginEditing` for them (a double-click there does nothing).
   private func enterEditing() {
     guard !card.locked, card.elementKind.supportsEditing else { return }
+    // Text edits inline; its editor takes the caret when it mounts. Stage kinds focus their own
+    // fields on appear.
     board.beginEditing(card.id)
-    // Text edits inline — hand the caret to the just-mounted in-card editor. Stage kinds focus
-    // their own fields on appear.
-    if isTextElement {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { interaction.controller.focus() }
-    }
   }
 
   /// Recolor the LIVE editor's text to the card's tint: every run except per-range ink (marked
@@ -356,6 +353,10 @@ struct BoardCardView: View {
     duplicateDragStarted = false
     duplicateDragArmed = false
     guard armedForMove else { return }
+    // The gesture is over: the catcher's trailing zero-translation reset must not re-run the
+    // single-card snap (which nudged a merely clicked card up to 8pt toward a neighbour and left
+    // its guides on screen without ever committing).
+    armedForMove = false
     // An ⌥-drag moved the freshly inserted copies through the board preview (the selection is the
     // copies, not this card), so it always commits through finishMovePreview — whose undo folds
     // into the duplicate's checkpoint.
@@ -392,6 +393,12 @@ struct BoardCardView: View {
   }
 
   private func updateMovePreview(_ translation: CGSize) {
+    // A zero translation is the catcher's reset (after mouse-up, before a double-click edit), not
+    // a drag position: clear the local preview and never snap or start a board preview from it.
+    if translation == .zero {
+      moveDelta = .zero
+      return
+    }
     guard armedForMove, !card.locked else { return }
     // ⌥-drag: once past the click dead-zone, drop in-place copies and hand the rest of the gesture
     // to the board preview — the copies are the selection now, so this card stays put underneath.
@@ -1026,16 +1033,18 @@ struct BoardCardView: View {
       Button(action: { board.delete(card.id) }) {
         Image(systemName: "xmark")
           .font(.system(size: 9, weight: .bold))
-          .foregroundStyle(Color.white.opacity(0.9))
+          .foregroundStyle(Theme.Palette.chromeGlyphHover)
           .frame(width: 18, height: 18)
-          .background(Circle().fill(Color.black.opacity(0.55)))
-          .overlay(Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.5))
-          .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+          .background(Circle().fill(Theme.Palette.labelChipFill))
+          .overlay(Circle().strokeBorder(Theme.Palette.panelHairline, lineWidth: 0.5))
+          .shadow(color: Theme.Palette.elementShadow, radius: 2, y: 1)
           .contentShape(Circle())
       }
       .buttonStyle(.plain)
-    .help("Delete card".localizedUI)
-      .offset(x: selectionGap + 4, y: -(selectionGap + 4))
+      .help("Delete card".localizedUI)
+      // Stacked ABOVE the top-trailing resize handle (centred on (w + gap, -gap)), never on it: the
+      // old placement covered that handle, so resizing from the corner deleted the element.
+      .offset(x: selectionGap + 9, y: -(selectionGap + 9 + 22))
     }
   }
 
@@ -2644,9 +2653,12 @@ private struct CardPointerCatcher: NSViewRepresentable {
     // hovering a card would dead-end two-finger scroll / pinch. Forward them to the canvas so
     // panning and zooming work everywhere; the card is still draggable once you grab it.
     override func scrollWheel(with event: NSEvent) {
-      NotificationCenter.default.post(
-        name: .composerCanvasScroll, object: nil,
-        userInfo: ["dx": event.scrollingDeltaX, "dy": event.scrollingDeltaY])
+      let userInfo: [String: Any]
+      switch CanvasScrollInput(event) {
+      case .pan(let delta): userInfo = ["dx": delta.width, "dy": delta.height]
+      case .zoom(let factor): userInfo = ["zoom": factor]
+      }
+      NotificationCenter.default.post(name: .composerCanvasScroll, object: nil, userInfo: userInfo)
     }
 
     // Pinch-zoom is handled board-wide by PinchZoomCatcher's event monitor, so cards don't need to

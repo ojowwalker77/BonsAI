@@ -143,6 +143,10 @@ final class BoardViewModel: ObservableObject {
   /// `insertText`/`connectCards` calls don't each push their own undo step — the batch registers
   /// exactly one at the top.
   private var suppressUndo = false
+  /// Undo depth recorded right after placing a fresh text card. If that card is abandoned empty
+  /// while the history is still at this depth, its placement is retracted with no undo step at all
+  /// (the old path left two entries, and ⌘Z resurrected an empty ghost card).
+  private var freshTextCheckpoints: [UUID: Int] = [:]
   /// Who authored the next mutation: `Author.human` by default; the canvas bridge flips it to
   /// `Author.agent` while applying an agent's edits, so every card records who last wrote it.
   var nextAuthor = Author.human
@@ -319,9 +323,19 @@ final class BoardViewModel: ObservableObject {
   /// user actually left in the editor — not the stale seed snapshot in `cards[i].text`.
   /// Non-text elements are kept: an empty shape or sticky is an intentional placement.
   private func discardIfAbandoned(_ id: UUID) {
+    let freshCheckpoint = freshTextCheckpoints.removeValue(forKey: id)
     guard let i = index(for: id), cards[i].elementKind == .text,
           plainText(for: cards[i]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else { return }
+    if let freshCheckpoint, undoStack.count == freshCheckpoint, !undoStack.isEmpty {
+      // Nothing was recorded since this card was placed: the placement never happened.
+      undoStack.removeLast()
+      let previousSuppressUndo = suppressUndo
+      suppressUndo = true
+      delete(id, createStarterIfEmpty: false)
+      suppressUndo = previousSuppressUndo
+      return
+    }
     delete(id, createStarterIfEmpty: false)
   }
 
@@ -496,6 +510,7 @@ final class BoardViewModel: ObservableObject {
 
   private func restore(_ value: HistorySnapshot) {
     isRestoringHistory = true
+    freshTextCheckpoints = [:]
     cards = value.cards
     interactions = [:]
     liveTextFrames = [:]
@@ -546,6 +561,7 @@ final class BoardViewModel: ObservableObject {
     selectedCardIDs = [card.id]
     primarySelectedCardID = card.id
     editingCardID = card.id
+    freshTextCheckpoints[card.id] = undoStack.count
     scheduleSave()
     return card.id
   }
@@ -1960,10 +1976,19 @@ final class BoardViewModel: ObservableObject {
     for item in copyPlan where firstCopiedID[item.original.id] == nil {
       firstCopiedID[item.original.id] = item.copiedID
     }
+    // Copies form their OWN groups (copied members of one original group share one new group) so
+    // clicking a copy never selects the originals, and copies are never born locked.
+    var copiedGroupID: [UUID: UUID] = [:]
     for item in copyPlan {
       let original = item.original
       var copy = original
       copy.id = item.copiedID
+      if let group = original.groupID {
+        let newGroup = copiedGroupID[group] ?? UUID()
+        copiedGroupID[group] = newGroup
+        copy.groupID = newGroup
+      }
+      copy.isLocked = nil
       copy.x += Double(offset.width)
       copy.y += Double(offset.height)
       copy.z = nextZ

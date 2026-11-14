@@ -18,6 +18,31 @@ under the new version heading.
   MCP server on `127.0.0.1:7337`; **Settings ▸ Agents** shows the endpoints and installs the skill
   docs that teach them the API. Snap-to-board screenshots stay, and are read on-device so agents
   can see their text.
+- **Tool shortcuts now match Excalidraw exactly.** 1/V select, 2/R rectangle, 3/D diamond,
+  4/O ellipse, 5/A arrow, 6/L line, 7/P/X freehand, 8/T text, 9 equation, B pen, and Q keeps the
+  drawing tool active. The toolbar is in the same order, and every tooltip shows its keys.
+
+### Fixed
+
+- **The bottom command bar no longer stretches edge to edge.** The "more elements" menu filled
+  every bit of width it was offered; it is now the same size as every other tool button, so the
+  bar stays compact and the narrow-window layout works again.
+- **Escape never hides the window,** and showing or switching back to BonsAI no longer drops you
+  into editing a card (which made number keys, P, and Delete type instead of acting).
+- **Text tool clicks put the caret in the new text right away.** Editors take focus when they
+  appear instead of on timers, so fast typing after a double-click is no longer lost.
+- **Clicking a card no longer nudges it** toward a neighbour or leaves snap guides on screen.
+- **Resizing from the top-right corner works:** the delete button now sits above that handle
+  instead of covering it.
+- **Copies, pastes, and ⌥-drag duplicates form their own group and are never locked,** so
+  clicking a copy no longer selects the originals.
+- **A mouse wheel pans at a useful speed, and ⌘/⌃ + scroll zooms around the pointer.** The zoom
+  buttons and ⌘+/⌘− zoom around the middle of the window, 100% no longer makes the board jump,
+  and zoom now ranges from 10% to 400% so Fit can frame large boards.
+- **A slightly moved click with the text, equation, sticky, checklist, or table tool places the
+  element** instead of panning, and double-clicking with a shape tool no longer also adds a text
+  card.
+- **An empty text card you abandon leaves no undo step,** so ⌘Z no longer brings back a ghost.
 
 ### Removed
 

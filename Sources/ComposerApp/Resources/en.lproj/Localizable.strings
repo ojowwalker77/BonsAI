@@ -195,16 +195,16 @@
 "unknown tool: %@" = "unknown tool: %@";
 
 /* Localization coverage pass */
-"Select  ·  move & edit cards  1" = "Select  ·  move & edit cards  1";
-"Text  ·  click the board, then type  2" = "Text  ·  click the board, then type  2";
-"Rectangle  ·  drag to draw  3" = "Rectangle  ·  drag to draw  3";
-"Ellipse  ·  drag to draw  4" = "Ellipse  ·  drag to draw  4";
-"Diamond  ·  drag to draw  5" = "Diamond  ·  drag to draw  5";
-"Line  ·  drag to draw  6" = "Line  ·  drag to draw  6";
-"Arrow  ·  drag to draw  7" = "Arrow  ·  drag to draw  7";
-"Freehand stroke  ·  drag to draw  8" = "Freehand stroke  ·  drag to draw  8";
-"Pen  ·  click corners, drag curves, Return commits  P" = "Pen  ·  click corners, drag curves, Return commits  P";
-"Equation  ·  click the board, then type LaTeX  9" = "Equation  ·  click the board, then type LaTeX  9";
+"Select  ·  move & edit cards" = "Select  ·  move & edit cards";
+"Text  ·  click the board, then type" = "Text  ·  click the board, then type";
+"Rectangle  ·  drag to draw" = "Rectangle  ·  drag to draw";
+"Ellipse  ·  drag to draw" = "Ellipse  ·  drag to draw";
+"Diamond  ·  drag to draw" = "Diamond  ·  drag to draw";
+"Line  ·  drag to draw" = "Line  ·  drag to draw";
+"Arrow  ·  drag to draw" = "Arrow  ·  drag to draw";
+"Freehand stroke  ·  drag to draw" = "Freehand stroke  ·  drag to draw";
+"Pen  ·  click corners, drag curves, Return commits" = "Pen  ·  click corners, drag curves, Return commits";
+"Equation  ·  click the board, then type LaTeX" = "Equation  ·  click the board, then type LaTeX";
 "Heading  ·  cycles # / ## / ###" = "Heading  ·  cycles # / ## / ###";
 "Bold  ·  **text**" = "Bold  ·  **text**";
 "Italic  ·  *text*" = "Italic  ·  *text*";
@@ -263,3 +263,4 @@
 "GLOBAL" = "GLOBAL";
 "Read on-device - agents can read this screenshot's text" = "Read on-device - agents can read this screenshot's text";
 "Screenshot read - agents can see its text" = "Screenshot read - agents can see its text";
+"Keep tool active" = "Keep tool active";

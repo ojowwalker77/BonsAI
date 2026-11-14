@@ -2,7 +2,6 @@ import Foundation
 
 extension Notification.Name {
   static let composerShowWindow = Notification.Name("composerShowWindow")
-  static let composerDismiss = Notification.Name("composerDismiss")
   /// Dump-stack navigation: ⌘[ older, ⌘] newer, ⌘N new dump.
   static let composerPrevDump = Notification.Name("composerPrevDump")
   static let composerNextDump = Notification.Name("composerNextDump")
@@ -30,9 +29,6 @@ extension Notification.Name {
   /// and zooms the board instead of dead-ending on an (unselected) element.
   static let composerCanvasScroll = Notification.Name("composerCanvasScroll")
   static let composerCanvasMagnify = Notification.Name("composerCanvasMagnify")
-  /// Posted when the panel is summoned or the app becomes active — the canvas reveals and enters
-  /// editing on the active card so the caret is ready without double-clicking.
-  static let composerEnterEditing = Notification.Name("composerEnterEditing")
   /// Number shortcuts use a 1-based `index`; named shortcuts such as P carry a `CanvasTool`.
   static let composerSelectTool = Notification.Name("composerSelectTool")
   /// ⌘K "Add point to graph…": the graph card whose id matches `object` (a UUID) opens its Point
@@ -59,6 +55,8 @@ extension Notification.Name {
   static let composerLanguageChanged = Notification.Name("composerLanguageChanged")
   /// Fires on the capture hotkey ("Snap to board") — grab a screen region, understand it on-device,
   /// and drop it on the board as an agent-ready card.
+  /// Q: toggle whether a drawing tool stays active after each placement (Excalidraw's tool lock).
+  static let composerToggleToolLock = Notification.Name("composerToggleToolLock")
   static let composerCaptureToBoard = Notification.Name("composerCaptureToBoard")
   /// Fires after a region was captured and saved; `userInfo["path"]` is the PNG. The board adds the
   /// image card here and kicks off its on-device understanding.
@@ -80,7 +78,8 @@ enum ComposerEscapeTarget: Equatable {
   case tintPicker
   case activeTool
   case selection
-  case windowDismissal
+  /// Nothing to dismiss. BonsAI is a standard window, so a spare Escape never hides it.
+  case none
 }
 
 struct ComposerEscapeState: Equatable {
@@ -124,6 +123,6 @@ enum ComposerEscapeCoordinator {
     if state.hasTintPicker { return .tintPicker }
     if state.hasActiveTool { return .activeTool }
     if state.hasSelection { return .selection }
-    return .windowDismissal
+    return .none
   }
 }

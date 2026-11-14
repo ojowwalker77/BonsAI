@@ -72,11 +72,25 @@ enum CanvasTool: CaseIterable, Hashable, Sendable {
 struct CanvasToolDescriptor: Identifiable, Hashable, Sendable {
   let tool: CanvasTool
   let symbol: String
+  /// Localization key for the tool's name and gesture hint, WITHOUT its shortcut — the shortcut is
+  /// appended from `digit`/`letters`, so remapping a key never touches the strings files.
   let helpKey: String
+  /// Bare digit that picks the tool (⌘-digit works too); shown as the button's corner badge.
   let shortcut: Int?
+  /// Bare letters that pick the tool, Excalidraw-style (matched case-insensitively).
+  var letters: [String] = []
 
   var id: CanvasTool { tool }
-  var localizedHelp: String { helpKey.localizedUI }
+
+  var shortcutLabel: String? {
+    let keys = letters + (shortcut.map { [String($0)] } ?? [])
+    return keys.isEmpty ? nil : keys.joined(separator: " / ")
+  }
+
+  var localizedHelp: String {
+    guard let shortcutLabel else { return helpKey.localizedUI }
+    return "\(helpKey.localizedUI)  \(shortcutLabel)"
+  }
 }
 
 struct CanvasToolGroupDescriptor: Equatable, Sendable {
@@ -85,31 +99,41 @@ struct CanvasToolGroupDescriptor: Equatable, Sendable {
   let tools: [CanvasToolDescriptor]
 }
 
-/// One catalog drives both toolbar variants, so a tool's glyph, help text, and shortcut cannot
-/// drift when the responsive layout groups it into a menu.
+/// One catalog drives the toolbar, its badges and tooltips, and the keyboard, so a tool's glyph,
+/// help text, and shortcut cannot drift. Shortcuts follow Excalidraw exactly: 1/V select,
+/// 2/R rectangle, 3/D diamond, 4/O ellipse, 5/A arrow, 6/L line, 7/P/X draw, 8/T text — plus
+/// 9 for equations, B for the pen, and Q to keep the drawing tool active.
 enum CanvasToolbarCatalog {
   static let select = CanvasToolDescriptor(
-    tool: .select, symbol: "cursorarrow", helpKey: "Select  ·  move & edit cards  1", shortcut: 1)
-  static let text = CanvasToolDescriptor(
-    tool: .text, symbol: "character", helpKey: "Text  ·  click the board, then type  2", shortcut: 2)
+    tool: .select, symbol: "cursorarrow", helpKey: "Select  ·  move & edit cards", shortcut: 1,
+    letters: ["V"])
   static let rectangle = CanvasToolDescriptor(
-    tool: .rectangle, symbol: "rectangle", helpKey: "Rectangle  ·  drag to draw  3", shortcut: 3)
-  static let ellipse = CanvasToolDescriptor(
-    tool: .ellipse, symbol: "circle", helpKey: "Ellipse  ·  drag to draw  4", shortcut: 4)
+    tool: .rectangle, symbol: "rectangle", helpKey: "Rectangle  ·  drag to draw", shortcut: 2,
+    letters: ["R"])
   static let diamond = CanvasToolDescriptor(
-    tool: .diamond, symbol: "diamond", helpKey: "Diamond  ·  drag to draw  5", shortcut: 5)
-  static let line = CanvasToolDescriptor(
-    tool: .line, symbol: "line.diagonal", helpKey: "Line  ·  drag to draw  6", shortcut: 6)
+    tool: .diamond, symbol: "diamond", helpKey: "Diamond  ·  drag to draw", shortcut: 3,
+    letters: ["D"])
+  static let ellipse = CanvasToolDescriptor(
+    tool: .ellipse, symbol: "circle", helpKey: "Ellipse  ·  drag to draw", shortcut: 4,
+    letters: ["O"])
   static let arrow = CanvasToolDescriptor(
-    tool: .arrow, symbol: "arrow.up.right", helpKey: "Arrow  ·  drag to draw  7", shortcut: 7)
+    tool: .arrow, symbol: "arrow.up.right", helpKey: "Arrow  ·  drag to draw", shortcut: 5,
+    letters: ["A"])
+  static let line = CanvasToolDescriptor(
+    tool: .line, symbol: "line.diagonal", helpKey: "Line  ·  drag to draw", shortcut: 6,
+    letters: ["L"])
   static let freehand = CanvasToolDescriptor(
-    tool: .freehand, symbol: "scribble.variable", helpKey: "Freehand stroke  ·  drag to draw  8", shortcut: 8)
-  static let vectorPen = CanvasToolDescriptor(
-    tool: .vectorPen, symbol: "pencil.tip",
-    helpKey: "Pen  ·  click corners, drag curves, Return commits  P", shortcut: nil)
+    tool: .freehand, symbol: "scribble.variable", helpKey: "Freehand stroke  ·  drag to draw",
+    shortcut: 7, letters: ["P", "X"])
+  static let text = CanvasToolDescriptor(
+    tool: .text, symbol: "character", helpKey: "Text  ·  click the board, then type", shortcut: 8,
+    letters: ["T"])
   static let equation = CanvasToolDescriptor(
     tool: .equation, symbol: "x.squareroot",
-    helpKey: "Equation  ·  click the board, then type LaTeX  9", shortcut: 9)
+    helpKey: "Equation  ·  click the board, then type LaTeX", shortcut: 9)
+  static let vectorPen = CanvasToolDescriptor(
+    tool: .vectorPen, symbol: "pencil.tip",
+    helpKey: "Pen  ·  click corners, drag curves, Return commits", shortcut: nil, letters: ["B"])
   static let sticky = CanvasToolDescriptor(
     tool: .sticky, symbol: "note", helpKey: "Sticky note", shortcut: nil)
   static let checklist = CanvasToolDescriptor(
@@ -117,19 +141,35 @@ enum CanvasToolbarCatalog {
   static let table = CanvasToolDescriptor(
     tool: .table, symbol: "tablecells", helpKey: "Table", shortcut: nil)
 
+  /// Toolbar order matches Excalidraw's (and the digit badges), with the pen beside freehand.
   static let fullTools = [
-    select, text, rectangle, ellipse, diamond, line, arrow, freehand, vectorPen, equation,
+    select, rectangle, diamond, ellipse, arrow, line, freehand, vectorPen, text, equation,
   ]
+  static let all = fullTools + [sticky, checklist, table]
   static let shapeGroup = CanvasToolGroupDescriptor(
     symbol: "square.on.circle", helpKey: rectangle.helpKey,
-    tools: [rectangle, ellipse, diamond])
+    tools: [rectangle, diamond, ellipse])
   static let connectorGroup = CanvasToolGroupDescriptor(
-    symbol: "arrow.up.right", helpKey: "Connectors", tools: [line, arrow])
+    symbol: "arrow.up.right", helpKey: "Connectors", tools: [arrow, line])
   static let drawingGroup = CanvasToolGroupDescriptor(
     symbol: "pencil.and.scribble", helpKey: "Drawing", tools: [freehand, vectorPen])
   static let moreGroup = CanvasToolGroupDescriptor(
     symbol: "plus.square.on.square", helpKey: "More canvas elements",
     tools: [sticky, checklist, table])
+
+  /// The tool a bare (or ⌘-) digit selects.
+  static func tool(forDigit digit: Int) -> CanvasTool? {
+    all.first { $0.shortcut == digit }?.tool
+  }
+
+  /// The tool a bare letter selects (case-insensitive).
+  static func tool(forLetter letter: String) -> CanvasTool? {
+    let key = letter.uppercased()
+    return all.first { $0.letters.contains(key) }?.tool
+  }
+
+  /// Excalidraw's "keep selected tool active after drawing" toggle.
+  static let toolLockLetter = "Q"
 }
 
 enum CanvasToolbarLayoutPolicy {
@@ -172,10 +212,10 @@ struct CanvasToolbar: View {
   private var compactToolbar: some View {
     HStack(spacing: WindowChrome.itemSpacing) {
       toolButton(CanvasToolbarCatalog.select)
-      toolButton(CanvasToolbarCatalog.text)
       toolMenu(CanvasToolbarCatalog.shapeGroup)
       toolMenu(CanvasToolbarCatalog.connectorGroup)
       toolMenu(CanvasToolbarCatalog.drawingGroup)
+      toolButton(CanvasToolbarCatalog.text)
       toolButton(CanvasToolbarCatalog.equation)
       toolMenu(CanvasToolbarCatalog.moreGroup)
       persistenceControl
@@ -208,6 +248,11 @@ struct CanvasToolbar: View {
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
+    // A borderless-button Menu is an NSPopUpButton underneath and greedily fills the width it is
+    // offered — it stretched the bottom bar edge to edge and let `ViewThatFits` accept the full
+    // toolbar at any width. Pin it to the same square as every other tool button.
+    .fixedSize()
+    .frame(width: ToolMetrics.side, height: ToolMetrics.side)
     .help(group.helpKey.localizedUI)
   }
 
@@ -228,7 +273,8 @@ struct CanvasToolbar: View {
         .buttonStyle(.plain)
         .help((continuousDrawingEnabled
                ? "Drawing tool stays active · click to use once"
-               : "Drawing tool is one-shot · click to keep active").localizedUI)
+               : "Drawing tool is one-shot · click to keep active").localizedUI
+              + "  \(CanvasToolbarCatalog.toolLockLetter)")
       }
     }
     .frame(width: ToolMetrics.side, height: ToolMetrics.side)

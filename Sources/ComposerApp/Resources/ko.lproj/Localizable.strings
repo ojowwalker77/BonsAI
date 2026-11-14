@@ -195,16 +195,16 @@
 "unknown tool: %@" = "알 수 없는 도구: %@";
 
 /* Localization coverage pass */
-"Select  ·  move & edit cards  1" = "선택  ·  카드 이동 및 편집  1";
-"Text  ·  click the board, then type  2" = "텍스트  ·  보드를 클릭한 뒤 입력  2";
-"Rectangle  ·  drag to draw  3" = "사각형  ·  드래그하여 그리기  3";
-"Ellipse  ·  drag to draw  4" = "타원  ·  드래그하여 그리기  4";
-"Diamond  ·  drag to draw  5" = "다이아몬드  ·  드래그하여 그리기  5";
-"Line  ·  drag to draw  6" = "선  ·  드래그하여 그리기  6";
-"Arrow  ·  drag to draw  7" = "화살표  ·  드래그하여 그리기  7";
-"Freehand stroke  ·  drag to draw  8" = "자유 곡선  ·  드래그하여 그리기  8";
-"Pen  ·  click corners, drag curves, Return commits  P" = "펜  ·  클릭으로 모서리, 드래그로 곡선, Return으로 완료  P";
-"Equation  ·  click the board, then type LaTeX  9" = "수식  ·  보드를 클릭한 뒤 LaTeX 입력  9";
+"Select  ·  move & edit cards" = "선택  ·  카드 이동 및 편집";
+"Text  ·  click the board, then type" = "텍스트  ·  보드를 클릭한 뒤 입력";
+"Rectangle  ·  drag to draw" = "사각형  ·  드래그하여 그리기";
+"Ellipse  ·  drag to draw" = "타원  ·  드래그하여 그리기";
+"Diamond  ·  drag to draw" = "다이아몬드  ·  드래그하여 그리기";
+"Line  ·  drag to draw" = "선  ·  드래그하여 그리기";
+"Arrow  ·  drag to draw" = "화살표  ·  드래그하여 그리기";
+"Freehand stroke  ·  drag to draw" = "자유 곡선  ·  드래그하여 그리기";
+"Pen  ·  click corners, drag curves, Return commits" = "펜  ·  클릭으로 모서리, 드래그로 곡선, Return으로 완료";
+"Equation  ·  click the board, then type LaTeX" = "수식  ·  보드를 클릭한 뒤 LaTeX 입력";
 "Heading  ·  cycles # / ## / ###" = "제목  ·  # / ## / ### 순환";
 "Bold  ·  **text**" = "굵게  ·  **text**";
 "Italic  ·  *text*" = "기울임  ·  *text*";
@@ -265,3 +265,4 @@
 "GLOBAL" = "전역";
 "Read on-device - agents can read this screenshot's text" = "기기에서 읽음 - 에이전트가 이 스크린샷의 텍스트를 읽을 수 있습니다";
 "Screenshot read - agents can see its text" = "스크린샷을 읽었습니다 - 에이전트가 텍스트를 볼 수 있습니다";
+"Keep tool active" = "도구 유지";

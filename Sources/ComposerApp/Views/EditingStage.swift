@@ -356,9 +356,6 @@ struct EditingStage: View {
       .padding(.bottom, 22)
     }
     .frame(width: min(720, size.width * 0.72), height: min(640, size.height * 0.82))
-    .onAppear {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { interaction.controller.focus() }
-    }
   }
 
   // MARK: Equation stage

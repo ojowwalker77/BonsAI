@@ -45,8 +45,8 @@ final class CanvasDotGridTests: XCTestCase {
 
   func testLowZoomPanPhasesStayWithinThePerFramePathBudget() {
     let viewport = CGSize(width: 7680, height: 4320)
-    let translations = stride(from: -120, through: 120, by: 12).map {
-      CGSize(width: CGFloat($0), height: CGFloat(-$0 / 2))
+    let translations = stride(from: -120, through: 120, by: 12).map { (offset: Int) -> CGSize in
+      CGSize(width: CGFloat(offset), height: CGFloat(-offset / 2))
     }
     let layouts = translations.map {
       CanvasDotGridLayout.layout(scale: 0.35, translation: $0, viewportSize: viewport)

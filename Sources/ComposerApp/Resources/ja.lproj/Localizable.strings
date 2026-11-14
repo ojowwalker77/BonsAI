@@ -195,16 +195,16 @@
 "unknown tool: %@" = "不明なツール: %@";
 
 /* Localization coverage pass */
-"Select  ·  move & edit cards  1" = "選択  ·  カードを移動・編集  1";
-"Text  ·  click the board, then type  2" = "テキスト  ·  ボードをクリックして入力  2";
-"Rectangle  ·  drag to draw  3" = "長方形  ·  ドラッグして描画  3";
-"Ellipse  ·  drag to draw  4" = "楕円  ·  ドラッグして描画  4";
-"Diamond  ·  drag to draw  5" = "ひし形  ·  ドラッグして描画  5";
-"Line  ·  drag to draw  6" = "線  ·  ドラッグして描画  6";
-"Arrow  ·  drag to draw  7" = "矢印  ·  ドラッグして描画  7";
-"Freehand stroke  ·  drag to draw  8" = "フリーハンド  ·  ドラッグして描画  8";
-"Pen  ·  click corners, drag curves, Return commits  P" = "ペン  ·  クリックで角、ドラッグで曲線、Return で確定  P";
-"Equation  ·  click the board, then type LaTeX  9" = "方程式  ·  ボードをクリックして LaTeX を入力  9";
+"Select  ·  move & edit cards" = "選択  ·  カードを移動・編集";
+"Text  ·  click the board, then type" = "テキスト  ·  ボードをクリックして入力";
+"Rectangle  ·  drag to draw" = "長方形  ·  ドラッグして描画";
+"Ellipse  ·  drag to draw" = "楕円  ·  ドラッグして描画";
+"Diamond  ·  drag to draw" = "ひし形  ·  ドラッグして描画";
+"Line  ·  drag to draw" = "線  ·  ドラッグして描画";
+"Arrow  ·  drag to draw" = "矢印  ·  ドラッグして描画";
+"Freehand stroke  ·  drag to draw" = "フリーハンド  ·  ドラッグして描画";
+"Pen  ·  click corners, drag curves, Return commits" = "ペン  ·  クリックで角、ドラッグで曲線、Return で確定";
+"Equation  ·  click the board, then type LaTeX" = "方程式  ·  ボードをクリックして LaTeX を入力";
 "Heading  ·  cycles # / ## / ###" = "見出し  ·  # / ## / ### を切り替え";
 "Bold  ·  **text**" = "太字  ·  **text**";
 "Italic  ·  *text*" = "斜体  ·  *text*";
@@ -265,3 +265,4 @@
 "GLOBAL" = "グローバル";
 "Read on-device - agents can read this screenshot's text" = "デバイス上で読み取り済み - エージェントはこのスクリーンショットのテキストを読めます";
 "Screenshot read - agents can see its text" = "スクリーンショットを読み取りました - エージェントがテキストを参照できます";
+"Keep tool active" = "ツールを維持";

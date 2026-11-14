@@ -190,7 +190,8 @@ private struct SettingsContent: View {
   let destination: SettingsDestination
 
   private let shortcuts: [(String, String)] = [
-    ("Switch tools".localizedUI, "1 – 9"),
+    ("Switch tools".localizedUI, "1 – 9   V R D O A L P T"),
+    ("Keep tool active".localizedUI, "Q"),
     ("New board".localizedUI, "⌘N"),
     ("Navigate boards".localizedUI, "⌘[  ⌘]"),
     ("Select all / duplicate".localizedUI, "⌘A  ⌘D"),

@@ -143,6 +143,7 @@ struct FreeWriteEditor: NSViewRepresentable {
     tv.typingAttributes = context.coordinator.bodyAttributes()
     tv.textColor = Theme.nsBodyText
     tv.delegate = context.coordinator
+    tv.focusesWhenAttached = true
     scrollView.documentView = tv
 
     context.coordinator.textView = tv

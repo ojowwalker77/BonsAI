@@ -239,9 +239,6 @@ struct ComposerCanvas: View {
     .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
     .onAppear {
       lastViewportSize = inner
-      // A theme/language remount must preserve the viewport exactly. PanelController posts the
-      // reveal-bearing entry notification separately when the window is actually summoned.
-      enterEditingForEntry(reveal: false)
       CanvasBridge.shared.register(board)
       showLatestReportedError()
     }
@@ -309,8 +306,8 @@ struct ComposerCanvas: View {
 
   private var zoomCommandBridge: some View {
     commandAnchor
-      .onReceive(NotificationCenter.default.publisher(for: .composerZoomOut)) { _ in zoom(0.8, anchoredAt: zoomAnchor) }
-      .onReceive(NotificationCenter.default.publisher(for: .composerZoomIn)) { _ in zoom(1.25, anchoredAt: zoomAnchor) }
+      .onReceive(NotificationCenter.default.publisher(for: .composerZoomOut)) { _ in zoom(0.8, anchoredAt: viewportCenter) }
+      .onReceive(NotificationCenter.default.publisher(for: .composerZoomIn)) { _ in zoom(1.25, anchoredAt: viewportCenter) }
       .onReceive(NotificationCenter.default.publisher(for: .composerZoomReset)) { _ in resetZoom() }
       .onReceive(NotificationCenter.default.publisher(for: .composerZoomFit)) { note in
         let all = (note.userInfo?["scope"] as? String) == "all"
@@ -323,21 +320,24 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerSpaceKeyChanged)) { notification in
         handleSpaceKey(notification)
       }
-      // Scroll / pinch forwarded from a card under the cursor — keep the board panning & zooming.
+      // Scroll forwarded from a card under the cursor — keep the board panning & zooming.
       .onReceive(NotificationCenter.default.publisher(for: .composerCanvasScroll)) { note in
+        if let factor = note.userInfo?["zoom"] as? CGFloat {
+          handleZoom(factor, anchoredAt: pointerViewportLocation() ?? viewportCenter)
+          return
+        }
         let dx = (note.userInfo?["dx"] as? CGFloat) ?? 0
         let dy = (note.userInfo?["dy"] as? CGFloat) ?? 0
         handleScroll(CGSize(width: dx, height: dy))
       }
-      .onReceive(NotificationCenter.default.publisher(for: .composerEnterEditing)) { _ in
-        enterEditingForEntry(reveal: true)
-      }
       .onReceive(NotificationCenter.default.publisher(for: .composerSelectTool)) { note in
         if let selectedTool = note.userInfo?["tool"] as? CanvasTool {
           tool = selectedTool
-        } else if let index = note.userInfo?["index"] as? Int {
-          selectTool(index: index)
         }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .composerToggleToolLock)) { _ in
+        continuousDrawingEnabled.toggle()
+        Haptics.level()
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerTogglePalette)) { _ in
         togglePalette()
@@ -345,12 +345,6 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerToggleFocus)) { _ in
         toggleFocus()
       }
-  }
-
-  private func selectTool(index: Int) {
-    let order: [CanvasTool] = [.select, .text, .rectangle, .ellipse, .diamond, .line, .arrow, .freehand, .equation]
-    guard index >= 1, index <= order.count else { return }
-    tool = order[index - 1]
   }
 
   private func boardContent(viewportSize: CGSize) -> some View {
@@ -632,16 +626,13 @@ struct ComposerCanvas: View {
     }
   }
 
-  /// Double-clicking empty canvas drops a text element there and starts editing — the default
-  /// "just start writing" gesture, regardless of the active tool.
+  /// Double-clicking empty canvas (a click sequence begun with Select) drops a text element there
+  /// and starts editing — the "just start writing" gesture. The inline editor takes the caret
+  /// itself when it mounts (`ComposerTextView.focusesWhenAttached`).
   private func handleDoubleTap(at point: CGPoint) {
     let id = board.addCard(at: boardPoint(forViewport: point))
     tool = .select
-    // Text edits inline: begin editing, then hand the caret to the in-card editor once it mounts.
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-      board.beginEditing(id)
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { board.interaction(for: id).controller.focus() }
-    }
+    board.beginEditing(id)
   }
 
   /// The draft segment changed (viewport space). Store it, and for a line/arrow resolve the card its
@@ -1177,7 +1168,7 @@ struct ComposerCanvas: View {
   /// export right) and the bottom is a single strong grouping instead of scattered pills.
   private func bottomCommandBar(fit innerSize: CGSize) -> some View {
     return HStack(spacing: WindowChrome.itemSpacing) {
-      SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out".localizedUI) { zoom(0.8, anchoredAt: zoomAnchor) }
+      SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out".localizedUI) { zoom(0.8, anchoredAt: viewportCenter) }
       Button(action: resetZoom) {
         Text("\(Int((effectiveScale * 100).rounded()))%")
           .font(WindowChrome.labelFont.monospacedDigit())
@@ -1187,7 +1178,7 @@ struct ComposerCanvas: View {
       }
       .buttonStyle(.plain)
       .help("Reset to 100%".localizedUI)
-      SidebarButton(symbol: "plus.magnifyingglass", help: "Zoom in".localizedUI) { zoom(1.25, anchoredAt: zoomAnchor) }
+      SidebarButton(symbol: "plus.magnifyingglass", help: "Zoom in".localizedUI) { zoom(1.25, anchoredAt: viewportCenter) }
       SidebarButton(symbol: "arrow.up.left.and.down.right.magnifyingglass", help: "Fit board".localizedUI) {
         withAnimation(Theme.Motion.accessory) { fitBoard(in: innerSize) }
       }
@@ -1488,24 +1479,12 @@ struct ComposerCanvas: View {
 
   // MARK: Zoom helpers
 
-  /// Board zoom is clamped to 35%–200% (Fit applies its own ≤100% cap so it never enlarges).
-  private func clampZoom(_ value: CGFloat) -> CGFloat { min(max(value, 0.35), 2) }
+  /// Board zoom is clamped to 10%–400% (Fit applies its own ≤100% cap so it never enlarges). The
+  /// low end lets Fit frame a large board; the dot grid thins itself to stay inside its budget.
+  private func clampZoom(_ value: CGFloat) -> CGFloat { min(max(value, 0.1), 4) }
 
   private var viewportCenter: CGPoint {
     CGPoint(x: lastViewportSize.width / 2, y: lastViewportSize.height / 2)
-  }
-
-  /// Toolbar/keyboard zoom anchors at the pointer when it's over the canvas — the least-surprise
-  /// anchor, and the one pinch already uses. With the cursor elsewhere (menu-driven zoom) it falls
-  /// back to the selection's center, then the viewport center, so the board still doesn't lurch.
-  private var zoomAnchor: CGPoint {
-    if let pointer = pointerViewportLocation() { return pointer }
-    let selected = board.cards.filter { board.selectedCardIDs.contains($0.id) }
-    guard !selected.isEmpty else { return viewportCenter }
-    let midX = ((selected.map(\.x).min() ?? 0) + (selected.map { $0.x + $0.w }.max() ?? 0)) / 2
-    let midY = ((selected.map(\.y).min() ?? 0) + (selected.map { $0.y + $0.h }.max() ?? 0)) / 2
-    return CGPoint(x: CGFloat(midX) * effectiveScale + pan.width,
-                   y: CGFloat(midY) * effectiveScale + pan.height)
   }
 
   /// The pointer in viewport coordinates (top-left origin), or nil when it isn't over the window.
@@ -1528,10 +1507,17 @@ struct ComposerCanvas: View {
     return kind == .text
   }
 
+  /// Toolbar and keyboard zoom anchor at the viewport centre (the pointer is on the command bar
+  /// or nowhere useful); wheel and pinch pass the pointer instead.
   private func zoom(_ factor: CGFloat, anchoredAt point: CGPoint) {
+    setScale(max(scale, 0.01) * factor, anchoredAt: point)
+  }
+
+  /// Change the zoom while keeping the board point under `point` fixed on screen.
+  private func setScale(_ target: CGFloat, anchoredAt point: CGPoint) {
     guard allowViewportTransform() else { return }
     let oldScale = max(scale, 0.01)
-    let nextScale = clampZoom(oldScale * factor)
+    let nextScale = clampZoom(target)
     guard nextScale != scale else { return }
     let boardPoint = CGPoint(
       x: (point.x - pan.width) / oldScale,
@@ -1609,9 +1595,9 @@ struct ComposerCanvas: View {
 
   /// Keyboard and menu reset commands obey the same pointer-ownership gate as wheel/pinch input.
   /// Otherwise a Pen press could capture one transform for its preview and commit under another.
+  /// 100%, anchored at the viewport centre so the content under it stays put instead of jumping.
   private func resetZoom() {
-    guard allowViewportTransform() else { return }
-    withAnimation(Theme.Motion.accessory) { scale = 1 }
+    withAnimation(Theme.Motion.accessory) { setScale(1, anchoredAt: viewportCenter) }
   }
 
 
@@ -1734,8 +1720,8 @@ struct ComposerCanvas: View {
       tool = .select
     case .selection:
       board.deselectAll()
-    case .windowDismissal:
-      dismiss()
+    case .none:
+      return
     }
   }
   private func handleUndoBoard() { if canEditBoard { dismissPromotion(); board.undo() } }
@@ -1844,32 +1830,6 @@ struct ComposerCanvas: View {
     guard let id = board.cards.first?.id,
           board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.beginEditing(id) }
-  }
-
-  /// On panel open: reveal and enter editing on the active (or first) text card so the caret is
-  /// ready to type. The active card stays primary, so reopening the board returns to that thought
-  /// instead of preserving a viewport that can no longer see it.
-  private func enterEditingForEntry(reveal: Bool) {
-    guard !showPalette, focusedCardID == nil,
-          pendingBoardDeletion == nil, renamingBoardID == nil,
-          !store.isSettingsOpen else { return }
-    let id = board.editingCardID ?? board.primarySelectedCardID ?? board.cards.first?.id
-    guard let id, board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
-    let interaction = board.interaction(for: id)
-    if board.editingCardID != id { board.beginEditing(id) }
-    if reveal { revealCard(id) }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-      guard board.editingCardID == id else { return }
-      interaction.controller.focus()
-    }
-  }
-
-  /// Preserve zoom and move only as far as needed to expose the target. The retained workspace
-  /// owns the final pan, so the same focus survives later SwiftUI remounts.
-  private func revealCard(_ id: UUID) {
-    withAnimation(Theme.Motion.accessory) {
-      _ = workspace.revealCard(id, in: lastViewportSize, transientPan: panLive)
-    }
   }
 
   /// The command-bar gear toggles Settings: a second click while Settings is up closes it again.
@@ -2204,7 +2164,6 @@ struct ComposerCanvas: View {
     }
   }
 
-  private func dismiss() { NotificationCenter.default.post(name: .composerDismiss, object: nil) }
 
   private func boardPoint(forViewport point: CGPoint) -> CGPoint {
     CGPoint(x: (point.x - pan.width) / effectiveScale,
@@ -2361,6 +2320,39 @@ enum CanvasViewportDragMode: Equatable {
 
 /// A draft's viewport-to-board conversion is captured when its press begins. Pan or zoom during
 /// these modes would change that transform before commit and separate result from preview.
+/// What one scroll event does to the board. Trackpads pan by their precise pixel deltas; a mouse
+/// wheel reports whole lines, which are scaled to a useful distance (raw, one notch panned ~1pt);
+/// and ⌘ or ⌃ + scroll zooms around the pointer, as in Excalidraw and every browser canvas.
+enum CanvasScrollInput: Equatable {
+  case pan(CGSize)
+  case zoom(CGFloat)
+
+  /// Board points one mouse-wheel line pans.
+  static let wheelLinePoints: CGFloat = 32
+  /// Zoom sensitivity per scrolled point (scroll toward the user zooms in).
+  static let zoomPerPoint: CGFloat = 0.003
+
+  init(deltaX: CGFloat, deltaY: CGFloat, hasPreciseDeltas: Bool, zoomModifier: Bool) {
+    let scale = hasPreciseDeltas ? 1 : Self.wheelLinePoints
+    let dx = deltaX * scale
+    let dy = deltaY * scale
+    if zoomModifier {
+      // A single event never more than halves or doubles the zoom, however hard the flick.
+      self = .zoom(min(max(exp(dy * Self.zoomPerPoint), 0.5), 2))
+    } else {
+      self = .pan(CGSize(width: dx, height: dy))
+    }
+  }
+
+  init(_ event: NSEvent) {
+    self.init(
+      deltaX: event.scrollingDeltaX,
+      deltaY: event.scrollingDeltaY,
+      hasPreciseDeltas: event.hasPreciseScrollingDeltas,
+      zoomModifier: !event.modifierFlags.intersection([.command, .control]).isEmpty)
+  }
+}
+
 enum CanvasViewportTransformPolicy {
   static func allowsPanOrZoom(during mode: CanvasViewportDragMode) -> Bool {
     switch mode {
@@ -2484,6 +2476,9 @@ private struct BoardViewportInput: NSViewRepresentable {
       }
     }
     private var dragClickCount = 1
+    /// The tool active on the FIRST click of a click sequence. A double-click only means "type here"
+    /// when that click was a Select click; with a placement tool the first click already placed.
+    private var firstClickTool: CanvasTool = .select
     private var lastPan: CGSize = .zero
     private var freehandPoints: [CGPoint] = []
     /// Last raw drag point, kept so a Shift press/release with the mouse still (flagsChanged,
@@ -2566,6 +2561,7 @@ private struct BoardViewportInput: NSViewRepresentable {
       dragStart = point
       dragModifiers = EventModifiers(event.modifierFlags)
       dragClickCount = event.clickCount
+      if event.clickCount <= 1 { firstClickTool = state.tool }
       lastPan = .zero
       freehandPoints = []
       draftCancelled = false
@@ -2598,9 +2594,10 @@ private struct BoardViewportInput: NSViewRepresentable {
           dragMode = .vectorDrawing
         } else if state.tool.placesByDragging {
           dragMode = .placing
-        } else {
-          dragMode = .panning
         }
+        // Click-to-place tools (text, equation, sticky, checklist, table) stay a tap however far
+        // the press wanders and place at the press point on mouse-up — a slightly moved click used
+        // to pan the board instead. Panning is Space-drag or scroll.
       }
 
       switch dragMode {
@@ -2668,7 +2665,7 @@ private struct BoardViewportInput: NSViewRepresentable {
         if state.tool == .vectorPen {
           state.onVectorNodeEnded(start, start)
         } else if dragClickCount >= 2 {
-          state.onDoubleTap(start)
+          if firstClickTool == .select { state.onDoubleTap(start) }
         } else {
           state.onTap(start, dragModifiers)
         }
@@ -2717,7 +2714,10 @@ private struct BoardViewportInput: NSViewRepresentable {
       // at the old pan, so the committed shape lands away from the preview. Swallow scroll-pan while
       // a shape/freehand drag is live; two-finger pan resumes the moment the draw ends.
       guard CanvasViewportTransformPolicy.allowsPanOrZoom(during: dragMode) else { return }
-      state.onScroll(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY))
+      switch CanvasScrollInput(event) {
+      case .pan(let delta): state.onScroll(delta)
+      case .zoom(let factor): state.onZoom(factor, convert(event.locationInWindow, from: nil))
+      }
     }
 
     override func keyDown(with event: NSEvent) {

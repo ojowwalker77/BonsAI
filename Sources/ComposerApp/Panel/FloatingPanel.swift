@@ -308,9 +308,9 @@ final class FloatingPanel: NSWindow {
       NotificationCenter.default.post(name: .composerZoomReset, object: nil)
       return true
     }
-    // ⌘1–⌘9 pick a tool (select, text, rectangle, ellipse, diamond, line, arrow, freehand, equation).
-    if flags == [.command], let raw, let index = Int(raw), (1...9).contains(index) {
-      NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["index": index])
+    // ⌘1–⌘9 pick the same tools as the bare digits (CanvasToolbarCatalog).
+    if flags == [.command], let raw, let digit = Int(raw), let tool = CanvasToolbarCatalog.tool(forDigit: digit) {
+      NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["tool": tool])
       return true
     }
 
@@ -343,27 +343,22 @@ final class FloatingPanel: NSWindow {
       NotificationCenter.default.post(name: .composerDeleteSelection, object: nil)
       return
     }
-    // Bare P selects the vector pen. Keep this beside the bare number routing so it inherits the
-    // same exact-modifier and NSTextView guards: typing a p in any editor remains text input.
+    // Bare digits and letters pick tools exactly as in Excalidraw (CanvasToolbarCatalog), and Q
+    // toggles "keep the drawing tool active". No modifiers allowed (⇧1 stays "!"), and the
+    // NSTextView guard means typing in any card or field never switches tools.
     if !textIsEditing,
        event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
-       raw?.lowercased() == "p" {
-      NotificationCenter.default.post(
-        name: .composerSelectTool,
-        object: nil,
-        userInfo: ["tool": CanvasTool.vectorPen])
-      return
-    }
-    // Bare 1–9 picks a tool (Excalidraw/Figma style) — switching must be one keypress, which is
-    // what makes one-shot tools livable (issue #78; a "keep tool selected" mode was tried and
-    // pulled). Requires no modifiers so ⇧1 stays "!" for anything that wants it, and the
-    // NSTextView guard above means typing digits into a card never switches tools. ⌘1–⌘9 keep
-    // working via performKeyEquivalent.
-    if !textIsEditing,
-       event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
-       let raw, let index = Int(raw), (1...9).contains(index) {
-      NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["index": index])
-      return
+       let key = raw?.uppercased(), !key.isEmpty {
+      if key == CanvasToolbarCatalog.toolLockLetter {
+        NotificationCenter.default.post(name: .composerToggleToolLock, object: nil)
+        return
+      }
+      let tool = Int(key).flatMap(CanvasToolbarCatalog.tool(forDigit:))
+        ?? CanvasToolbarCatalog.tool(forLetter: key)
+      if let tool {
+        NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["tool": tool])
+        return
+      }
     }
     super.keyDown(with: event)
   }
