@@ -1,14 +1,15 @@
-# The canvas agent and the board as an agent-readable graph
+# The board as an agent-readable graph
 
 > The board isn't just a UI an agent draws into — it's a live, structured graph
 > the agent can **read**, reason over, and **reshape**, with every change landing
 > on screen instantly. This document explains the graph the agent sees, the
-> plumbing that lets an external CLI process touch the in-app board safely, and
-> the conventions that keep a worked-on board legible.
+> plumbing that lets an external agent process (Claude Code, Codex, Cursor, a
+> script) touch the in-app board safely, and the conventions that keep a
+> worked-on board legible.
 
-The conversational half of this — how `claude` is spawned in streaming mode with
-this server attached — lives in [agent-engines.md](agent-engines.md). This
-document is the **board contract**: what the agent reads and how its writes apply.
+BonsAI ships no chat agent of its own: agents run wherever you already use them
+and connect over the loopback server. Settings ▸ Agents installs a short skill doc
+(`AgentSkillsInstaller`) that teaches each one the API.
 
 ---
 
@@ -16,7 +17,8 @@ document is the **board contract**: what the agent reads and how its writes appl
 
 On disk and in memory the board is just an array of cards
 ([`CardState`](../Sources/ComposerApp/Support/CardState.swift)) — text cards,
-shapes, images, and bound arrows/lines — serialized as JSON. But an agent
+shapes, images, equations, graphs, stickies, checklists, tables, and bound
+arrows/lines — serialized as JSON. But an agent
 shouldn't have to parse the editor's internal model, so we expose a clean,
 serializable projection: [`CanvasGraph`](../Sources/ComposerApp/Support/CanvasGraph.swift).
 
@@ -29,8 +31,8 @@ Every card becomes a node. The fields the agent actually reasons over:
 | Field      | Meaning                                                                                  |
 | ---------- | ---------------------------------------------------------------------------------------- |
 | `id`       | Stable UUID string — what every mutation targets.                                        |
-| `kind`     | `text`, `rectangle`, `ellipse`, `diamond`, `line`, `arrow`, `freehand`, `image`.         |
-| `text`     | Plain text with `@mention` tokens preserved verbatim (e.g. `@github:…`). Empty for shapes. |
+| `kind`     | `text`, `rectangle`, `ellipse`, `diamond`, `line`, `arrow`, `freehand`, `vectorPath`, `image`, `equation`, `graph`, `sticky`, `checklist`, `table`. |
+| `text`     | Plain text (Markdown preserved). A snapped screenshot carries its on-device OCR text. Empty for bare shapes. |
 | `x/y/w/h`  | Board-space frame (the board is effectively infinite).                                    |
 | `z`        | Stacking order.                                                                           |
 | `group`    | Optional group id, if the card is part of a multi-select group.                           |
@@ -62,19 +64,18 @@ as nodes-and-edges, and the board owns placement.
 
 `readingOrder` is the node ids sorted **top→bottom, then left→right** (banded
 into 64pt rows so cards roughly on the same line read left-to-right, ties broken
-by `z`). It's the order **Compile** and **Copy** flatten the board in, and the
-order an agent should narrate a board in.
+by `z`). It's the order an agent should narrate or flatten a board in.
 
 ---
 
 ## The read/write plumbing
 
-An external `claude` process can't touch the in-app `BoardViewModel` directly —
+An external agent process can't touch the in-app `BoardViewModel` directly —
 it's a separate process, and the board lives on the main actor. Three small
 pieces bridge that gap, loopback-only:
 
 ```text
-  claude (separate process)
+  agent (separate process)
         │  JSON-RPC over HTTP (MCP)
         ▼
   CanvasServer      127.0.0.1:7337  — loopback HTTP, dependency-free (Network.framework)
@@ -102,9 +103,7 @@ capability. Endpoints:
 | --------------- | ---------------------------------------------------------------- |
 | `GET /canvas`   | The full `CanvasGraph` as JSON.                                   |
 | `POST /canvas`  | One `{ "op": …, … }` mutation → `{ "ok": …, … }`. (raw op names)  |
-| `POST /capture` | Append one text card to the active board.                        |
 | `POST /mcp`     | One MCP JSON-RPC message (the agent's transport).                 |
-| `POST /permission` | One permission-arbiter JSON-RPC message for in-app Claude.    |
 | `GET /health`   | Liveness check.                                                   |
 
 It's request/response only (no server-initiated SSE — `GET /mcp` returns 405),
@@ -140,7 +139,11 @@ live board and is tagged agent-authored.
 | `tidy`                  | `relayout`      | Re-flow everything into a clean layered layout.                       |
 | `add_text`              | `add_text`      | Add one text card (auto-placed if x/y omitted).                       |
 | `add_equation`          | `add_equation`  | Add one typeset LaTeX math card (auto-placed if x/y omitted).         |
-| `add_shape`            | `add_shape`     | Add a shape by bounding box (auto-placed if x/y omitted).            |
+| `add_shape`             | `add_shape`     | Add a shape by bounding box (auto-placed if x/y omitted).            |
+| `add_sticky` / `set_sticky` | same        | Add or replace a sticky note (title + body).                          |
+| `add_checklist` / `set_checklist` | same  | Add or replace a tappable checklist.                                  |
+| `toggle_checklist_item` | same            | Toggle one checklist item by zero-based index.                        |
+| `add_table` / `set_table` | same          | Add or replace a simple table (columns + rows).                       |
 | `set_text`              | `update_text`   | Replace a node's text by id.                                          |
 | `move_node`             | `move`          | Move a node.                                                          |
 | `resize_node`           | `resize`        | Resize a node.                                                        |
@@ -158,7 +161,7 @@ names (`create_diagram`, `relayout`, …); a direct `POST /canvas` caller uses t
 ## How the agent *knows* the board state
 
 Reading is one `get_canvas` call, but using that snapshot well is a discipline
-encoded in `CanvasAgent.systemPrompt`:
+the bundled skill docs (`Resources/AgentSkills/`) teach:
 
 - **Authorship is the key signal.** Every mutation records `whoWrote`. The bridge
   flips `BoardViewModel.nextAuthor` to `.agent` (2) for the duration of `apply`,
@@ -184,8 +187,8 @@ board assigns ranks (longest-path, cycle-safe), reduces edge crossings
 (barycenter sweeps), and places coordinates rank by rank. Disconnected clusters
 are laid out independently and flow-packed into rows.
 
-That's the whole reason `draw_diagram` exists and the system prompt forbids the
-agent from inventing x/y: hand-placed boards come out tangled, and crossing
+That's the whole reason `draw_diagram` exists and the skill docs steer the
+agent away from inventing x/y: hand-placed boards come out tangled, and crossing
 arrows read as noise. `createDiagram` builds the entire structure in **one undo
 step**, drawing each node as a labeled box (so arrows terminate on an edge
 instead of stabbing through floating text), then wires the labeled arrows.
@@ -198,8 +201,8 @@ Two mutations exist purely to keep the board legible as decisions evolve:
 
 - **`archive`** fades a node without deleting it.
 - **`supersede`** is the important one: it archives the old card, drops the new
-  idea just below it, and links **old → new** with the agent's reason. The system
-  prompt pushes the agent to use it whenever an approach changes, rather than
+  idea just below it, and links **old → new** with the agent's reason. The skill
+  docs push the agent to use it whenever an approach changes, rather than
   silently overwriting — so the board reads as *how* the thinking got here and
   *why*, not only where it landed.
 
@@ -208,17 +211,14 @@ Two mutations exist purely to keep the board legible as decisions evolve:
 ## Security & footprint
 
 - **Loopback only.** Bound to `127.0.0.1`; nothing is reachable off-device.
+- **Capability-gated.** Every endpoint but `/health` needs the per-launch bearer
+  capability from the owner-only `session.json`.
 - **Bounded input.** 1 MB request cap; request/response only (no streaming
   endpoint).
-- **Read-only file grounding.** When the chat agent is given a grounding folder,
-  it gets `Read,Grep,Glob` and nothing that writes to disk — its output goes onto
-  the canvas, never into your files.
 
 ---
 
 ## See also
 
-- [agent-engines.md](agent-engines.md) — how `claude` is invoked in streaming
-  mode with this server attached, and the engine landscape overall.
-- [semanticlinter.md](semanticlinter.md) — the on-device linter, which reads the
-  same board as read-only `boardContext`.
+- [canvas-api.md](canvas-api.md) — the HTTP endpoints, authentication helper, and
+  raw op names for scripts.

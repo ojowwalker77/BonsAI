@@ -129,7 +129,7 @@ enum CanvasMCP {
     tool("tidy",
          "Re-flow everything currently on the board into a clean layered layout (no overlaps, aligned ranks, edges following the flow). Use after adding/changing cards incrementally, or whenever the board looks messy.",
          ["direction": str("\"down\" (default) or \"right\"")], []),
-    tool("add_text", "Add ONE text card. For several related cards use draw_diagram instead. Omit x/y to let the board place it without overlap; pass them only for a deliberate spot. Text may contain @-connector tokens.",
+    tool("add_text", "Add ONE text card. For several related cards use draw_diagram instead. Omit x/y to let the board place it without overlap; pass them only for a deliberate spot.",
          ["text": str("Card text"), "x": num("Optional board x"), "y": num("Optional board y")], ["text"]),
     tool("add_equation", "Add ONE equation card that renders typeset LaTeX math on the board. Omit x/y to let the board place it without overlap; pass them only for a deliberate spot.",
          ["latex": str("LaTeX math-mode source, e.g. \\frac{d}{dt}\\langle p \\rangle = -\\langle \\nabla V \\rangle; no $ delimiters needed"),

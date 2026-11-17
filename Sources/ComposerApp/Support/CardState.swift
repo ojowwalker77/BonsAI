@@ -47,21 +47,6 @@ enum CanvasElementKind: String, Codable, Equatable, CaseIterable {
   }
 }
 
-/// Keeps hover edit chrome from competing with higher-priority manipulation handles.
-enum CanvasEditAffordancePolicy {
-  /// macOS is pointer-first, but 20pt was still needlessly precise at speed. The visible chip stays
-  /// quiet while the actual button target has a stable screen-space floor.
-  static let minimumHitSide: CGFloat = 28
-
-  static func isAvailable(for kind: CanvasElementKind, whileSelected: Bool) -> Bool {
-    guard kind.supportsEditing else { return false }
-    // Selected connectors devote both endpoints to direct manipulation. Their hover pencil remains
-    // available before selection, then yields completely once endpoint handles appear.
-    if whileSelected, kind == .line || kind == .arrow { return false }
-    return true
-  }
-}
-
 /// One colored span of a text card's ink, measured in UTF-16 offsets of the SERIALIZED plain
 /// text (`composerPlainText`). `slot` indexes the active theme's `ThemeFlavor.tints`, so ranges
 /// re-resolve per theme exactly like element tints.
@@ -78,10 +63,9 @@ struct CanvasPoint: Codable, Equatable {
   var cgPoint: CGPoint { CGPoint(x: x, y: y) }
 }
 
-/// One text card on a board: its content (plain `@token` text — the source of truth, same
-/// as the single-note era) plus its board-space frame and z-order. The whole board is a
-/// `BoardPayload` serialized as JSON into `Dump.cardsData`. Chips stay a within-session
-/// cosmetic layer; only this plain text persists.
+/// One card on a board: its content (plain text — the source of truth) plus its board-space
+/// frame and z-order. The whole board is a `BoardPayload` serialized as JSON into
+/// `Dump.cardsData`.
 struct CardState: Codable, Identifiable, Equatable {
   struct ChecklistItem: Codable, Equatable, Identifiable {
     var id: UUID = UUID()
@@ -123,8 +107,8 @@ struct CardState: Codable, Identifiable, Equatable {
   /// For `.equation` cards: raw LaTeX math-mode source, without surrounding `$` delimiters.
   var latex: String?
   /// For `.image` cards: the on-device, agent-ready text read out of the screenshot (OCR + a short
-  /// classification, e.g. "Terminal error: …"). This is what an image card contributes to the
-  /// compiled prompt and to `CanvasBridge.snapshot()` — without it a screenshot is invisible to a
+  /// classification, e.g. "Terminal error: …"). This is what an image card contributes to
+  /// `CanvasBridge.snapshot()` — without it a screenshot is invisible to a
   /// coding agent. Nil while still being read (or when nothing legible was found).
   var imageUnderstanding: String?
   /// A superseded idea — kept on the board for lineage but visually faded (provenance).

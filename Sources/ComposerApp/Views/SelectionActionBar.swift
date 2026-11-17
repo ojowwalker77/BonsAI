@@ -2,8 +2,6 @@ import SwiftUI
 
 /// The floating capsule that appears above a text selection.
 struct SelectionActionBar: View {
-  var isWorking: Bool
-  var onRefine: (HeadlessEngine) -> Void
   /// Markdown formatting for the selection (heading/bold/italic/code/quote).
   var onFormat: (MarkdownStyle.Action) -> Void
   /// The editing card's current tint slot. Picking a swatch inks the selected range (a live text
@@ -13,74 +11,33 @@ struct SelectionActionBar: View {
 
   /// The color picker rides collapsed (one swatch) and expands in place on click.
   @State private var tintExpanded = false
-
-  @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
-  @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
-  @AppStorage(EnginePreferences.opencodeEnabledKey) private var opencodeEnabled = true
-  @ObservedObject private var capabilities = EngineCapabilityStore.shared
   @State private var shown = false
-
-  /// Read through the observed `@AppStorage` toggles (not `EnginePreferences.isEnabled`) so the bar
-  /// re-renders the moment a toggle flips in Settings.
-  private func isEnabled(_ engine: HeadlessEngine) -> Bool {
-    switch engine {
-    case .claude: claudeEnabled
-    case .codex: codexEnabled
-    case .opencode: opencodeEnabled
-    }
-  }
-
-  private var enabledEngines: [HeadlessEngine] {
-    HeadlessEngine.allCases.filter { isEnabled($0) && capabilities.isAvailable($0) }
-  }
 
   var body: some View {
     HStack(spacing: 2) {
-      if isWorking {
-        HStack(spacing: 7) {
-          ProgressView().controlSize(.small).scaleEffect(0.7)
-          Text("Refining...".localizedUI).font(Theme.Typography.actionLabel)
+      // Markdown formatting — literal syntax in the plain text, styled live.
+      iconAction(icon: "textformat.size", help: "Heading  ·  cycles # / ## / ###".localizedUI) { onFormat(.heading) }
+      iconAction(icon: "bold", help: "Bold  ·  **text**".localizedUI) { onFormat(.bold) }
+      iconAction(icon: "italic", help: "Italic  ·  *text*".localizedUI) { onFormat(.italic) }
+      iconAction(icon: "chevron.left.forwardslash.chevron.right", help: "Code  ·  `text`".localizedUI) { onFormat(.code) }
+      iconAction(icon: "text.quote", help: "Quote  ·  > line".localizedUI) { onFormat(.quote) }
+
+      Divider().frame(height: 16).opacity(0.35)
+
+      // Text ink: collapsed to the current swatch; expands to the theme's slots on click.
+      if tintExpanded {
+        tintSwatch(nil)
+        ForEach(Theme.flavor.tints.indices, id: \.self) { slot in
+          tintSwatch(slot)
         }
-        .padding(.horizontal, 12)
-        .frame(height: Theme.Size.actionBarItemHeight)
-        .foregroundStyle(Theme.Palette.body)
       } else {
-        ForEach(enabledEngines) { engine in
-          action(engine: engine) { onRefine(engine) }
+        Button(action: { withAnimation(.easeOut(duration: 0.14)) { tintExpanded = true } }) {
+          swatchCircle(for: currentTint, selected: false)
+            .frame(width: 26, height: Theme.Size.actionBarItemHeight)
+            .contentShape(Rectangle())
         }
-        if enabledEngines.isEmpty {
-          Text(unavailableEngineMessage)
-            .font(Theme.Typography.actionLabel)
-            .foregroundStyle(Theme.Palette.menuDesc)
-            .padding(.horizontal, 10)
-            .frame(height: Theme.Size.actionBarItemHeight)
-        }
-        Divider().frame(height: 16).opacity(0.35)
-
-        // Markdown formatting — literal syntax in the plain text, styled live.
-        iconAction(icon: "textformat.size", help: "Heading  ·  cycles # / ## / ###".localizedUI) { onFormat(.heading) }
-        iconAction(icon: "bold", help: "Bold  ·  **text**".localizedUI) { onFormat(.bold) }
-        iconAction(icon: "italic", help: "Italic  ·  *text*".localizedUI) { onFormat(.italic) }
-        iconAction(icon: "chevron.left.forwardslash.chevron.right", help: "Code  ·  `text`".localizedUI) { onFormat(.code) }
-        iconAction(icon: "text.quote", help: "Quote  ·  > line".localizedUI) { onFormat(.quote) }
-
-        Divider().frame(height: 16).opacity(0.35)
-
-        // Text ink: collapsed to the current swatch; expands to the theme's slots on click.
-        if tintExpanded {
-          tintSwatch(nil)
-          ForEach(Theme.flavor.tints.indices, id: \.self) { slot in
-            tintSwatch(slot)
-          }
-        } else {
-          Button(action: { withAnimation(.easeOut(duration: 0.14)) { tintExpanded = true } }) {
-            swatchCircle(for: currentTint, selected: false)
-              .frame(width: 26, height: Theme.Size.actionBarItemHeight)
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(HoverButtonStyle())
-          .help("Text color".localizedUI)
-        }
+        .buttonStyle(HoverButtonStyle())
+        .help("Text color".localizedUI)
       }
     }
     .padding(.horizontal, 5)
@@ -89,31 +46,6 @@ struct SelectionActionBar: View {
     .scaleEffect(shown ? 1 : 0.94, anchor: .bottom)
     .opacity(shown ? 1 : 0)
     .onAppear { withAnimation(Theme.Motion.accessory) { shown = true } }
-  }
-
-  private var unavailableEngineMessage: String {
-    if enabledEngines.isEmpty {
-      if HeadlessEngine.allCases.allSatisfy({ !isEnabled($0) }) {
-        return "All engines disabled in Settings > Runtime".localizedUI
-      }
-      return "No engines ready - open Settings > Runtime > Recheck".localizedUI
-    }
-    return "No engines ready".localizedUI
-  }
-
-  @ViewBuilder
-  private func action(engine: HeadlessEngine, run: @escaping () -> Void) -> some View {
-    Button(action: run) {
-      HStack(spacing: 6) {
-        EngineLogo(engine: engine)
-        Text(engine.title).font(Theme.Typography.actionLabel)
-      }
-      .padding(.horizontal, 10)
-      .frame(height: Theme.Size.actionBarItemHeight)
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(HoverButtonStyle())
-    .foregroundStyle(Theme.Palette.body)
   }
 
   private func swatchCircle(for slot: Int?, selected: Bool) -> some View {

@@ -92,11 +92,8 @@ final class CanvasServerSecurityTests: XCTestCase {
     let routes = [
       ("GET", "/canvas"),
       ("POST", "/canvas"),
-      ("POST", "/capture"),
       ("POST", "/mcp"),
-      ("POST", "/permission"),
       ("GET", "/mcp"),
-      ("GET", "/permission"),
     ]
 
     for (method, path) in routes {
@@ -115,11 +112,8 @@ final class CanvasServerSecurityTests: XCTestCase {
     let routes = [
       ("GET", "/canvas"),
       ("POST", "/canvas"),
-      ("POST", "/capture"),
       ("POST", "/mcp"),
-      ("POST", "/permission"),
       ("GET", "/mcp"),
-      ("GET", "/permission"),
     ]
 
     for origin in [nil, "http://127.0.0.1:7337"] {

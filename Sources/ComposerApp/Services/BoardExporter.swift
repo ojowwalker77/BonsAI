@@ -60,14 +60,12 @@ enum BoardExporter {
     let content = BoardCardLayer(
       cards: renderCards,
       board: board,
-      boardTextContext: board.boardTextContext,
       selectedCardIDs: [],
       editingCardID: nil,
-      primarySelectedCardID: nil,
       scale: 1,
       selectable: false,
-      failedShellCommands: board.failedShellCommands,
-      equationDropTargetID: nil
+      equationDropTargetID: nil,
+      textScaleFactors: [:]
     )
     .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
     .offset(x: -bounds.minX, y: -bounds.minY)
@@ -159,11 +157,8 @@ enum BoardExporter {
   }
 
   /// Present a Save panel as a sheet on the key window and, on confirm, write `image` as a PNG.
-  /// Mirrors `CanvasAgent.chooseDirectory`: the busy notification suppresses the panel/overlay's
-  /// click-away dismissal while the sheet is up.
   @MainActor
   static func presentSavePanel(image: NSImage, suggestedName: String) {
-    NotificationCenter.default.post(name: .composerBusyChanged, object: nil, userInfo: ["busy": true])
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.png]
     panel.canCreateDirectories = true
@@ -173,7 +168,6 @@ enum BoardExporter {
 
     let apply: (NSApplication.ModalResponse) -> Void = { response in
       if response == .OK, let url = panel.url { write(image: image, to: url) }
-      NotificationCenter.default.post(name: .composerBusyChanged, object: nil, userInfo: ["busy": false])
     }
     if let window = NSApp.keyWindow {
       panel.beginSheetModal(for: window, completionHandler: apply)

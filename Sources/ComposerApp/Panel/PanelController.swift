@@ -1,20 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// Owns BonsAI's single board window: show/hide (the global hotkey toggles it), frame restore,
-/// traffic-light layout, theming, and first-responder focus. Agent and Settings are SwiftUI
-/// overlays inside the canvas — there are no auxiliary windows.
+/// Owns BonsAI's single board window: showing it, frame restore, traffic-light layout, and theming.
+/// Settings is a SwiftUI overlay inside the canvas — there are no auxiliary windows.
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
   private var panel: FloatingPanel?
   private let workspace = CanvasWorkspaceSession()
-  private var entryFocusWork: DispatchWorkItem?
   var isVisible: Bool { panel?.isVisible ?? false }
 
   override init() {
     super.init()
-    NotificationCenter.default.addObserver(
-      self, selector: #selector(handleDismiss), name: .composerDismiss, object: nil)
     NotificationCenter.default.addObserver(
       forName: .composerThemeChanged, object: nil, queue: .main
     ) { [weak self] notification in
@@ -33,10 +29,6 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
   }
 
-  @objc private func handleDismiss() { hide() }
-
-  func toggle() { isVisible ? hide() : show() }
-
   func show() {
     let panel = self.panel ?? makePanel()
     self.panel = panel
@@ -45,26 +37,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     panel.makeKeyAndOrderFront(nil)
     panel.orderFrontRegardless()
     panel.layoutWindowChromeButtons()
-    focusEditor(in: panel)
-    // The active card's editor only exists once SwiftUI mounts it, so ask the canvas to enter
-    // editing — the caret is ready to type the instant the window appears (no double-click).
-    scheduleEntryFocus()
-  }
-
-  func hide() {
-    guard let panel, panel.isVisible else { return }
-    entryFocusWork?.cancel()
-    entryFocusWork = nil
-    panel.orderOut(nil)
-    NSApp.deactivate()
-  }
-
-  /// Returning from another app is a real board refocus; returning from an attached open/save
-  /// sheet is not. AppDelegate calls this only for application activation, and the shared scheduler
-  /// coalesces it with `show()` when activation and summon happen in the same turn.
-  func restoreEntryFocusAfterActivation() {
-    guard isVisible else { return }
-    scheduleEntryFocus()
+    // Showing the board never starts editing a card or moves the viewport: the canvas keeps
+    // keyboard shortcuts until the user chooses to type (Excalidraw-style).
   }
 
   /// Apply the selected theme: set the window's appearance class AND rebuild the canvas —
@@ -190,33 +164,6 @@ final class PanelController: NSObject, NSWindowDelegate {
   private func relayoutChromeButtons(_ notification: Notification) {
     guard let panel, (notification.object as? NSWindow) === panel else { return }
     panel.layoutWindowChromeButtons()
-  }
-
-  // MARK: Focus the text view so typing works the instant the window appears.
-
-  private func scheduleEntryFocus() {
-    entryFocusWork?.cancel()
-    let work = DispatchWorkItem { [weak self] in
-      guard let self else { return }
-      self.entryFocusWork = nil
-      guard self.isVisible, self.panel?.isKeyWindow == true else { return }
-      NotificationCenter.default.post(name: .composerEnterEditing, object: nil)
-    }
-    entryFocusWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
-  }
-
-  private func focusEditor(in panel: NSWindow) {
-    guard let content = panel.contentView, let textView = firstTextView(in: content) else { return }
-    panel.makeFirstResponder(textView)
-  }
-
-  private func firstTextView(in view: NSView) -> NSTextView? {
-    if let textView = view as? NSTextView { return textView }
-    for sub in view.subviews {
-      if let found = firstTextView(in: sub) { return found }
-    }
-    return nil
   }
 }
 

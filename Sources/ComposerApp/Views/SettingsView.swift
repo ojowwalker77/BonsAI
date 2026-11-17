@@ -14,9 +14,9 @@ struct SettingsOverlay: View {
   var onEscape: () -> Void
 
   /// Stored, not `@State`: theme/font switches rebuild the whole canvas (PanelController.applyTheme),
-  /// which would reset transient state and bounce the sheet back to Runtime mid-click. Persisting the
-  /// section also reopens Settings where you left it, the System Settings way.
-  @AppStorage("settings.destination") private var destination: SettingsDestination = .runtime
+  /// which would reset transient state and bounce the sheet back to the first page mid-click.
+  /// Persisting the section also reopens Settings where you left it, the System Settings way.
+  @AppStorage("settings.destination") private var destination: SettingsDestination = .appearance
 
   var body: some View {
     ZStack {
@@ -162,27 +162,24 @@ private struct SettingsSidebarRow: View {
 }
 
 private enum SettingsDestination: String, CaseIterable, Identifiable {
-  case runtime
   case appearance
-  case connectors
+  case agents
   case shortcuts
   case about
 
   var id: String { rawValue }
   var title: String {
     switch self {
-    case .runtime: "Runtime".localizedUI
     case .appearance: "Appearance".localizedUI
-    case .connectors: "Connectors".localizedUI
+    case .agents: "Agents".localizedUI
     case .shortcuts: "Shortcuts".localizedUI
     case .about: "About".localizedUI
     }
   }
   var symbol: String {
     switch self {
-    case .runtime: "bolt.horizontal.circle"
     case .appearance: "circle.lefthalf.filled"
-    case .connectors: "at"
+    case .agents: "point.3.connected.trianglepath.dotted"
     case .shortcuts: "command"
     case .about: "info.circle"
     }
@@ -193,10 +190,14 @@ private struct SettingsContent: View {
   let destination: SettingsDestination
 
   private let shortcuts: [(String, String)] = [
-    ("Switch tools".localizedUI, "1 – 9"),
-    ("Compile board".localizedUI, "⌘R"),
+    ("Switch tools".localizedUI, "1 – 9   V R D O A L P T"),
+    ("Keep tool active".localizedUI, "Q"),
     ("New board".localizedUI, "⌘N"),
-    ("Navigate boards".localizedUI, "⌘[  ⌘]"),
+    ("Navigate boards".localizedUI, "⌥⌘[  ⌥⌘]"),
+    ("Edit selection".localizedUI, "↩"),
+    ("Nudge selection".localizedUI, "← ↑ → ↓   ⇧ ×5"),
+    ("Bring forward / send backward".localizedUI, "⌘]  ⌘["),
+    ("Bring to front / send to back".localizedUI, "⇧⌘]  ⇧⌘["),
     ("Select all / duplicate".localizedUI, "⌘A  ⌘D"),
     ("Group / ungroup".localizedUI, "⌘G  ⇧⌘G"),
     ("Lock / unlock".localizedUI, "⌘L  ⇧⌘L"),
@@ -205,22 +206,8 @@ private struct SettingsContent: View {
     ("App font: Satoshi".localizedUI, "⌃⌘3"),
   ]
 
-  @StateObject private var appIcons = AppIconStore()
-  @ObservedObject private var capabilities = EngineCapabilityStore.shared
   @ObservedObject private var shortcutStore = ShortcutStore.shared
   @ObservedObject private var updater = UpdaterController.shared
-  @AppStorage(EnginePreferences.claudeEnabledKey) private var claudeEnabled = true
-  @AppStorage(EnginePreferences.codexEnabledKey) private var codexEnabled = true
-  @AppStorage(EnginePreferences.opencodeEnabledKey) private var opencodeEnabled = true
-  // The chat surface's provider pick + per-engine model. These keys are shared with the Agent dock,
-  // so the two controls mirror each other live.
-  @AppStorage(EnginePreferences.chatEngineKey) private var chatEngineRaw = ""
-  @AppStorage("model.chat.codex") private var codexChatModel = ""
-  @AppStorage("model.chat.opencode") private var opencodeChatModel = ""
-  @ObservedObject private var modelCatalog = ChatModelCatalog.shared
-  // Both keys are shared with their in-canvas pickers (the Agent dock for chat), so the controls
-  // mirror each other live. See [[ModelPreferences]].
-  @AppStorage(ModelPreferences.chatModelKey) private var chatModel: ClaudeModel = ModelPreferences.defaultChatModel
   @AppStorage(ComposerPreferences.themeKey) private var themeRaw = ComposerTheme.bonsaiDark.rawValue
   @AppStorage(ComposerPreferences.appFontFamilyKey) private var appFontRaw = ComposerFontFamily.system.rawValue
   @AppStorage(ComposerPreferences.languageKey) private var languageRaw = AppLanguage.system.rawValue
@@ -228,7 +215,6 @@ private struct SettingsContent: View {
   @AppStorage(ComposerPreferences.followSystemAppearanceKey) private var followSystemAppearance = false
   @AppStorage(ComposerPreferences.autoSnapFreehandKey) private var autoSnapFreehand = false
   @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
-  @AppStorage(ComposerPreferences.hideDockIconKey) private var hideDockIcon = false
   @AppStorage(ComposerPreferences.continuousDrawingEnabledKey) private var continuousDrawingEnabled
     = ComposerPreferences.defaultContinuousDrawingEnabled
   @AppStorage(ComposerPreferences.dotGridEnabledKey) private var dotGridEnabled = false
@@ -238,9 +224,6 @@ private struct SettingsContent: View {
   /// down the very view committing the value (the stepper ate its own click).
   @AppStorage(ComposerPreferences.editorFontSizeKey) private var editorFontSize
     = Double(ComposerPreferences.defaultEditorFontSize)
-  /// Whether the agent has standing "Always Allow" tool grants - drives the reset control's
-  /// visibility. Refreshed in `onAppear`; flipped false the moment the user resets.
-  @State private var agentHasGrants = false
   /// Bumped after an agent-skills install so `AgentSkillTarget.isInstalled` (a filesystem check,
   /// not a published property) re-reads and the row badges refresh.
   @State private var agentSkillsRevision = 0
@@ -259,9 +242,8 @@ private struct SettingsContent: View {
   @ViewBuilder
   private var page: some View {
     switch destination {
-    case .runtime: runtimePage
     case .appearance: appearancePage
-    case .connectors: connectorsPage
+    case .agents: agentsPage
     case .shortcuts: shortcutsPage
     case .about: aboutPage
     }
@@ -292,397 +274,15 @@ private struct SettingsContent: View {
       .padding(.horizontal, 2)
   }
 
-  // MARK: Runtime
-
-  private var runtimePage: some View {
-    let states = HeadlessEngine.allCases.map { capabilities.status(for: $0) } + [capabilities.appleIntelligence]
-    let ready = states.filter { $0.isAvailable }.count
-
-    return VStack(alignment: .leading, spacing: 22) {
-      // Engines — one grouped card, the readout and recheck riding the section label row.
-      VStack(alignment: .leading, spacing: 8) {
-        HStack(spacing: 8) {
-          Text("ENGINES".localizedUI).sectionLabel()
-          Spacer(minLength: 8)
-          readout(ready: ready, total: states.count)
-          Button(action: capabilities.refresh) {
-            Label("Recheck".localizedUI, systemImage: "arrow.clockwise")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(Theme.Palette.body)
-              .padding(.horizontal, 11)
-              .frame(height: 26)
-          }
-          .buttonStyle(SettingsPillButtonStyle())
-          .help("Re-scan this Mac for installed engines".localizedUI)
-        }
-
-        VStack(spacing: 0) {
-          engineRow(
-            name: HeadlessEngine.claude.title,
-            command: HeadlessEngine.claude.commandLabel,
-            availability: capabilities.status(for: .claude),
-            toggle: $claudeEnabled
-          ) { EngineLogo(engine: .claude).frame(width: 16, height: 16) }
-          rowDivider
-          engineRow(
-            name: HeadlessEngine.codex.title,
-            command: HeadlessEngine.codex.commandLabel,
-            availability: capabilities.status(for: .codex),
-            toggle: $codexEnabled
-          ) { EngineLogo(engine: .codex).frame(width: 16, height: 16) }
-          rowDivider
-          engineRow(
-            name: HeadlessEngine.opencode.title,
-            command: HeadlessEngine.opencode.commandLabel,
-            availability: capabilities.status(for: .opencode),
-            toggle: $opencodeEnabled
-          ) { EngineLogo(engine: .opencode).frame(width: 16, height: 16) }
-          rowDivider
-          engineRow(
-            name: "Apple Intelligence".localizedUI,
-            command: "semantic lint".localizedUI,
-            availability: capabilities.appleIntelligence,
-            toggle: nil
-          ) {
-            // The genuine Apple Intelligence mark — brand identity, the same rainbow the agent icon
-            // uses — not decorative color. `apple.intelligence` is macOS 15+, so below the app's
-            // 14 floor it falls back to `sparkles` rather than showing a missing-glyph box.
-            Image(systemName: "apple.intelligence", fallback: "sparkles")
-              .font(.system(size: 16, weight: .medium))
-              .foregroundStyle(AngularGradient(
-                gradient: Gradient(colors: [.orange, .red, .purple, .blue, .cyan, .orange]),
-                center: .center))
-          }
-        }
-        .padding(.horizontal, 13)
-        .settingsCard()
-
-        groupFooter("Only engines installed and answering on this Mac are offered. CLI prompts stay on your configured agent accounts; Apple Intelligence runs its lint on-device and never sends a draft off your Mac.")
-      }
-
-      modelsCard
-
-      // Only appears once the agent has standing "Always Allow" grants - lets a user revoke them
-      // without editing defaults by hand.
-      if agentHasGrants {
-        VStack(alignment: .leading, spacing: 8) {
-          Text("PERMISSIONS".localizedUI).sectionLabel()
-          HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-              Text("Agent tool permissions".localizedUI)
-                .font(.callout.weight(.semibold)).foregroundStyle(Theme.Palette.body)
-              Text("Tools you chose \"Always Allow\" for run without asking again.".localizedUI)
-                .font(.caption).foregroundStyle(Theme.Palette.menuDesc)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Button {
-              AgentPermissionBroker.resetRememberedGrants()
-              agentHasGrants = false
-            } label: {
-              Label("Reset".localizedUI, systemImage: "arrow.counterclockwise")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.Palette.body)
-                .padding(.horizontal, 11)
-                .frame(height: 28)
-            }
-            .buttonStyle(SettingsPillButtonStyle())
-            .help("Ask again next time the agent uses one of these tools".localizedUI)
-          }
-          .padding(.horizontal, 13)
-          .padding(.vertical, 12)
-          .settingsCard()
-        }
-      }
-    }
-    .onAppear {
-      agentHasGrants = AgentPermissionBroker.hasRememberedGrants
-      modelCatalog.loadOpenCodeModelsIfNeeded()
-    }
-  }
-
-  /// Pick a provider (engine), then a model for it — the same shape as the Agent panel's per-session
-  /// picker, kept in sync via the shared keys. Refine/Compile aren't listed: they stay on the CLI
-  /// default deliberately.
-  private var modelsCard: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text("MODELS".localizedUI).sectionLabel()
-      VStack(spacing: 0) {
-        surfaceRow(
-          title: "Chat Agent".localizedUI,
-          subtitle: "The agent you talk to in the canvas. Also switchable live in the Agent panel.".localizedUI,
-          engineRaw: $chatEngineRaw,
-          claudeModel: $chatModel, codexModel: $codexChatModel, opencodeModel: $opencodeChatModel)
-      }
-      .padding(.horizontal, 13)
-      .settingsCard()
-      if availableEngines.isEmpty {
-        Text("No engine is enabled and installed. Enable one in Engines above.".localizedUI)
-          .font(.caption).foregroundStyle(.orange)
-      }
-    }
-  }
-
-  /// Engines that can run a surface right now — enabled in Runtime *and* installed.
-  private var availableEngines: [HeadlessEngine] {
-    HeadlessEngine.allCases.filter { EnginePreferences.isEnabled($0) && capabilities.isAvailable($0) }
-  }
-
-  /// The engine a `engine.<surface>.selected` string resolves to: the pick when it's ready, else the
-  /// first available engine.
-  private func resolvedEngine(_ raw: String) -> HeadlessEngine? {
-    if let engine = HeadlessEngine(rawValue: raw),
-       EnginePreferences.isEnabled(engine), capabilities.isAvailable(engine) { return engine }
-    return availableEngines.first
-  }
-
-  /// One "surface → provider → model" row: a title, a provider menu, and a model menu whose options
-  /// follow the chosen provider (Claude tiers, or the Codex/OpenCode `provider/model` list).
-  @ViewBuilder
-  private func surfaceRow(
-    title: String, subtitle: String, engineRaw: Binding<String>,
-    claudeModel: Binding<ClaudeModel>, codexModel: Binding<String>, opencodeModel: Binding<String>
-  ) -> some View {
-    let engine = resolvedEngine(engineRaw.wrappedValue)
-    ViewThatFits(in: .horizontal) {
-      HStack(alignment: .center, spacing: 14) {
-        surfaceCopy(title: title, subtitle: subtitle)
-          .frame(minWidth: 190, maxWidth: .infinity, alignment: .leading)
-          .layoutPriority(1)
-        if let engine {
-          surfacePickers(engine: engine, engineRaw: engineRaw, claudeModel: claudeModel, codexModel: codexModel, opencodeModel: opencodeModel)
-            .fixedSize()
-        }
-      }
-
-      VStack(alignment: .leading, spacing: 12) {
-        surfaceCopy(title: title, subtitle: subtitle)
-        if let engine {
-          surfacePickers(engine: engine, engineRaw: engineRaw, claudeModel: claudeModel, codexModel: codexModel, opencodeModel: opencodeModel)
-        }
-      }
-    }
-    .padding(.vertical, 11)
-  }
-
-  private func surfaceCopy(title: String, subtitle: String) -> some View {
-    VStack(alignment: .leading, spacing: 3) {
-      Text(title.localizedUI)
-        .font(.callout.weight(.medium))
-        .foregroundStyle(Theme.Palette.body)
-        .lineLimit(2)
-      Text(subtitle.localizedUI)
-        .font(.caption)
-        .foregroundStyle(Theme.Palette.menuDesc)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-  }
-
-  private func surfacePickers(
-    engine: HeadlessEngine,
-    engineRaw: Binding<String>,
-    claudeModel: Binding<ClaudeModel>,
-    codexModel: Binding<String>,
-    opencodeModel: Binding<String>
-  ) -> some View {
-    HStack(spacing: 10) {
-      providerPicker(engineRaw, resolved: engine)
-      modelPicker(for: engine, claudeModel: claudeModel, codexModel: codexModel, opencodeModel: opencodeModel)
-    }
-  }
-
-  /// Provider (engine) menu, listing every ready engine.
-  private func providerPicker(_ engineRaw: Binding<String>, resolved: HeadlessEngine) -> some View {
-    Picker("", selection: Binding(get: { resolved }, set: { engineRaw.wrappedValue = $0.rawValue })) {
-      ForEach(availableEngines) { Text($0.title).tag($0) }
-    }
-    .labelsHidden().pickerStyle(.menu).fixedSize().tint(Theme.Palette.body)
-  }
-
-  /// Model menu for the chosen provider: Claude tiers, or a "Default" + `provider/model` list.
-  @ViewBuilder
-  private func modelPicker(
-    for engine: HeadlessEngine,
-    claudeModel: Binding<ClaudeModel>, codexModel: Binding<String>, opencodeModel: Binding<String>
-  ) -> some View {
-    switch engine {
-    case .claude:
-      Picker("", selection: claudeModel) {
-        ForEach(ClaudeModel.allCases) { Text($0.title).tag($0) }
-      }
-      .labelsHidden().pickerStyle(.menu).fixedSize().tint(Theme.Palette.body)
-    case .codex:
-      stringModelPicker(codexModel, models: modelCatalog.models(for: .codex))
-    case .opencode:
-      stringModelPicker(opencodeModel, models: modelCatalog.opencodeModels)
-    }
-  }
-
-  /// A `provider/model` menu (Codex / OpenCode). "Default" leaves the engine on its own default.
-  private func stringModelPicker(_ selection: Binding<String>, models: [String]) -> some View {
-    Picker("", selection: selection) {
-      Text("Default".localizedUI).tag("")
-      ForEach(models, id: \.self) { Text(Self.shortModel($0)).tag($0) }
-    }
-    .labelsHidden().pickerStyle(.menu).fixedSize().tint(Theme.Palette.body)
-  }
-
-  /// Compact model label: the id's last path component. `opencode/big-pickle` → `big-pickle`.
-  private static func shortModel(_ id: String) -> String {
-    id.split(separator: "/").last.map(String.init) ?? id
-  }
-
-  /// A live count of what's ready, in the mono "instrument" voice. One status dot, neutral capsule.
-  private func readout(ready: Int, total: Int) -> some View {
-    HStack(spacing: 6) {
-      Circle()
-        .fill(ready > 0 ? Color.green.opacity(0.9) : Theme.Palette.count)
-        .frame(width: 6, height: 6)
-      Text("%d of %d ready".localizedUI(ready, total))
-        .font(.caption.monospaced().weight(.semibold))
-        .foregroundStyle(Theme.Palette.body)
-    }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 5)
-    .background(Capsule().fill(Theme.Palette.segmentedFill))
-  }
-
-  /// One engine row of the grouped card: a neutral brand tile, name + status dot, the command in
-  /// mono, and the enable switch. The logo is the color; the tile never lights up.
-  private func engineRow<Icon: View>(
-    name: String,
-    command: String,
-    availability: RuntimeAvailability,
-    toggle: Binding<Bool>?,
-    @ViewBuilder icon: () -> Icon
-  ) -> some View {
-    let available = availability.isAvailable
-
-    return HStack(spacing: 11) {
-      icon()
-        .frame(width: 32, height: 32)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.Palette.tagFill))
-        .overlay(
-          RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(Theme.Palette.panelInnerLine, lineWidth: 1)
-        )
-        .opacity(available ? 1 : 0.4)
-        .saturation(available ? 1 : 0.2)
-
-      VStack(alignment: .leading, spacing: 3) {
-        HStack(spacing: 7) {
-          Text(name).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
-          statusDot(availability)
-        }
-        HStack(spacing: 6) {
-          Text(command)
-            .font(.system(size: 10.5).monospaced())
-            .foregroundStyle(Theme.Palette.menuDesc)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Theme.Palette.segmentedFill))
-            .fixedSize()
-          detailText(availability)
-        }
-      }
-
-      Spacer(minLength: 8)
-
-      trailingControl(availability: availability, toggle: toggle)
-    }
-    .padding(.vertical, 11)
-    .opacity(available ? 1 : 0.78)
-  }
-
-  @ViewBuilder
-  private func trailingControl(availability: RuntimeAvailability, toggle: Binding<Bool>?) -> some View {
-    if let toggle {
-      Toggle("", isOn: toggle)
-        .labelsHidden()
-        .toggleStyle(.switch)
-        .controlSize(.small)
-        .disabled(!availability.isAvailable)
-        .opacity(availability.isAvailable ? 1 : 0.4)
-    } else if availability.isAvailable {
-      Image(systemName: "lock.fill")
-        .font(.callout)
-        .foregroundStyle(Theme.Palette.count)
-        .help("On-device - never leaves your Mac".localizedUI)
-    } else {
-      Image(systemName: "bolt.slash")
-        .font(.callout)
-        .foregroundStyle(Theme.Palette.count)
-    }
-  }
-
-  /// The lone status signal on a row: a single dot, green only when the engine is answering.
-  private func statusDot(_ availability: RuntimeAvailability) -> some View {
-    Circle()
-      .fill(availability.isAvailable ? Color.green.opacity(0.9) : Theme.Palette.count)
-      .frame(width: 6, height: 6)
-  }
-
-  @ViewBuilder
-  private func detailText(_ availability: RuntimeAvailability) -> some View {
-    switch availability {
-    case let .available(path, _):
-      Text(path)
-        .font(.system(size: 10.5).monospaced())
-        .foregroundStyle(Theme.Palette.count)
-        .lineLimit(1)
-        .truncationMode(.middle)
-    case .checking:
-      Text("Checking this Mac...".localizedUI)
-        .font(.caption2)
-        .foregroundStyle(Theme.Palette.count)
-    case let .unavailable(reason):
-      Text(reason)
-        .font(.caption2)
-        .foregroundStyle(Theme.Palette.count)
-        .lineLimit(1)
-    }
-  }
-
   // MARK: Appearance
 
   private var appearancePage: some View {
     VStack(alignment: .leading, spacing: 22) {
-      applicationCard
       languageCard
       themeCard
       fontCard
       canvasGlassCard
       drawingCard
-    }
-  }
-
-  /// App presence is a live process policy, not static bundle metadata. The menu-bar status item and
-  /// global shortcuts stay installed in either mode, so hiding the Dock icon never strands the user.
-  private var applicationCard: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      pageHeader("Application", "Choose how BonsAI appears in macOS.")
-      HStack(spacing: 12) {
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Hide Dock icon".localizedUI)
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(Theme.Palette.body)
-          Text("Keep BonsAI in the menu bar and use the global shortcut to restore the board.".localizedUI)
-            .font(.caption)
-            .foregroundStyle(Theme.Palette.menuDesc)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        Spacer(minLength: 12)
-        Toggle("", isOn: $hideDockIcon)
-          .labelsHidden()
-          .accessibilityLabel(Text("Hide Dock icon".localizedUI))
-          .toggleStyle(.switch)
-          .tint(Theme.Palette.accent)
-      }
-      .padding(14)
-      .settingsCard()
-    }
-    .onChange(of: hideDockIcon) { _, _ in
-      NotificationCenter.default.post(name: .composerDockIconVisibilityChanged, object: nil)
     }
   }
 
@@ -919,28 +519,66 @@ private struct SettingsContent: View {
     }
   }
 
-  // MARK: Connectors
+  // MARK: Agents
 
-  private var connectorsPage: some View {
+  /// BonsAI's agent surface is the loopback canvas server: any coding agent on this Mac can read
+  /// and reshape the open board through it. This page shows where it listens and teaches the
+  /// agents BonsAI knows about how to use it.
+  private var agentsPage: some View {
     VStack(alignment: .leading, spacing: 22) {
-      groupFooter("Type @ in a card to attach live context. Copied drafts become self-contained text - the source is resolved at copy time.")
-
+      canvasServerCard
       agentSkillsCard
-
-      ForEach(MentionCatalog.appsByCategory, id: \.category) { group in
-        VStack(alignment: .leading, spacing: 8) {
-          Text(group.category.title.uppercased()).sectionLabel()
-          VStack(spacing: 0) {
-            ForEach(Array(group.items.enumerated()), id: \.element.id) { index, app in
-              if index > 0 { rowDivider }
-              connectorRow(app)
-            }
-          }
-          .padding(.horizontal, 13)
-          .settingsCard()
-        }
-      }
     }
+  }
+
+  private var canvasServerCard: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("CANVAS SERVER".localizedUI).sectionLabel()
+      VStack(spacing: 0) {
+        serverRow(title: "HTTP API".localizedUI, value: "http://127.0.0.1:\(CanvasServer.port)/canvas")
+        rowDivider
+        serverRow(title: "MCP endpoint".localizedUI, value: "http://127.0.0.1:\(CanvasServer.port)/mcp")
+        rowDivider
+        HStack(spacing: 10) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Session token".localizedUI).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
+            Text(CanvasSessionDescriptorStore.defaultURL.path(percentEncoded: false))
+              .font(.caption.monospaced())
+              .foregroundStyle(Theme.Palette.menuDesc)
+              .lineLimit(1)
+              .truncationMode(.middle)
+          }
+          Spacer(minLength: 8)
+          Button(action: {
+            NSWorkspace.shared.activateFileViewerSelecting([CanvasSessionDescriptorStore.defaultURL])
+          }) {
+            Text("Reveal".localizedUI)
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(Theme.Palette.body)
+              .padding(.horizontal, 11)
+              .frame(height: 26)
+          }
+          .buttonStyle(SettingsPillButtonStyle())
+        }
+        .padding(.vertical, 11)
+      }
+      .padding(.horizontal, 13)
+      .settingsCard()
+      groupFooter("Loopback only. Clients authenticate with the bearer token in session.json, which is replaced every launch.")
+    }
+  }
+
+  private func serverRow(title: String, value: String) -> some View {
+    HStack(spacing: 10) {
+      Text(title).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
+      Spacer(minLength: 8)
+      Text(value)
+        .font(.caption.monospaced().weight(.medium))
+        .foregroundStyle(Theme.Palette.menuDesc)
+        .textSelection(.enabled)
+        .lineLimit(1)
+    }
+    .padding(.vertical, 11)
   }
 
   /// Lets coding agents (Claude Code, Codex CLI, Cursor) drive the board over the local canvas API.
@@ -1000,68 +638,15 @@ private struct SettingsContent: View {
     agentSkillsRevision += 1
   }
 
-  private func connectorRow(_ app: MentionItem) -> some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: 11) {
-        appIcon(app)
-          .frame(width: 24, height: 24)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(app.label).font(.callout.weight(.medium)).foregroundStyle(Theme.Palette.body)
-          Text(app.subtitle).font(.caption).foregroundStyle(Theme.Palette.menuDesc)
-        }
-        Spacer(minLength: 8)
-        Text(app.id)
-          .font(.caption.monospaced().weight(.medium))
-          .foregroundStyle(Theme.Palette.menuDesc)
-          .padding(.horizontal, 7)
-          .padding(.vertical, 3)
-          .background(Capsule().fill(Theme.Palette.segmentedFill))
-      }
-      .padding(.vertical, 11)
-
-      if case let .apiToken(label, hint, createURL) = AppConnectorRegistry.connector(for: app.id)?.auth ?? .none {
-        ConnectorTokenField(connectorID: app.id, label: label, hint: hint, createURL: createURL)
-          .padding(.leading, 35)
-          .padding(.bottom, 11)
-      }
-    }
-  }
-
-  @ViewBuilder
-  private func appIcon(_ app: MentionItem) -> some View {
-    if let image = appIcons.image(for: app.id) {
-      Image(nsImage: image)
-        .resizable()
-        .interpolation(.high)
-        .aspectRatio(contentMode: .fit)
-    } else {
-      Image(systemName: app.symbol)
-        .font(.body)
-        .foregroundStyle(Theme.Palette.menuDesc)
-    }
-  }
-
   // MARK: Shortcuts
 
   private var shortcutsPage: some View {
     VStack(alignment: .leading, spacing: 22) {
       VStack(alignment: .leading, spacing: 8) {
-        Text("SUMMON".localizedUI).sectionLabel()
+        Text("GLOBAL".localizedUI).sectionLabel()
         VStack(spacing: 0) {
-          // The summon hotkey is user-configurable (records into ShortcutStore, which HotKeyManager
-          // re-binds); the rest are fixed in-app commands shown for reference.
-          HStack(spacing: 10) {
-            Text("Summon Composer".localizedUI)
-              .font(.callout.weight(.medium))
-              .foregroundStyle(Theme.Palette.body)
-              .lineLimit(1)
-            Spacer(minLength: 8)
-            ShortcutRecorder(shortcut: $shortcutStore.shortcut, defaultValue: .default)
-          }
-          .padding(.vertical, 11)
-
-          rowDivider
-
+          // The one global hotkey is user-configurable (records into ShortcutStore, which
+          // HotKeyManager re-binds); the rest are fixed in-app commands shown for reference.
           HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
               Text("Snap to board".localizedUI)
@@ -1201,78 +786,6 @@ private struct SettingsContent: View {
         .settingsCard()
         groupFooter("BonsAI checks GitHub for new releases automatically, then downloads and installs them in place.")
       }
-    }
-  }
-}
-
-// MARK: - Connector token field
-
-/// Paste/save/clear a connector's API token. Reads and writes `ConnectorSecretStore` imperatively;
-/// the stored secret is never loaded back into the field — only its presence (Connected) is shown.
-private struct ConnectorTokenField: View {
-  let connectorID: String
-  let label: String
-  let hint: String
-  let createURL: String?
-
-  @State private var draft: String = ""
-  /// Bumped on save/clear so the imperative `ConnectorSecretStore` reads re-evaluate in `body`.
-  @State private var revision = 0
-
-  private var connected: Bool { _ = revision; return ConnectorSecretStore.hasToken(for: connectorID) }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 7) {
-      HStack(spacing: 8) {
-        SecureField(connected ? "Replace token...".localizedUI : label.localizedUI, text: $draft)
-          .textFieldStyle(.plain)
-          .font(.caption)
-          .foregroundStyle(Theme.Palette.body)
-          .padding(.horizontal, 9).padding(.vertical, 6)
-          .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.Palette.segmentedFill))
-          .onSubmit(save)
-        Button("Save".localizedUI, action: save)
-          .buttonStyle(.plain)
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(draft.trimmed.isEmpty ? Theme.Palette.menuDesc : Theme.Palette.accent)
-          .disabled(draft.trimmed.isEmpty)
-        if connected {
-          Button("Clear".localizedUI, action: clear)
-            .buttonStyle(.plain)
-            .font(.caption)
-            .foregroundStyle(Theme.Palette.menuDesc)
-        }
-      }
-      HStack(spacing: 6) {
-        Circle()
-          .fill(connected ? Color.green.opacity(0.9) : Theme.Palette.menuDesc.opacity(0.5))
-          .frame(width: 6, height: 6)
-        Text(connected ? "Connected".localizedUI : hint.localizedUI)
-          .font(.caption2)
-          .foregroundStyle(Theme.Palette.menuDesc)
-        if let createURL, let url = URL(string: createURL) {
-          Spacer(minLength: 8)
-          Link("Get a token".localizedUI, destination: url)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(Theme.Palette.accent)
-        }
-      }
-    }
-  }
-
-  private func save() {
-    let value = draft.trimmed
-    guard !value.isEmpty else { return }
-    if ConnectorSecretStore.setToken(value, for: connectorID) {
-      draft = ""
-      revision += 1
-    }
-  }
-
-  private func clear() {
-    if ConnectorSecretStore.setToken(nil, for: connectorID) {
-      draft = ""
-      revision += 1
     }
   }
 }
@@ -1434,26 +947,4 @@ private extension View {
       .tracking(0.6)
       .foregroundStyle(Theme.Palette.count)
   }
-}
-
-// MARK: - Icon store
-
-/// Bridges the AppKit favicon cache into SwiftUI, republishing when an icon lands.
-@MainActor
-private final class AppIconStore: ObservableObject {
-  private var observer: NSObjectProtocol?
-
-  init() {
-    observer = NotificationCenter.default.addObserver(
-      forName: .composerStyleCacheUpdated, object: nil, queue: .main
-    ) { [weak self] _ in
-      MainActor.assumeIsolated { self?.objectWillChange.send() }
-    }
-  }
-
-  deinit {
-    if let observer { NotificationCenter.default.removeObserver(observer) }
-  }
-
-  func image(for id: String) -> NSImage? { MentionStyleCache.shared.image(for: id) }
 }

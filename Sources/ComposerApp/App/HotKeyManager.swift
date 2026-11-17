@@ -2,12 +2,10 @@ import AppKit
 import Carbon.HIToolbox
 
 final class HotKeyManager {
-  private var hotKeyRef: EventHotKeyRef?
   private var captureHotKeyRef: EventHotKeyRef?
   private var eventHandler: EventHandlerRef?
 
-  /// Hotkey identities: 1 = summon the board, 2 = "Snap to board" region capture.
-  private static let summonID: UInt32 = 1
+  /// The one global hotkey: "Snap to board" region capture.
   private static let captureID: UInt32 = 2
 
   func register() {
@@ -18,7 +16,7 @@ final class HotKeyManager {
       name: .composerShortcutChanged, object: nil)
   }
 
-  /// Re-bind both global hotkeys after the user picks new shortcuts in Settings.
+  /// Re-bind the hotkey after the user picks a new shortcut in Settings.
   @objc private func reregister() { registerHotKeys() }
 
   private func installHandler() {
@@ -43,13 +41,8 @@ final class HotKeyManager {
 
         let id = hotKeyID.id
         DispatchQueue.main.async {
-          switch id {
-          case HotKeyManager.summonID:
-            NotificationCenter.default.post(name: .composerToggleWindow, object: nil)
-          case HotKeyManager.captureID:
+          if id == HotKeyManager.captureID {
             NotificationCenter.default.post(name: .composerCaptureToBoard, object: nil)
-          default:
-            break
           }
         }
         return noErr
@@ -62,9 +55,7 @@ final class HotKeyManager {
   }
 
   private func registerHotKeys() {
-    let store = ShortcutStore.shared
-    hotKeyRef = register(store.shortcut, id: Self.summonID, replacing: hotKeyRef)
-    captureHotKeyRef = register(store.captureShortcut, id: Self.captureID, replacing: captureHotKeyRef)
+    captureHotKeyRef = register(ShortcutStore.shared.captureShortcut, id: Self.captureID, replacing: captureHotKeyRef)
   }
 
   private func register(_ shortcut: GlobalShortcut, id: UInt32, replacing existing: EventHotKeyRef?) -> EventHotKeyRef? {
@@ -86,9 +77,6 @@ final class HotKeyManager {
   }
 
   deinit {
-    if let hotKeyRef {
-      UnregisterEventHotKey(hotKeyRef)
-    }
     if let captureHotKeyRef {
       UnregisterEventHotKey(captureHotKeyRef)
     }

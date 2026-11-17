@@ -10,15 +10,13 @@ private struct PendingBoardDeletion: Identifiable {
   var id: String { String(describing: boardID) }
 }
 
-/// The entire app surface: a pan/zoom board of text cards on a chromeless glass card, with a
-/// top tool toolbar and a left action rail floating in the gutters. Per-card editor chrome
-/// (mentions, connector search, the semantic linter) is routed to the active card; board-level
-/// actions (Compile, Copy) span every card.
+/// The entire app surface: a pan/zoom board of cards filling the window, with floating glass
+/// chrome — the board picker top-left, export top-right, and one bottom command bar. Per-card
+/// editor chrome (the selection bar) is routed to the active card.
 struct ComposerCanvas: View {
   @ObservedObject private var workspace: CanvasWorkspaceSession
   @ObservedObject private var store: DumpStore
   @ObservedObject private var board: BoardViewModel
-  @ObservedObject private var engineCapabilities = EngineCapabilityStore.shared
   @ObservedObject private var userFacingErrors = UserFacingErrorStore.shared
   @AppStorage(ComposerPreferences.helperLinesEnabledKey) private var helperLinesEnabled = false
   @AppStorage(ComposerPreferences.continuousDrawingEnabledKey) private var continuousDrawingEnabled
@@ -26,7 +24,6 @@ struct ComposerCanvas: View {
   @AppStorage(ComposerPreferences.dotGridEnabledKey) private var dotGridEnabled = false
 
   @State private var tool: CanvasTool = .select
-  @State private var isWorking = false
   @State private var toast: Toast?
   @State private var lastViewportSize: CGSize = .zero
   /// Bumped on text-size/font-family changes: `.id()` on the board subtree remounts it (fonts and
@@ -39,17 +36,14 @@ struct ComposerCanvas: View {
   /// fires for external content).
   @State private var isImageDropTargeted = false
   @State private var drawingDraftState = CanvasDrawingDraftState()
+  /// A quick-connect drag's rubber band (viewport space), its connector kind, and its bind target.
+  @State private var connectorDraft: QuickConnectDraft?
   /// While drawing a line/arrow, the card its live end will bind to on release — highlighted so the
   /// bind is visible before commit. Shares `board.bindCandidate` with the commit path, so the
   /// preview and the actual binding can never disagree.
   @State private var isSpacePressed = false
   @State private var viewportThrottle = ViewportEventThrottle()
-  /// Observed for the agent's *coarse* state (isRunning / grounding) so the toolbar and ⌘K palette
-  /// stay in sync. The streaming transcript lives on `agent.transcript`, which the canvas does NOT
-  /// observe, so per-token updates re-render only the dock — never the board.
-  @ObservedObject private var agent = CanvasAgent.shared
   @ObservedObject private var updater = UpdaterController.shared
-  @State private var showAgent = false
   /// A board delete is only executed by the destructive action in this confirmation surface.
   @State private var pendingBoardDeletion: PendingBoardDeletion?
   /// AppKit may deliver Escape through both keyDown and cancelOperation for one physical press.
@@ -79,9 +73,6 @@ struct ComposerCanvas: View {
   /// The card that held the caret when the palette was summoned, captured before the palette's
   /// search field steals first responder — so a cancel can hand editing back to it.
   @State private var paletteReturnCardID: UUID?
-  /// A quick capture gets one second-pass reveal after its AppKit editor reports the true live hug.
-  /// Cleared immediately after that callback so ordinary typing never auto-pans the board.
-  @State private var quickCaptureRevealCardID: UUID?
 
   // Board transform. Committed scale/pan live in the retained workspace so changing the theme or
   // language does not teleport the user back to the origin. The in-flight gesture remains local.
@@ -103,7 +94,6 @@ struct ComposerCanvas: View {
   /// consumed by `EditingStage` on appear then cleared.
   @State private var openGraphConfigCardID: UUID?
 
-  private let service = HeadlessPromptService()
   private let cardPasteboardType = NSPasteboard.PasteboardType("dev.jow.Composer.cards")
 
   init(workspace: CanvasWorkspaceSession) {
@@ -160,18 +150,19 @@ struct ComposerCanvas: View {
 
   private var effectiveScale: CGFloat { scale }
 
+  /// The board ⇄ viewport transform as drawn right now (a live space-pan included). Every
+  /// conversion on the canvas goes through this one value.
+  private var viewport: CanvasViewport {
+    CanvasViewport(scale: scale, pan: CGSize(width: pan.width + panLive.width,
+                                             height: pan.height + panLive.height))
+  }
+
   var body: some View {
     GeometryReader { proxy in canvasRoot(proxy: proxy) }
     .ignoresSafeArea()
-    .animation(Theme.Motion.accessory, value: isWorking)
-    .animation(Theme.Motion.accessory, value: store.isHistoryOpen)
-    .animation(Theme.Motion.accessory, value: store.compiledDraft)
     .animation(Theme.Motion.accessory, value: showPalette)
     .onChange(of: userFacingErrors.latest) { _, notice in
       if notice != nil { showLatestReportedError() }
-    }
-    .onChange(of: isWorking) { _, working in
-      NotificationCenter.default.post(name: .composerBusyChanged, object: nil, userInfo: ["busy": working])
     }
     .onReceive(NotificationCenter.default.publisher(for: .composerFontSizeChanged)) { _ in
       typographyRevision += 1
@@ -212,7 +203,6 @@ struct ComposerCanvas: View {
         // Wash only board content. Drafts, toasts, and active-card overlays stay above the fade so
         // their own surfaces keep their intended contrast.
         CanvasTopFade()
-        compiledOverlay
         toastView
       }
       .frame(width: inner.width, height: inner.height, alignment: .topLeading)
@@ -224,9 +214,7 @@ struct ComposerCanvas: View {
         ActiveCardOverlays(
           card: editing,
           size: proxy.size,
-          isWorking: isWorking,
           currentTint: board.cards.first(where: { $0.id == editing.id })?.tint,
-          onRefine: { refineSelection($0, card: editing) },
           onFormat: { editing.controller.applyMarkdown($0) },
           onTint: { slot in
             // A live text selection inks just that range; a bare caret falls back to whole-card tint.
@@ -235,17 +223,14 @@ struct ComposerCanvas: View {
             } else {
               board.setTint(slot, for: editing.id)
             }
-          },
-          onApplyFix: { editing.controller.applyLintFix(range: $0.range, expecting: $0.phrase, with: $1) },
-          askEngine: resolvedChatEngine(),
-          onEscalate: { askAgent(about: $0, card: editing) }
+          }
         )
         .id(editing.id)
       }
 
-      // Floating chrome: board identity top-left (the pill IS the board manager), agent top-right,
+      // Floating chrome: board identity top-left (the pill IS the board manager), export top-right,
       // everything hands-on (tools, zoom, settings) in one bottom command bar.
-      // The promotion chip floats above the cards but below the command bar/pills and the agent dock
+      // The promotion chip floats above the cards but below the command bar/pills and Settings
       // — it's a whisper over the canvas, not chrome that competes with the tools.
       promotionOverlay(in: inner)
       if !showPalette {
@@ -263,14 +248,8 @@ struct ComposerCanvas: View {
     .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
     .onAppear {
       lastViewportSize = inner
-      // A theme/language remount must preserve the viewport exactly. PanelController posts the
-      // reveal-bearing entry notification separately when the window is actually summoned.
-      enterEditingForEntry(reveal: false)
       CanvasBridge.shared.register(board)
       showLatestReportedError()
-      for text in CaptureInbox.shared.drainPending() {
-        ingestQuickCapture(text)
-      }
     }
     .onChange(of: inner) { _, value in lastViewportSize = value }
     // Promotion lifecycle: a tool change starts a fresh intent, so any live chip is stale.
@@ -285,11 +264,8 @@ struct ComposerCanvas: View {
       else if let previous { evaluateTextPromotion(previous) }
     }
     // Selection change away from the offer's card retracts it; a single text selection can arm one.
-    .onChange(of: board.selectedCardIDs) { _, selected in
+    .onChange(of: board.selectedCardIDs) { _, _ in
       promotionSelectionChanged()
-      if let quickCaptureRevealCardID, !selected.contains(quickCaptureRevealCardID) {
-        self.quickCaptureRevealCardID = nil
-      }
     }
   }
 
@@ -311,7 +287,6 @@ struct ComposerCanvas: View {
 
   private var navigationCommandBridge: some View {
     commandAnchor
-      .onReceive(NotificationCenter.default.publisher(for: .composerCompileBoard)) { _ in runCompile() }
       .onReceive(NotificationCenter.default.publisher(for: .composerShowSettings)) { _ in openSettings() }
       .onReceive(NotificationCenter.default.publisher(for: .composerCaptureCompleted)) { note in
         guard let path = note.userInfo?["path"] as? String else { return }
@@ -336,12 +311,23 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerUngroupSelection)) { _ in handleUngroupSelection() }
       .onReceive(NotificationCenter.default.publisher(for: .composerLockSelection)) { _ in handleLockSelection() }
       .onReceive(NotificationCenter.default.publisher(for: .composerUnlockSelection)) { _ in handleUnlockSelection() }
+      .onReceive(NotificationCenter.default.publisher(for: .composerNudgeSelection)) { note in
+        let dx = (note.userInfo?["dx"] as? CGFloat) ?? 0
+        let dy = (note.userInfo?["dy"] as? CGFloat) ?? 0
+        if canEditBoard, !showPalette { board.moveSelected(by: CGSize(width: dx, height: dy)) }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .composerReorderSelection)) { note in
+        if canEditBoard, !showPalette, let move = note.userInfo?["move"] as? BoardViewModel.ZOrderMove {
+          board.reorderSelection(move)
+        }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .composerEditSelection)) { _ in handleEditSelection() }
   }
 
   private var zoomCommandBridge: some View {
     commandAnchor
-      .onReceive(NotificationCenter.default.publisher(for: .composerZoomOut)) { _ in zoom(0.8, anchoredAt: zoomAnchor) }
-      .onReceive(NotificationCenter.default.publisher(for: .composerZoomIn)) { _ in zoom(1.25, anchoredAt: zoomAnchor) }
+      .onReceive(NotificationCenter.default.publisher(for: .composerZoomOut)) { _ in zoom(0.8, anchoredAt: viewportCenter) }
+      .onReceive(NotificationCenter.default.publisher(for: .composerZoomIn)) { _ in zoom(1.25, anchoredAt: viewportCenter) }
       .onReceive(NotificationCenter.default.publisher(for: .composerZoomReset)) { _ in resetZoom() }
       .onReceive(NotificationCenter.default.publisher(for: .composerZoomFit)) { note in
         let all = (note.userInfo?["scope"] as? String) == "all"
@@ -354,29 +340,24 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerSpaceKeyChanged)) { notification in
         handleSpaceKey(notification)
       }
-      // Scroll / pinch forwarded from a card under the cursor — keep the board panning & zooming.
+      // Scroll forwarded from a card under the cursor — keep the board panning & zooming.
       .onReceive(NotificationCenter.default.publisher(for: .composerCanvasScroll)) { note in
+        if let factor = note.userInfo?["zoom"] as? CGFloat {
+          handleZoom(factor, anchoredAt: pointerViewportLocation() ?? viewportCenter)
+          return
+        }
         let dx = (note.userInfo?["dx"] as? CGFloat) ?? 0
         let dy = (note.userInfo?["dy"] as? CGFloat) ?? 0
         handleScroll(CGSize(width: dx, height: dy))
       }
-      .onReceive(NotificationCenter.default.publisher(for: .composerEnterEditing)) { _ in
-        enterEditingForEntry(reveal: true)
-      }
-      .onReceive(NotificationCenter.default.publisher(for: .composerTextCardLiveFrameChanged)) { note in
-        guard let id = note.object as? UUID, id == quickCaptureRevealCardID else { return }
-        revealCard(id)
-        quickCaptureRevealCardID = nil
-      }
       .onReceive(NotificationCenter.default.publisher(for: .composerSelectTool)) { note in
         if let selectedTool = note.userInfo?["tool"] as? CanvasTool {
           tool = selectedTool
-        } else if let index = note.userInfo?["index"] as? Int {
-          selectTool(index: index)
         }
       }
-      .onReceive(NotificationCenter.default.publisher(for: .composerToggleAgent)) { _ in
-        toggleAgent()
+      .onReceive(NotificationCenter.default.publisher(for: .composerToggleToolLock)) { _ in
+        continuousDrawingEnabled.toggle()
+        Haptics.level()
       }
       .onReceive(NotificationCenter.default.publisher(for: .composerTogglePalette)) { _ in
         togglePalette()
@@ -384,55 +365,17 @@ struct ComposerCanvas: View {
       .onReceive(NotificationCenter.default.publisher(for: .composerToggleFocus)) { _ in
         toggleFocus()
       }
-      .onReceive(NotificationCenter.default.publisher(for: .composerQuickCapture)) { note in
-        if let text = note.object as? String {
-          ingestQuickCapture(text)
-        }
-      }
-  }
-
-  private func ingestQuickCapture(_ text: String) {
-    // With no selected card, the visible viewport is the active context. BoardViewModel still
-    // prefers an edited/selected card when one exists, then collision-resolves around it.
-    guard let id = board.captureExternalText(
-      text,
-      around: boardPoint(forViewport: viewportCenter)) else { return }
-    quickCaptureRevealCardID = id
-    revealCard(id)
-    show(Toast(
-      text: "Captured on board".localizedUI,
-      symbol: "leaf.fill",
-      tint: Theme.Palette.accent))
-  }
-
-  /// The agent and Settings share the single overlay slot, driven by `showAgent` /
-  /// `store.isSettingsOpen` — they float over the canvas as glass panels.
-  private func toggleAgent() {
-    withAnimation(Theme.Motion.accessory) {
-      if showAgent {
-        showAgent = false
-      } else {
-        showAgent = true
-        store.isSettingsOpen = false
-      }
-    }
-  }
-
-  private func selectTool(index: Int) {
-    let order: [CanvasTool] = [.select, .text, .rectangle, .ellipse, .diamond, .line, .arrow, .freehand, .equation]
-    guard index >= 1, index <= order.count else { return }
-    tool = order[index - 1]
   }
 
   private func boardContent(viewportSize: CGSize) -> some View {
     ZStack(alignment: .topLeading) {
       BoardViewportInput(
+        board: board,
+        viewport: viewport,
         tool: tool,
         isSpacePressed: isSpacePressed,
+        selectCallbacks: selectGestureCallbacks,
         onTap: handleTap,
-        onDoubleTap: handleDoubleTap,
-        onSelectionChanged: { rect in selectionRect = rect; if promotion != nil { dismissPromotion() } },
-        onSelectionEnded: selectCards(inViewportRect:modifiers:),
         onFreehandChanged: { freehandDraft = $0; if promotion != nil { dismissPromotion() } },
         onFreehandEnded: commitFreehandDraft,
         onVectorNodeChanged: updateVectorNode,
@@ -469,16 +412,13 @@ struct ComposerCanvas: View {
       BoardCardLayer(
         cards: visibleCards(in: viewportSize),
         board: board,
-        boardTextContext: board.boardTextContext,
         selectedCardIDs: board.selectedCardIDs,
         editingCardID: board.editingCardID,
-        primarySelectedCardID: board.primarySelectedCardID,
         scale: effectiveScale,
-        // Only the select tool may grab a card. In a drawing tool the card is click-through, so a
-        // drag that starts over it draws a new element instead of selecting/moving the card.
         selectable: tool == .select,
-        failedShellCommands: board.failedShellCommands,
-        equationDropTargetID: board.equationDropTargetID
+        equationDropTargetID: board.equationDropTargetID,
+        textScaleFactors: board.gesturePreview.textScaleFactors,
+        floatingCardID: board.floatingCardID
       )
       .equatable()
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -487,7 +427,9 @@ struct ComposerCanvas: View {
       // Only `pan` translates the whole layer; the scale lives inside the cards now.
       .offset(x: pan.width + panLive.width, y: pan.height + panLive.height)
 
+      SelectionOverlay(chrome: selectionChrome, onDelete: { handleDeleteSelection() })
       selectionRectView
+      connectorDraftView
       freehandDraftView
       vectorDraftView
       elementDraftView
@@ -510,6 +452,43 @@ struct ComposerCanvas: View {
         onDrop: handleImageFileDrop
       )
     )
+  }
+
+  /// The one selection box, laid out from the board as currently drawn.
+  private var selectionChrome: SelectionChrome {
+    let selected = board.renderedCards.filter { board.selectedCardIDs.contains($0.id) }
+    return SelectionChrome.resolve(selected: selected, editingID: board.editingCardID,
+                                   viewport: viewport, interactive: tool == .select)
+  }
+
+  private var selectGestureCallbacks: CanvasSelectGesture.Callbacks {
+    CanvasSelectGesture.Callbacks(
+      marqueeChanged: { rect in selectionRect = rect },
+      doubleClickedEmpty: handleDoubleTap,
+      connectorDraftChanged: { segment, kind, target in
+        connectorDraft = segment.map { QuickConnectDraft(segment: $0, kind: kind, targetID: target) }
+      },
+      openPointComposer: { id, seed in
+        NotificationCenter.default.post(name: .composerAddGraphPoint, object: id, userInfo: ["point": seed])
+      },
+      pressed: { if promotion != nil { dismissPromotion() } })
+  }
+
+  /// A quick-connect drag: the rubber-band connector plus a ring on the card it would bind to.
+  @ViewBuilder
+  private var connectorDraftView: some View {
+    if let draft = connectorDraft {
+      if let target = draft.targetID, let card = board.cards.first(where: { $0.id == target }) {
+        let rect = viewport.viewportRect(card.frame)
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .strokeBorder(Theme.Palette.accent.opacity(0.8), lineWidth: 2)
+          .frame(width: rect.width, height: rect.height)
+          .position(x: rect.midX, y: rect.midY)
+          .allowsHitTesting(false)
+      }
+      ElementDraftPreview(kind: draft.kind, start: draft.segment.start, end: draft.segment.end)
+        .allowsHitTesting(false)
+    }
   }
 
   /// The drop-target treatment shown while an external image drag hovers the canvas: a dashed
@@ -557,11 +536,7 @@ struct ComposerCanvas: View {
       // stays crisp on top. The card frame is mapped into viewport space with the exact card-layer
       // transform (frame × scale, offset by pan + panLive), so the ring lines up with the card.
       if let target = bindTargetID, let card = board.cards.first(where: { $0.id == target }) {
-        let rect = CGRect(
-          x: card.frame.minX * effectiveScale + pan.width + panLive.width,
-          y: card.frame.minY * effectiveScale + pan.height + panLive.height,
-          width: card.frame.width * effectiveScale,
-          height: card.frame.height * effectiveScale)
+        let rect = viewport.viewportRect(card.frame)
         RoundedRectangle(cornerRadius: 8, style: .continuous)
           .strokeBorder(Theme.Palette.accent.opacity(0.8), lineWidth: 2)
           .frame(width: rect.width, height: rect.height)
@@ -682,21 +657,17 @@ struct ComposerCanvas: View {
     return Color(nsColor: Theme.flavor.tints[slot])
   }
 
-  /// A tap on empty board: place a card (Text tool) or clear selection (Select tool).
+  /// A click with a placement tool: drop that element at the click. (Select-tool clicks belong
+  /// to `CanvasSelectGesture`.)
   private func handleTap(at point: CGPoint, modifiers: EventModifiers) {
-    if tool == .select {
-      if !modifiers.contains(.shift), !modifiers.contains(.command) { board.deselectAll() }
-      return
-    }
+    guard tool != .select else { return }
 
     guard let kind = tool.elementKind else { return }
     // A bare click with a line/arrow/freehand tool places nothing (no default diagonal shape drops
     // out of nowhere) and keeps the tool active so the next drag draws. Only box shapes and text
     // are click-to-place; lines are drawn by dragging start→end.
     if kind == .line || kind == .arrow || kind == .freehand || kind == .vectorPath { return }
-    let boardPoint = CGPoint(x: (point.x - pan.width) / effectiveScale,
-                             y: (point.y - pan.height) / effectiveScale)
-    let id = board.addElement(kind, at: boardPoint)
+    let id = board.addElement(kind, at: viewport.boardPoint(point))
     tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
     // Editing state is established synchronously so navigation cannot race the stage's own focus
     // delay and persist an abandoned structured card before its editor mounts.
@@ -705,16 +676,13 @@ struct ComposerCanvas: View {
     }
   }
 
-  /// Double-clicking empty canvas drops a text element there and starts editing — the default
-  /// "just start writing" gesture, regardless of the active tool.
+  /// Double-clicking empty canvas (a click sequence begun with Select) drops a text element there
+  /// and starts editing — the "just start writing" gesture. The inline editor takes the caret
+  /// itself when it mounts (`ComposerTextView.focusesWhenAttached`).
   private func handleDoubleTap(at point: CGPoint) {
     let id = board.addCard(at: boardPoint(forViewport: point))
     tool = .select
-    // Text edits inline: begin editing, then hand the caret to the in-card editor once it mounts.
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-      board.beginEditing(id)
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { board.interaction(for: id).controller.focus() }
-    }
+    board.beginEditing(id)
   }
 
   /// The draft segment changed (viewport space). Store it, and for a line/arrow resolve the card its
@@ -827,22 +795,6 @@ struct ComposerCanvas: View {
     vectorDraft = nil
     guard board.addVectorPath(placement) != nil else { return }
     tool = tool.afterSuccessfulPlacement(continuousDrawing: continuousDrawingEnabled)
-  }
-
-  private func selectCards(inViewportRect rect: CGRect, modifiers: EventModifiers) {
-    defer { selectionRect = nil }
-    let s = max(effectiveScale, 0.01)
-    let boardRect = CGRect(
-      x: (rect.minX - pan.width) / s,
-      y: (rect.minY - pan.height) / s,
-      width: rect.width / s,
-      height: rect.height / s
-    )
-    board.select(
-      in: boardRect,
-      extending: modifiers.contains(.shift),
-      toggling: modifiers.contains(.command)
-    )
   }
 
   // MARK: Floating chrome
@@ -1146,8 +1098,8 @@ struct ComposerCanvas: View {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
   }
 
-  /// The top-right chrome: an Export pill (hover-expands) to the LEFT of the
-  /// agent pill. `.top` alignment keeps the agent pill anchored while the export pill grows down.
+  /// The top-right chrome: an Export pill that hover-expands downward (`.top` alignment keeps its
+  /// rest label anchored while it grows).
   /// When a scheduled check finds a new release, an Update pill appears at the far left — the one
   /// accent-tinted control in the chrome, so it reads as the single signal, not decoration.
   private func boardActionsPill(in size: CGSize) -> some View {
@@ -1156,8 +1108,6 @@ struct ComposerCanvas: View {
         updatePill(version: version)
       }
       exportMenu
-      SidebarAgentButton(active: showAgent) { toggleAgent() }
-        .chromePill()
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     .padding(.top, WindowChrome.edgeInset)
@@ -1248,12 +1198,11 @@ struct ComposerCanvas: View {
   }
 
   /// Standard-window mode: ONE bottom-center command bar carrying everything hands-on —
-  /// zoom · tools · settings — tldraw-style, so the top stays calm (identity left,
-  /// AI actions right) and the bottom is a single strong grouping instead of scattered pills.
-  /// Grounding moved into the agent chat (AgentDock) and the ⌘K palette.
+  /// zoom · tools · tint · settings — tldraw-style, so the top stays calm (identity left,
+  /// export right) and the bottom is a single strong grouping instead of scattered pills.
   private func bottomCommandBar(fit innerSize: CGSize) -> some View {
     return HStack(spacing: WindowChrome.itemSpacing) {
-      SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out".localizedUI) { zoom(0.8, anchoredAt: zoomAnchor) }
+      SidebarButton(symbol: "minus.magnifyingglass", help: "Zoom out".localizedUI) { zoom(0.8, anchoredAt: viewportCenter) }
       Button(action: resetZoom) {
         Text("\(Int((effectiveScale * 100).rounded()))%")
           .font(WindowChrome.labelFont.monospacedDigit())
@@ -1263,7 +1212,7 @@ struct ComposerCanvas: View {
       }
       .buttonStyle(.plain)
       .help("Reset to 100%".localizedUI)
-      SidebarButton(symbol: "plus.magnifyingglass", help: "Zoom in".localizedUI) { zoom(1.25, anchoredAt: zoomAnchor) }
+      SidebarButton(symbol: "plus.magnifyingglass", help: "Zoom in".localizedUI) { zoom(1.25, anchoredAt: viewportCenter) }
       SidebarButton(symbol: "arrow.up.left.and.down.right.magnifyingglass", help: "Fit board".localizedUI) {
         withAnimation(Theme.Motion.accessory) { fitBoard(in: innerSize) }
       }
@@ -1393,8 +1342,6 @@ struct ComposerCanvas: View {
         card: card,
         interaction: board.interaction(for: id),
         size: size,
-        isWorking: isWorking,
-        askEngine: resolvedChatEngine(),
         onClose: { closeFocus() }
       )
       .id(id)
@@ -1406,8 +1353,6 @@ struct ComposerCanvas: View {
         card: card,
         interaction: board.interaction(for: id),
         size: size,
-        isWorking: isWorking,
-        askEngine: resolvedChatEngine(),
         // Axes→graph promotion opens the label stage straight in graph-config mode; consume the
         // one-shot intent so a later manual edit of the same card doesn't reopen it.
         openGraphConfigOnAppear: openGraphConfigCardID == id,
@@ -1529,28 +1474,10 @@ struct ComposerCanvas: View {
     evaluateTextPromotion(id)
   }
 
-  /// Agent floats over the canvas as a right-docked glass panel; Settings presents as a centered
-  /// glass sheet over a click-away scrim. One slot — they never co-exist.
+  /// Settings presents as a centered glass sheet over a click-away scrim.
   @ViewBuilder
   private func dockOverlay(in size: CGSize) -> some View {
-    if showAgent {
-      let width = min(360, max(300, size.width * 0.32))
-      AgentDock(
-        agent: agent,
-        width: width,
-        draft: $workspace.agentDraft,
-        onClose: { toggleAgent() },
-        onEscape: { handleEscapeBoard() }
-      )
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .padding(.top, size.height * 0.10)
-        .padding(.trailing, WindowChrome.edgeInset)
-        // Stop above the bottom command bar rather than covering its right end.
-        .padding(.bottom, WindowChrome.edgeInset + WindowChrome.controlHeight + WindowChrome.padV * 2 + 8)
-        .shadow(color: Theme.Shadow.panel.color, radius: Theme.Shadow.panel.radius, y: Theme.Shadow.panel.y)
-        .transition(.move(edge: .trailing).combined(with: .opacity))
-        .zIndex(40)
-    } else if store.isSettingsOpen {
+    if store.isSettingsOpen {
       SettingsOverlay(
         canvasSize: size,
         onClose: { toggleSettings() },
@@ -1558,24 +1485,6 @@ struct ComposerCanvas: View {
       )
         .transition(.opacity)
         .zIndex(40)
-    }
-  }
-
-  @ViewBuilder
-  private var compiledOverlay: some View {
-    if let draft = store.compiledDraft {
-      CompiledDraftOverlay(
-        text: draft,
-        onCopy: {
-          if copyToClipboard(draft) {
-            show(Toast(text: "Copied compiled draft".localizedUI, symbol: "doc.on.doc.fill", tint: .accentColor))
-          } else {
-            show(Toast(text: "macOS did not accept the clipboard contents. The compiled draft was not copied.".localizedUI, symbol: "exclamationmark.triangle.fill", tint: .orange))
-          }
-        },
-        onClose: { store.compiledDraft = nil }
-      )
-      .transition(.opacity)
     }
   }
 
@@ -1604,24 +1513,11 @@ struct ComposerCanvas: View {
 
   // MARK: Zoom helpers
 
-  /// Board zoom is clamped to 35%–200% (Fit applies its own ≤100% cap so it never enlarges).
-  private func clampZoom(_ value: CGFloat) -> CGFloat { min(max(value, 0.35), 2) }
+  /// Board zoom is clamped to 10%–400% (Fit applies its own ≤100% cap so it never enlarges). The
+  /// low end lets Fit frame a large board; the dot grid thins itself to stay inside its budget.
 
   private var viewportCenter: CGPoint {
     CGPoint(x: lastViewportSize.width / 2, y: lastViewportSize.height / 2)
-  }
-
-  /// Toolbar/keyboard zoom anchors at the pointer when it's over the canvas — the least-surprise
-  /// anchor, and the one pinch already uses. With the cursor elsewhere (menu-driven zoom) it falls
-  /// back to the selection's center, then the viewport center, so the board still doesn't lurch.
-  private var zoomAnchor: CGPoint {
-    if let pointer = pointerViewportLocation() { return pointer }
-    let selected = board.cards.filter { board.selectedCardIDs.contains($0.id) }
-    guard !selected.isEmpty else { return viewportCenter }
-    let midX = ((selected.map(\.x).min() ?? 0) + (selected.map { $0.x + $0.w }.max() ?? 0)) / 2
-    let midY = ((selected.map(\.y).min() ?? 0) + (selected.map { $0.y + $0.h }.max() ?? 0)) / 2
-    return CGPoint(x: CGFloat(midX) * effectiveScale + pan.width,
-                   y: CGFloat(midY) * effectiveScale + pan.height)
   }
 
   /// The pointer in viewport coordinates (top-left origin), or nil when it isn't over the window.
@@ -1637,34 +1533,27 @@ struct ComposerCanvas: View {
   /// Whether the board may pan/zoom right now. Stage edits (equation/graph/label) are modal —
   /// events that leak through the scrim (scrollWheel/magnify land on the NSViews beneath SwiftUI
   /// layers) are swallowed so they can't shift the board or tear down an in-flight draft. Inline
-  /// TEXT editing lives ON the board, so pan/zoom stays live there; only the caret-anchored popups
-  /// (mentions, inline search, lint) are dropped first so they don't drift off their anchor.
+  /// TEXT editing lives ON the board, so pan/zoom stays live there.
   private func allowPanZoom() -> Bool {
     guard let id = board.editingCardID,
           let kind = board.cards.first(where: { $0.id == id })?.elementKind else { return true }
-    guard kind == .text else { return false }
-    if let editing = board.editingInteraction {
-      if editing.mentions.isOpen { editing.mentions.isOpen = false; editing.mentions.items = [] }
-      if editing.appSearch.isOpen { editing.appSearch.isOpen = false }
-      if editing.lint.activeFlagID != nil { editing.lint.activeFlagID = nil }
-    }
-    return true
+    return kind == .text
   }
 
+  /// Toolbar and keyboard zoom anchor at the viewport centre (the pointer is on the command bar
+  /// or nowhere useful); wheel and pinch pass the pointer instead.
   private func zoom(_ factor: CGFloat, anchoredAt point: CGPoint) {
+    setScale(max(scale, 0.01) * factor, anchoredAt: point)
+  }
+
+  /// Change the zoom while keeping the board point under `point` fixed on screen.
+  private func setScale(_ target: CGFloat, anchoredAt point: CGPoint) {
     guard allowViewportTransform() else { return }
-    let oldScale = max(scale, 0.01)
-    let nextScale = clampZoom(oldScale * factor)
-    guard nextScale != scale else { return }
-    let boardPoint = CGPoint(
-      x: (point.x - pan.width) / oldScale,
-      y: (point.y - pan.height) / oldScale
-    )
-    scale = nextScale
-    pan = CGSize(
-      width: point.x - boardPoint.x * nextScale,
-      height: point.y - boardPoint.y * nextScale
-    )
+    let current = CanvasViewport(scale: scale, pan: pan)
+    let next = current.zoomed(to: target, anchoredAt: point)
+    guard next.scale != scale else { return }
+    scale = next.scale
+    pan = next.pan
   }
 
   private func handleScroll(_ delta: CGSize) {
@@ -1694,16 +1583,8 @@ struct ComposerCanvas: View {
   }
 
   private func visibleCards(in viewportSize: CGSize) -> [CardState] {
-    let margin: CGFloat = 240
-    let s = max(effectiveScale, 0.01)
-    let currentPan = CGSize(width: pan.width + panLive.width, height: pan.height + panLive.height)
-    let visible = CGRect(
-      x: (-currentPan.width / s) - margin,
-      y: (-currentPan.height / s) - margin,
-      width: (viewportSize.width / s) + margin * 2,
-      height: (viewportSize.height / s) + margin * 2
-    )
-    return board.cards.filter {
+    let visible = viewport.visibleBoardRect(in: viewportSize, margin: 240)
+    return board.renderedCards.filter {
       $0.frame.intersects(visible) ||
       board.selectedCardIDs.contains($0.id) ||
       board.editingCardID == $0.id
@@ -1718,23 +1599,21 @@ struct ComposerCanvas: View {
     let selected = forceAll ? [] : board.cards.filter { board.selectedCardIDs.contains($0.id) }
     let target = selected.isEmpty ? board.cards : selected
     guard !target.isEmpty else { scale = 1; pan = .zero; return }
-    let minX = target.map(\.x).min() ?? 0
-    let minY = target.map(\.y).min() ?? 0
-    let maxX = target.map { $0.x + $0.w }.max() ?? Double(size.width)
-    let maxY = target.map { $0.y + $0.h }.max() ?? Double(size.height)
-    let contentW = max(maxX - minX, 1), contentH = max(maxY - minY, 1)
+    guard let content = CanvasHitTester.unionBounds(of: target) else { return }
     let margin: CGFloat = 40
     let avail = CGSize(width: max(size.width - 2 * margin, 1), height: max(size.height - 2 * margin, 1))
-    let s = clampZoom(min(avail.width / contentW, avail.height / contentH, 1))
+    let s = CanvasViewport.clampScale(
+      min(avail.width / max(content.width, 1), avail.height / max(content.height, 1), 1))
     scale = s
-    pan = CGSize(width: margin - CGFloat(minX) * s, height: margin - CGFloat(minY) * s)
+    // Centre the content in the viewport (it used to pin to the top-left margin).
+    pan = CGSize(width: size.width / 2 - content.midX * s, height: size.height / 2 - content.midY * s)
   }
 
   /// Keyboard and menu reset commands obey the same pointer-ownership gate as wheel/pinch input.
   /// Otherwise a Pen press could capture one transform for its preview and commit under another.
+  /// 100%, anchored at the viewport centre so the content under it stays put instead of jumping.
   private func resetZoom() {
-    guard allowViewportTransform() else { return }
-    withAnimation(Theme.Motion.accessory) { scale = 1 }
+    withAnimation(Theme.Motion.accessory) { setScale(1, anchoredAt: viewportCenter) }
   }
 
 
@@ -1780,20 +1659,14 @@ struct ComposerCanvas: View {
 
   // MARK: Board navigation (history stack)
 
-  private var canNavigate: Bool {
-    guard !isWorking, store.compiledDraft == nil else { return false }
-    if let editing = board.editingInteraction, editing.mentions.isOpen || editing.appSearch.isOpen { return false }
-    return true
-  }
-
   private var canEditBoard: Bool {
-    guard !isWorking, !store.isSettingsOpen, store.compiledDraft == nil else { return false }
+    guard !store.isSettingsOpen else { return false }
     return board.editingInteraction == nil
   }
 
-  private func handlePrevDump() { if canNavigate { gotoOlder() } }
-  private func handleNextDump() { if canNavigate { gotoNewer() } }
-  private func handleNewDump() { if canNavigate { newBoard() } }
+  private func handlePrevDump() { gotoOlder() }
+  private func handleNextDump() { gotoNewer() }
+  private func handleNewDump() { newBoard() }
 
   private func handleDeleteSelection() { if canEditBoard { board.deleteSelection() } }
   private func handleDuplicateSelection() { if canEditBoard { board.duplicateSelection() } }
@@ -1801,6 +1674,7 @@ struct ComposerCanvas: View {
   private func handlePasteSelection() { if canEditBoard { pasteSelectedCards() } }
   private func handleSelectAllCards() { if canEditBoard { board.selectAll() } }
   private func handleEscapeBoard() {
+    guard CanvasKeyState.shared.viewportDragMode != .manipulating else { return }
     guard !escapeHandledThisTurn else { return }
     escapeHandledThisTurn = true
     DispatchQueue.main.async { escapeHandledThisTurn = false }
@@ -1814,9 +1688,7 @@ struct ComposerCanvas: View {
       hasBoardPicker: boardPickerOpen,
       hasCommandPalette: showPalette,
       hasFocusedEditor: focusedCardID != nil,
-      hasCompiledOverlay: store.compiledDraft != nil,
       hasPromotion: promotion != nil,
-      hasAgent: showAgent,
       hasSettings: store.isSettingsOpen,
       hasActiveEditor: board.editingInteraction != nil,
       hasActiveVectorEditor: activeEditorKind == .vectorPath,
@@ -1838,8 +1710,6 @@ struct ComposerCanvas: View {
       dismissPalette()
     case .focusedEditor:
       closeFocus()
-    case .compiledOverlay:
-      store.compiledDraft = nil
     case .promotion:
       dismissPromotion()
     case .auxiliaryPanel:
@@ -1867,10 +1737,24 @@ struct ComposerCanvas: View {
       tool = .select
     case .selection:
       board.deselectAll()
-    case .windowDismissal:
-      dismiss()
+    case .none:
+      return
     }
   }
+  /// Enter edits the lone selected element (Excalidraw); with the pen it finishes the open path.
+  private func handleEditSelection() {
+    guard canEditBoard, !showPalette else { return }
+    if tool == .vectorPen {
+      commitOpenVectorDraft()
+      return
+    }
+    guard board.editingCardID == nil, board.selectedCardIDs.count == 1,
+          let id = board.selectedCardIDs.first,
+          let card = board.cards.first(where: { $0.id == id }),
+          !card.locked, card.elementKind.supportsEditing else { return }
+    board.beginEditing(id)
+  }
+
   private func handleUndoBoard() { if canEditBoard { dismissPromotion(); board.undo() } }
   private func handleRedoBoard() { if canEditBoard { dismissPromotion(); board.redo() } }
   private func handleGroupSelection() { if canEditBoard { board.groupSelection() } }
@@ -1979,34 +1863,8 @@ struct ComposerCanvas: View {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { board.beginEditing(id) }
   }
 
-  /// On panel open: reveal and enter editing on the active (or first) text card so the caret is
-  /// ready to type. A capture remains the primary/editing card, so reopening the board returns to
-  /// that thought instead of preserving a viewport that can no longer see it.
-  private func enterEditingForEntry(reveal: Bool) {
-    guard !showAgent, !showPalette, focusedCardID == nil,
-          pendingBoardDeletion == nil, renamingBoardID == nil,
-          !store.isSettingsOpen, store.compiledDraft == nil, !store.isHistoryOpen else { return }
-    let id = board.editingCardID ?? board.primarySelectedCardID ?? board.cards.first?.id
-    guard let id, board.cards.first(where: { $0.id == id })?.elementKind == .text else { return }
-    let interaction = board.interaction(for: id)
-    if board.editingCardID != id { board.beginEditing(id) }
-    if reveal { revealCard(id) }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-      guard board.editingCardID == id else { return }
-      interaction.controller.focus()
-    }
-  }
-
-  /// Preserve zoom and move only as far as needed to expose the target. The retained workspace
-  /// owns the final pan, so the same focus survives later SwiftUI remounts.
-  private func revealCard(_ id: UUID) {
-    withAnimation(Theme.Motion.accessory) {
-      _ = workspace.revealCard(id, in: lastViewportSize, transientPan: panLive)
-    }
-  }
-
-  /// The sidebar gear toggles Settings the way ⌘J / the rail toggle Agent: a second click on the
-  /// gear while Settings is up closes it again. (⌘, and the menu-bar item still always open.)
+  /// The command-bar gear toggles Settings: a second click while Settings is up closes it again.
+  /// (⌘, always opens.)
   private func toggleSettings() {
     if store.isSettingsOpen {
       withAnimation(Theme.Motion.accessory) { store.isSettingsOpen = false }
@@ -2016,27 +1874,19 @@ struct ComposerCanvas: View {
   }
 
   private func openSettings() {
-    store.isHistoryOpen = false
-    store.compiledDraft = nil
-    withAnimation(Theme.Motion.accessory) {
-      showAgent = false
-      store.isSettingsOpen = true
-    }
+    withAnimation(Theme.Motion.accessory) { store.isSettingsOpen = true }
   }
 
   private func closeAuxiliaryPanel() {
-    guard showAgent || store.isSettingsOpen else { return }
-    withAnimation(Theme.Motion.accessory) {
-      showAgent = false
-      store.isSettingsOpen = false
-    }
+    guard store.isSettingsOpen else { return }
+    withAnimation(Theme.Motion.accessory) { store.isSettingsOpen = false }
   }
 
   // MARK: Command palette (⌘K)
 
   /// A spotlight over the board: a faint scrim catches a click-away dismiss; the palette itself
   /// floats near the top-center, like Spotlight. Lives only in the board window's SwiftUI tree, so
-  /// it never disturbs the board/dock window geometry.
+  /// it never disturbs the window geometry.
   @ViewBuilder
   private func commandPaletteOverlay(in size: CGSize) -> some View {
     if showPalette {
@@ -2061,14 +1911,11 @@ struct ComposerCanvas: View {
 
   private func togglePalette() {
     if showPalette { dismissPalette(); return }
-    // The compiled-draft overlay is a focused modal — dismiss it before opening the palette.
-    guard store.compiledDraft == nil else { return }
     // The picker temporarily sits above the protected-board banner. Collapse it before the palette
     // claims modal ownership at zIndex 50; a failed rename keeps both its editor and attempted value
     // visible instead of opening the palette behind it.
     guard commitBoardRename() else { return }
     closeBoardPicker()
-    store.isHistoryOpen = false
     // Capture the editing card, then end the edit session so its stage (zIndex 70) doesn't sit over
     // the palette (zIndex 50). Cancel hands editing back by reopening the stage on the same card.
     paletteReturnCardID = board.editingCardID
@@ -2192,118 +2039,6 @@ struct ComposerCanvas: View {
     }
   }
 
-  // MARK: Compile + refine
-
-  /// Collapse the whole board into one ordered, paste-ready draft.
-  private func runCompile() {
-    guard !isWorking, store.compiledDraft == nil else { return }
-    let source = board.joinedPlainText()
-    guard !source.trimmed.isEmpty else {
-      show(Toast(text: "Add some cards to compile".localizedUI, symbol: "rectangle.dashed", tint: .orange))
-      return
-    }
-    guard let engine = preferredEngine() else {
-      show(Toast(text: unavailableEngineMessage(), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    isWorking = true
-    Task {
-      do {
-        let result = try await service.compileBoard(source: source, engine: engine)
-        store.compiledDraft = result
-      } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Compiling the board".localizedUI), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      }
-      isWorking = false
-    }
-  }
-
-  /// Refine the active card's current selection in place.
-  private func refineSelection(_ engine: HeadlessEngine, card: CardInteraction) {
-    let snapshot = card.selection
-    guard !snapshot.isEmpty, !isWorking else { return }
-    guard EnginePreferences.isEnabled(engine) else {
-      show(Toast(text: "%@ is disabled in Settings".localizedUI(engine.title), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    guard engineCapabilities.isAvailable(engine) else {
-      show(Toast(text: unavailableEngineMessage(), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    let whole = card.controller.plainText
-    isWorking = true
-    Task {
-      do {
-        let result = try await service.refineSelection(whole: whole, selection: snapshot.text, engine: engine)
-        card.controller.replace(range: snapshot.range, with: result)
-        show(Toast(text: "Refined with %@".localizedUI(engine.title), symbol: "checkmark.circle.fill", tint: .green))
-      } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Refining the selected text with %@".localizedUI(engine.title)), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      }
-      isWorking = false
-    }
-  }
-
-  /// Escalate one flagged phrase on the active card to the chat agent — the same engine the in-canvas
-  /// chat runs on, so the linter's "Refine with …" matches the user's Default Chat Agent pick.
-  private func askAgent(about flag: LintFlag, card: CardInteraction) {
-    guard !isWorking else { return }
-    guard let engine = resolvedChatEngine() else {
-      show(Toast(text: unavailableEngineMessage(), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      return
-    }
-    let whole = card.controller.plainText
-    isWorking = true
-    card.lint.activeFlagID = nil
-    Task {
-      do {
-        let result = try await service.refineSelection(whole: whole, selection: flag.phrase, engine: engine)
-        card.controller.applyLintFix(range: flag.range, expecting: flag.phrase, with: result)
-        show(Toast(text: "Clarified with %@".localizedUI(engine.title), symbol: "checkmark.circle.fill", tint: .green))
-      } catch {
-        show(Toast(text: UserFacingError.message(for: error, while: "Clarifying the selected text with %@".localizedUI(engine.title)), symbol: "exclamationmark.triangle.fill", tint: .orange))
-      }
-      isWorking = false
-    }
-  }
-
-  private func preferredEngine() -> HeadlessEngine? {
-    for engine in HeadlessEngine.allCases {
-      if EnginePreferences.isEnabled(engine), engineCapabilities.isAvailable(engine) { return engine }
-    }
-    return nil
-  }
-
-  /// The engine the in-canvas chat — and the linter's "Refine with …" escalation — runs on: the
-  /// Default Chat Agent pick when enabled + available, else the first available engine.
-  private func resolvedChatEngine() -> HeadlessEngine? {
-    EnginePreferences.resolvedEngine(for: .chat, isAvailable: engineCapabilities.isAvailable)
-  }
-
-  private func unavailableEngineMessage() -> String {
-    let enabled = HeadlessEngine.allCases.filter { EnginePreferences.isEnabled($0) }
-    guard !enabled.isEmpty else {
-      return "All engines are disabled in Settings > Runtime. Enable one before using this action.".localizedUI
-    }
-    let reasons = enabled.compactMap { engine -> String? in
-      switch engineCapabilities.status(for: engine) {
-      case .checking: return "%@ is still being checked".localizedUI(engine.title)
-      case let .unavailable(reason): return "%@: %@".localizedUI(engine.title, reason)
-      case .available: return nil
-      }
-    }
-    if reasons.isEmpty {
-      return "No engine could be selected. Open Settings > Runtime > Recheck.".localizedUI
-    }
-    return reasons.joined(separator: " · ")
-  }
-
-  @discardableResult
-  private func copyToClipboard(_ text: String) -> Bool {
-    NSPasteboard.general.clearContents()
-    return NSPasteboard.general.setString(text, forType: .string)
-  }
-
   private func copySelectedCards() {
     let selected = board.selectedCardsForClipboard()
     guard !selected.isEmpty else { return }
@@ -2351,7 +2086,8 @@ struct ComposerCanvas: View {
 
   /// A region captured via "Snap to board" landed: drop it as an image card at the viewport center,
   /// then read it on-device in two stages so the card paints fast — OCR first (the floor), then an
-  /// Apple Intelligence cleanup/classification swaps in when it's ready. Both feed the compiled prompt.
+  /// Apple Intelligence cleanup/classification swaps in when it's ready. Agents read either over the
+  /// canvas API.
   private func addCapturedImage(path: String) {
     let id = board.addImageObject(path: path, at: boardPoint(forViewport: viewportCenter))
     // Reuse the just-captured pixels; only fall back to decoding the PNG if the hand-off missed.
@@ -2362,7 +2098,7 @@ struct ComposerCanvas: View {
         ocr = await ImageUnderstanding.recognizeText(in: captured)
       } else if let understanding = await ImageUnderstanding.analyze(imagePath: path) {
         board.setImageUnderstanding(id, understanding)
-        show(Toast(text: "Screenshot read - ready for the prompt".localizedUI, symbol: "checkmark.circle.fill", tint: .green))
+        show(Toast(text: "Screenshot read - agents can see its text".localizedUI, symbol: "checkmark.circle.fill", tint: .green))
         return
       } else {
         show(Toast(text: "Added screenshot - no text found".localizedUI, symbol: "photo", tint: .accentColor))
@@ -2372,7 +2108,7 @@ struct ComposerCanvas: View {
       // Stage 1: show the OCR text immediately so the card is useful within a beat.
       if !ocr.isEmpty {
         board.setImageUnderstanding(id, "[Screenshot]\n\(ocr)")
-        show(Toast(text: "Screenshot read - ready for the prompt".localizedUI, symbol: "checkmark.circle.fill", tint: .green))
+        show(Toast(text: "Screenshot read - agents can see its text".localizedUI, symbol: "checkmark.circle.fill", tint: .green))
       } else {
         show(Toast(text: "Added screenshot - no text found".localizedUI, symbol: "photo", tint: .accentColor))
       }
@@ -2459,11 +2195,9 @@ struct ComposerCanvas: View {
     }
   }
 
-  private func dismiss() { NotificationCenter.default.post(name: .composerDismiss, object: nil) }
 
   private func boardPoint(forViewport point: CGPoint) -> CGPoint {
-    CGPoint(x: (point.x - pan.width) / effectiveScale,
-            y: (point.y - pan.height) / effectiveScale)
+    viewport.boardPoint(point)
   }
 
   private enum ImageInput {
@@ -2594,19 +2328,14 @@ final class ViewportEventThrottle {
 
 // MARK: - Native viewport input
 
-/// Shared, view-independent latch for the space-to-pan key. The board's viewport input owns the
-/// notification-driven state, but a card's own pointer catcher sits ABOVE the viewport in the card
-/// layer, so it must consult the same latch to know when to fall through — otherwise space-pan dies
-/// anywhere a card sits. AppKit re-creates neither NSView on a space press, so a plain singleton
-/// they both poll (in `hitTest` / `mouseDown`) keeps them in lockstep. The window resets it on
-/// losing key so a space held while focus leaves doesn't stick the board in pan mode.
-///
-/// Not `@MainActor`: it's a single `Bool` mutated and read only on the main thread (from
-/// notification handlers and AppKit's `hitTest`/`mouseDown`), and staying nonisolated lets the
-/// AppKit NSView overrides poll it without concurrency ceremony.
+/// What the board's one pointer owner is doing with the current press. Mirrored into
+/// `CanvasKeyState` so the board-wide pinch monitor and the scroll throttle can refuse to move the
+/// viewport out from under a draft whose transform was captured at press time.
 enum CanvasViewportDragMode: Equatable {
   case maybeTap
   case selecting
+  /// The Select tool's pointer controller owns this press (select, move, resize, marquee…).
+  case manipulating
   case drawing
   case vectorPress
   case vectorDrawing
@@ -2616,11 +2345,44 @@ enum CanvasViewportDragMode: Equatable {
 
 /// A draft's viewport-to-board conversion is captured when its press begins. Pan or zoom during
 /// these modes would change that transform before commit and separate result from preview.
+/// What one scroll event does to the board. Trackpads pan by their precise pixel deltas; a mouse
+/// wheel reports whole lines, which are scaled to a useful distance (raw, one notch panned ~1pt);
+/// and ⌘ or ⌃ + scroll zooms around the pointer, as in Excalidraw and every browser canvas.
+enum CanvasScrollInput: Equatable {
+  case pan(CGSize)
+  case zoom(CGFloat)
+
+  /// Board points one mouse-wheel line pans.
+  static let wheelLinePoints: CGFloat = 32
+  /// Zoom sensitivity per scrolled point (scroll toward the user zooms in).
+  static let zoomPerPoint: CGFloat = 0.003
+
+  init(deltaX: CGFloat, deltaY: CGFloat, hasPreciseDeltas: Bool, zoomModifier: Bool) {
+    let scale = hasPreciseDeltas ? 1 : Self.wheelLinePoints
+    let dx = deltaX * scale
+    let dy = deltaY * scale
+    if zoomModifier {
+      // A single event never more than halves or doubles the zoom, however hard the flick.
+      self = .zoom(min(max(exp(dy * Self.zoomPerPoint), 0.5), 2))
+    } else {
+      self = .pan(CGSize(width: dx, height: dy))
+    }
+  }
+
+  init(_ event: NSEvent) {
+    self.init(
+      deltaX: event.scrollingDeltaX,
+      deltaY: event.scrollingDeltaY,
+      hasPreciseDeltas: event.hasPreciseScrollingDeltas,
+      zoomModifier: !event.modifierFlags.intersection([.command, .control]).isEmpty)
+  }
+}
+
 enum CanvasViewportTransformPolicy {
   static func allowsPanOrZoom(during mode: CanvasViewportDragMode) -> Bool {
     switch mode {
     case .drawing, .vectorPress, .vectorDrawing, .placing: false
-    case .maybeTap, .selecting, .panning: true
+    case .maybeTap, .selecting, .manipulating, .panning: true
     }
   }
 }
@@ -2636,6 +2398,9 @@ enum CanvasPointerPressMode {
   }
 }
 
+/// Shared latch the window-level key routing, the pinch monitor and the input view all read. Not
+/// `@MainActor`: it is mutated and read only on the main thread (notification handlers and AppKit
+/// overrides), and staying nonisolated lets AppKit callbacks poll it without ceremony.
 final class CanvasKeyState: @unchecked Sendable {
   static let shared = CanvasKeyState()
   private init() {}
@@ -2644,12 +2409,12 @@ final class CanvasKeyState: @unchecked Sendable {
 }
 
 private struct BoardViewportInput: NSViewRepresentable {
+  let board: BoardViewModel
+  let viewport: CanvasViewport
   let tool: CanvasTool
   let isSpacePressed: Bool
+  let selectCallbacks: CanvasSelectGesture.Callbacks
   let onTap: (CGPoint, EventModifiers) -> Void
-  let onDoubleTap: (CGPoint) -> Void
-  let onSelectionChanged: (CGRect?) -> Void
-  let onSelectionEnded: (CGRect, EventModifiers) -> Void
   let onFreehandChanged: ([CGPoint]?) -> Void
   let onFreehandEnded: ([CGPoint]) -> Void
   let onVectorNodeChanged: (CGPoint, CGPoint) -> Void
@@ -2665,7 +2430,7 @@ private struct BoardViewportInput: NSViewRepresentable {
   let onZoom: (CGFloat, CGPoint) -> Void
 
   func makeNSView(context: Context) -> InputView {
-    let view = InputView()
+    let view = InputView(board: board)
     view.state = state
     return view
   }
@@ -2676,12 +2441,11 @@ private struct BoardViewportInput: NSViewRepresentable {
 
   private var state: InputView.State {
     InputView.State(
+      viewport: viewport,
       tool: tool,
       isSpacePressed: isSpacePressed,
+      selectCallbacks: selectCallbacks,
       onTap: onTap,
-      onDoubleTap: onDoubleTap,
-      onSelectionChanged: onSelectionChanged,
-      onSelectionEnded: onSelectionEnded,
       onFreehandChanged: onFreehandChanged,
       onFreehandEnded: onFreehandEnded,
       onVectorNodeChanged: onVectorNodeChanged,
@@ -2698,14 +2462,16 @@ private struct BoardViewportInput: NSViewRepresentable {
     )
   }
 
+  /// The board's single pointer owner. Every press on the canvas lands here — cards are
+  /// render-only — and is routed once: Select-tool presses to `CanvasSelectGesture`, drawing tools
+  /// to their drafts, Space-drag to panning.
   final class InputView: NSView {
     struct State {
+      var viewport = CanvasViewport()
       var tool: CanvasTool = .select
       var isSpacePressed = false
+      var selectCallbacks = CanvasSelectGesture.Callbacks()
       var onTap: (CGPoint, EventModifiers) -> Void = { _, _ in }
-      var onDoubleTap: (CGPoint) -> Void = { _ in }
-      var onSelectionChanged: (CGRect?) -> Void = { _ in }
-      var onSelectionEnded: (CGRect, EventModifiers) -> Void = { _, _ in }
       var onFreehandChanged: ([CGPoint]?) -> Void = { _ in }
       var onFreehandEnded: ([CGPoint]) -> Void = { _ in }
       var onVectorNodeChanged: (CGPoint, CGPoint) -> Void = { _, _ in }
@@ -2723,11 +2489,18 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     var state = State() {
       didSet {
+        selectGesture.callbacks = state.selectCallbacks
         if state.isSpacePressed != oldValue.isSpacePressed || state.tool != oldValue.tool {
           window?.invalidateCursorRects(for: self)
         }
+        // The board panned or zoomed under a live drag: keep the grabbed element under the pointer.
+        // Deferred out of SwiftUI's view update, which must not publish state of its own.
+        if state.viewport != oldValue.viewport {
+          DispatchQueue.main.async { [weak self] in self?.selectGesture.viewportChanged() }
+        }
       }
     }
+    private let selectGesture: CanvasSelectGesture
     private var dragStart: CGPoint?
     private var dragModifiers: EventModifiers = []
     /// Refresh the cursor whenever the drag mode changes, so the open-hand grab flips to a closed
@@ -2739,6 +2512,9 @@ private struct BoardViewportInput: NSViewRepresentable {
       }
     }
     private var dragClickCount = 1
+    /// The tool active on the FIRST click of a click sequence. A double-click only means "type here"
+    /// when that click was a Select click; with a placement tool the first click already placed.
+    private var firstClickTool: CanvasTool = .select
     private var lastPan: CGSize = .zero
     private var freehandPoints: [CGPoint] = []
     /// Last raw drag point, kept so a Shift press/release with the mouse still (flagsChanged,
@@ -2749,11 +2525,16 @@ private struct BoardViewportInput: NSViewRepresentable {
     private var draftCancelled = false
     private var escapeObserver: NSObjectProtocol?
     private var pointerTrackingArea: NSTrackingArea?
+    /// The cursor last set for Select hover, so it is only set when it changes — and re-set after
+    /// another view (a text field's I-beam) took the pointer.
+    private var lastHoverCursor: CanvasHoverCursor?
 
-    override init(frame frameRect: NSRect) {
-      super.init(frame: frameRect)
-      // Esc while drawing abandons the in-flight shape/freehand: drop this drag so the pending
-      // mouse-up can't commit it. The canvas clears its preview state on the same notification.
+    init(board: BoardViewModel) {
+      selectGesture = CanvasSelectGesture(board: board, viewport: { CanvasViewport() })
+      super.init(frame: .zero)
+      selectGesture.viewport = { [weak self] in self?.state.viewport ?? CanvasViewport() }
+      // Esc mid-gesture abandons it: drop this drag so the pending mouse-up can't commit it. The
+      // canvas clears its own preview state on the same notification.
       escapeObserver = NotificationCenter.default.addObserver(
         forName: .composerEscapeBoard, object: nil, queue: .main
       ) { [weak self] _ in
@@ -2781,9 +2562,13 @@ private struct BoardViewportInput: NSViewRepresentable {
       pointerTrackingArea = area
     }
 
-    /// Abandon a placing/freehand drag in progress (Esc). Leaves the mode intact so the eventual
-    /// mouse-up still tears the gesture down cleanly, but flags it so nothing is committed.
+    /// Abandon the gesture in progress (Esc). Leaves the mode intact so the eventual mouse-up still
+    /// tears the gesture down cleanly, but flags it so nothing is committed.
     private func cancelActiveDraft() {
+      if dragMode == .manipulating {
+        selectGesture.cancel()
+        return
+      }
       guard dragMode == .placing || dragMode == .drawing || dragMode == .vectorPress
               || dragMode == .vectorDrawing else { return }
       draftCancelled = true
@@ -2795,23 +2580,82 @@ private struct BoardViewportInput: NSViewRepresentable {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
+    /// Torn down mid-gesture (a theme rebuild): abandon the gesture so no preview or open undo
+    /// step outlives the view that owned it.
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if window == nil {
+        selectGesture.cancel()
+        CanvasPointerHover.shared.boardPoint = nil
+      }
+    }
+
+    private var selectGestureOwnsPointer: Bool { state.tool == .select && !state.isSpacePressed }
+
+    /// Whether the pointer is over the bare canvas rather than a view floating above it (a field,
+    /// a pill, an editor). The tracking area reports moves everywhere in the visible rect.
+    private func pointerIsOverCanvas(_ event: NSEvent) -> Bool {
+      guard let content = window?.contentView else { return false }
+      let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+      return content.hitTest(point) === self
+    }
+
     override func mouseMoved(with event: NSEvent) {
-      guard state.tool == .vectorPen, !state.isSpacePressed else { return }
-      state.onVectorHoverChanged(convert(event.locationInWindow, from: nil))
+      let point = convert(event.locationInWindow, from: nil)
+      let overCanvas = pointerIsOverCanvas(event)
+      CanvasPointerHover.shared.boardPoint = overCanvas ? state.viewport.boardPoint(point) : nil
+      if state.tool == .vectorPen, !state.isSpacePressed {
+        state.onVectorHoverChanged(point)
+        return
+      }
+      guard selectGestureOwnsPointer, overCanvas else {
+        lastHoverCursor = nil
+        return
+      }
+      let hover = selectGesture.hover(at: point)
+      guard hover != lastHoverCursor else { return }
+      lastHoverCursor = hover
+      Self.cursor(for: hover).set()
     }
 
     override func mouseExited(with event: NSEvent) {
+      CanvasPointerHover.shared.boardPoint = nil
+      lastHoverCursor = nil
       if state.tool == .vectorPen { state.onVectorHoverChanged(nil) }
     }
 
     // Cursor feedback for the current mode: a closed grab while actually panning (space + drag), an
     // open grab while space is merely held (pan is armed), and a crosshair for every drawing tool so
-    // the canvas reads as "ready to place". Select tool with no space held keeps the arrow.
+    // the canvas reads as "ready to place". Select uses live hover feedback from `mouseMoved`.
     override func resetCursorRects() {
       if state.isSpacePressed {
         addCursorRect(bounds, cursor: dragMode == .panning ? .closedHand : .openHand)
       } else if state.tool.elementKind != nil {
         addCursorRect(bounds, cursor: .crosshair)
+      }
+    }
+
+    private static func cursor(for hover: CanvasHoverCursor) -> NSCursor {
+      switch hover {
+      case .arrow: return .arrow
+      case .endpoint: return .crosshair
+      case .port: return .pointingHand
+      case .resize(let handle):
+        switch handle {
+        case .left, .right: return .resizeLeftRight
+        case .top, .bottom: return .resizeUpDown
+        default:
+          if #available(macOS 15.0, *) {
+            let position: NSCursor.FrameResizePosition = switch handle {
+            case .topLeft: .topLeft
+            case .topRight: .topRight
+            case .bottomLeft: .bottomLeft
+            default: .bottomRight
+            }
+            return NSCursor.frameResize(position: position, directions: .all)
+          }
+          return .crosshair
+        }
       }
     }
 
@@ -2821,12 +2665,19 @@ private struct BoardViewportInput: NSViewRepresentable {
       dragStart = point
       dragModifiers = EventModifiers(event.modifierFlags)
       dragClickCount = event.clickCount
+      if event.clickCount <= 1 { firstClickTool = state.tool }
       lastPan = .zero
       freehandPoints = []
       draftCancelled = false
+      if selectGestureOwnsPointer {
+        dragMode = .manipulating
+        // A double-click only means "edit / type here" when the sequence began with Select.
+        let clicks = firstClickTool == .select ? event.clickCount : 1
+        selectGesture.press(at: point, modifiers: dragModifiers, clickCount: clicks)
+        return
+      }
       dragMode = CanvasPointerPressMode.resolve(
         tool: state.tool, isSpacePressed: state.isSpacePressed)
-      state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
       state.onElementDraftCancelled()
       if state.tool == .vectorPen, !state.isSpacePressed {
@@ -2836,16 +2687,18 @@ private struct BoardViewportInput: NSViewRepresentable {
 
     override func mouseDragged(with event: NSEvent) {
       guard let start = dragStart else { return }
-      // Esc cancelled this placing/freehand drag — ignore the rest of it until mouse-up.
-      if draftCancelled { lastDragPoint = convert(event.locationInWindow, from: nil); return }
       let point = convert(event.locationInWindow, from: nil)
+      if dragMode == .manipulating {
+        selectGesture.drag(to: point, modifiers: EventModifiers(event.modifierFlags))
+        return
+      }
+      // Esc cancelled this placing/freehand drag — ignore the rest of it until mouse-up.
+      if draftCancelled { lastDragPoint = point; return }
       let delta = CGSize(width: point.x - start.x, height: point.y - start.y)
       let distance = hypot(delta.width, delta.height)
 
       if (dragMode == .maybeTap || dragMode == .vectorPress), distance >= 4 {
-        if state.tool == .select {
-          dragMode = .selecting
-        } else if state.tool == .freehand {
+        if state.tool == .freehand {
           dragMode = .drawing
           freehandPoints = [start]
           state.onFreehandChanged(freehandPoints)
@@ -2853,16 +2706,14 @@ private struct BoardViewportInput: NSViewRepresentable {
           dragMode = .vectorDrawing
         } else if state.tool.placesByDragging {
           dragMode = .placing
-        } else {
-          dragMode = .panning
         }
+        // Click-to-place tools (text, equation, sticky, checklist, table) stay a tap however far
+        // the press wanders and place at the press point on mouse-up. Panning is Space-drag or scroll.
       }
 
       switch dragMode {
-      case .maybeTap, .vectorPress:
+      case .maybeTap, .vectorPress, .selecting, .manipulating:
         break
-      case .selecting:
-        state.onSelectionChanged(Self.normalizedRect(from: start, to: point))
       case .drawing:
         if freehandPoints.last.map({ hypot($0.x - point.x, $0.y - point.y) >= 1.5 }) ?? true {
           freehandPoints.append(point)
@@ -2896,10 +2747,12 @@ private struct BoardViewportInput: NSViewRepresentable {
       return end
     }
 
-    /// Pressing/releasing Shift mid-drag updates the draft immediately, without waiting for the
-    /// next mouse movement.
+    /// Pressing/releasing Shift or ⌥ mid-drag updates the gesture immediately, without waiting for
+    /// the next mouse movement.
     override func flagsChanged(with event: NSEvent) {
-      if dragMode == .placing, let start = dragStart, let current = lastDragPoint {
+      if dragMode == .manipulating {
+        selectGesture.modifiersChanged(EventModifiers(event.modifierFlags))
+      } else if dragMode == .placing, let start = dragStart, let current = lastDragPoint {
         state.onElementDraftChanged(start, constrained(current, from: start, flags: event.modifierFlags))
       }
       super.flagsChanged(with: event)
@@ -2908,6 +2761,11 @@ private struct BoardViewportInput: NSViewRepresentable {
     override func mouseUp(with event: NSEvent) {
       guard let start = dragStart else { return }
       let point = convert(event.locationInWindow, from: nil)
+      if dragMode == .manipulating {
+        selectGesture.release(at: point, modifiers: EventModifiers(event.modifierFlags))
+        resetDragState()
+        return
+      }
       let delta = CGSize(width: point.x - start.x, height: point.y - start.y)
       let distance = hypot(delta.width, delta.height)
 
@@ -2919,20 +2777,11 @@ private struct BoardViewportInput: NSViewRepresentable {
       }
 
       switch dragMode {
-      case .maybeTap, .vectorPress:
+      case .maybeTap, .vectorPress, .selecting, .manipulating:
         if state.tool == .vectorPen {
           state.onVectorNodeEnded(start, start)
-        } else if dragClickCount >= 2 {
-          state.onDoubleTap(start)
-        } else {
+        } else if dragClickCount < 2 {
           state.onTap(start, dragModifiers)
-        }
-      case .selecting:
-        if distance < 5 {
-          state.onSelectionChanged(nil)
-          state.onTap(start, dragModifiers)
-        } else {
-          state.onSelectionEnded(Self.normalizedRect(from: start, to: point), dragModifiers)
         }
       case .drawing:
         if freehandPoints.last != point { freehandPoints.append(point) }
@@ -2963,16 +2812,19 @@ private struct BoardViewportInput: NSViewRepresentable {
       freehandPoints = []
       lastDragPoint = nil
       draftCancelled = false
-      state.onSelectionChanged(nil)
       state.onFreehandChanged(nil)
     }
 
     override func scrollWheel(with event: NSEvent) {
       // Panning mid-draw would shift the board out from under a draft whose start point was captured
       // at the old pan, so the committed shape lands away from the preview. Swallow scroll-pan while
-      // a shape/freehand drag is live; two-finger pan resumes the moment the draw ends.
+      // a shape/freehand drag is live; two-finger pan resumes the moment the draw ends. Moving and
+      // resizing re-resolve the pointer in board space, so they keep scrolling live.
       guard CanvasViewportTransformPolicy.allowsPanOrZoom(during: dragMode) else { return }
-      state.onScroll(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY))
+      switch CanvasScrollInput(event) {
+      case .pan(let delta): state.onScroll(delta)
+      case .zoom(let factor): state.onZoom(factor, convert(event.locationInWindow, from: nil))
+      }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -2981,15 +2833,6 @@ private struct BoardViewportInput: NSViewRepresentable {
         return
       }
       super.keyDown(with: event)
-    }
-
-    private static func normalizedRect(from start: CGPoint, to end: CGPoint) -> CGRect {
-      CGRect(
-        x: min(start.x, end.x),
-        y: min(start.y, end.y),
-        width: abs(end.x - start.x),
-        height: abs(end.y - start.y)
-      )
     }
   }
 }
@@ -3032,17 +2875,6 @@ private extension URL {
       return NSImage.imageTypes.contains { UTType($0)?.preferredFilenameExtension == pathExtension.lowercased() }
     }
     return NSImage.imageTypes.contains { UTType($0).map { type.conforms(to: $0) } ?? false }
-  }
-}
-
-private extension EventModifiers {
-  init(_ flags: NSEvent.ModifierFlags) {
-    var modifiers: EventModifiers = []
-    if flags.contains(.shift) { modifiers.insert(.shift) }
-    if flags.contains(.command) { modifiers.insert(.command) }
-    if flags.contains(.option) { modifiers.insert(.option) }
-    if flags.contains(.control) { modifiers.insert(.control) }
-    self = modifiers
   }
 }
 
@@ -3094,156 +2926,33 @@ private struct PinchZoomCatcher: NSViewRepresentable {
 
 // MARK: - Active-card overlays
 
-/// The caret/selection-anchored chrome for whichever card holds focus: the selection action
-/// bar, the `@`-mention menu, the connector search panel, and the linter popover. Observes the
-/// active card's state objects directly so it re-renders when they change; rebuilt (via `.id`)
-/// when the active card changes.
+/// The selection-anchored chrome for whichever card holds focus: the selection action bar.
+/// Observes the active card's interaction directly so it re-renders when the selection changes;
+/// rebuilt (via `.id`) when the active card changes.
 private struct ActiveCardOverlays: View {
   @ObservedObject var card: CardInteraction
-  @ObservedObject var mentions: MentionState
-  @ObservedObject var appSearch: AppSearchState
-  @ObservedObject var lint: LintState
   let size: CGSize
-  let isWorking: Bool
   let currentTint: Int?
-  /// The engine the linter's "Refine with …" escalation targets (the resolved Chat Agent pick);
-  /// `nil` hides the escalate row.
-  let askEngine: HeadlessEngine?
-  let onRefine: (HeadlessEngine) -> Void
   let onFormat: (MarkdownStyle.Action) -> Void
   let onTint: (Int?) -> Void
-  let onApplyFix: (LintFlag, String) -> Void
-  let onEscalate: (LintFlag) -> Void
-
-  init(card: CardInteraction, size: CGSize, isWorking: Bool,
-       currentTint: Int?,
-       onRefine: @escaping (HeadlessEngine) -> Void,
-       onFormat: @escaping (MarkdownStyle.Action) -> Void,
-       onTint: @escaping (Int?) -> Void,
-       onApplyFix: @escaping (LintFlag, String) -> Void,
-       askEngine: HeadlessEngine?,
-       onEscalate: @escaping (LintFlag) -> Void) {
-    self.card = card
-    self.mentions = card.mentions
-    self.appSearch = card.appSearch
-    self.lint = card.lint
-    self.size = size
-    self.isWorking = isWorking
-    self.currentTint = currentTint
-    self.askEngine = askEngine
-    self.onRefine = onRefine
-    self.onFormat = onFormat
-    self.onTint = onTint
-    self.onApplyFix = onApplyFix
-    self.onEscalate = onEscalate
-  }
 
   var body: some View {
     ZStack(alignment: .topLeading) {
       selectionBar
-      mentionMenu
-      appSearchPanel
-      lintPopover
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .animation(Theme.Motion.accessory, value: card.selection)
-    .animation(Theme.Motion.accessory, value: mentions.isOpen)
-    .animation(Theme.Motion.accessory, value: appSearch.isOpen)
-    .animation(Theme.Motion.accessory, value: lint.activeFlagID)
   }
 
   @ViewBuilder
   private var selectionBar: some View {
-    if !card.selection.isEmpty, !mentions.isOpen, !appSearch.isOpen, let rect = card.selection.rectInView {
-      SelectionActionBar(isWorking: isWorking, onRefine: onRefine, onFormat: onFormat, currentTint: currentTint, onTint: onTint)
+    if !card.selection.isEmpty, let rect = card.selection.rectInView {
+      SelectionActionBar(onFormat: onFormat, currentTint: currentTint, onTint: onTint)
         .fixedSize()
         .position(x: clamp(rect.midX, 120, max(120, size.width - 120)),
                   y: clamp(rect.minY - 22, 30, max(30, size.height - 28)))
         .transition(.opacity)
     }
-  }
-
-  @ViewBuilder
-  private var mentionMenu: some View {
-    if mentions.isOpen, let anchor = mentions.anchorInView {
-      let popup = CGSize(width: Theme.Size.menuWidth, height: mentionMenuHeight)
-      let origin = popupOrigin(anchor: anchor, popup: popup)
-      MentionMenu(mentions: mentions)
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(width: popup.width)
-        .position(x: origin.x + popup.width / 2, y: origin.y + popup.height / 2)
-        .transition(.opacity)
-    }
-  }
-
-  @ViewBuilder
-  private var appSearchPanel: some View {
-    if appSearch.isOpen, let anchor = appSearch.anchorInView {
-      let popup = CGSize(width: 360, height: appSearchPanelHeight)
-      let origin = popupOrigin(anchor: anchor, popup: popup)
-      AppSearchPanel(state: appSearch)
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(width: popup.width)
-        .position(x: origin.x + popup.width / 2, y: origin.y + popup.height / 2)
-        .transition(.opacity)
-    }
-  }
-
-  @ViewBuilder
-  private var lintPopover: some View {
-    if card.selection.isEmpty, !mentions.isOpen, !appSearch.isOpen, let flag = lint.activeFlag, let rect = flag.rectInView {
-      let popup = CGSize(width: 300, height: lintPopoverHeight(flag))
-      let origin = popupOrigin(anchor: CGPoint(x: rect.minX, y: rect.maxY + 1), popup: popup)
-      LintPopover(
-        flag: flag,
-        escalationEngine: askEngine,
-        onPick: { onApplyFix(flag, $0) },
-        onEscalate: { onEscalate(flag) },
-        onHover: { hovering in if hovering { lint.cancelHide?() } else { lint.requestHide?() } }
-      )
-      .fixedSize(horizontal: true, vertical: false)
-      .frame(width: popup.width)
-      .position(x: origin.x + popup.width / 2, y: origin.y + popup.height / 2)
-      .transition(.opacity)
-    }
-  }
-
-  // MARK: Geometry
-
-  private var mentionMenuHeight: CGFloat {
-    let rows = min(CGFloat(max(mentions.items.count, 1)), Theme.Size.menuMaxVisibleRows)
-    return rows * Theme.Size.menuRowHeight + 10 + 26
-  }
-
-  private var appSearchPanelHeight: CGFloat {
-    let content: CGFloat
-    if appSearch.results.isEmpty {
-      content = 42
-    } else {
-      content = min(CGFloat(max(appSearch.results.count, 1)), Theme.Size.menuMaxVisibleRows) * 46 + 10
-    }
-    return 42 + 1 + content + 26
-  }
-
-  private func lintPopoverHeight(_ flag: LintFlag) -> CGFloat {
-    // The escalate row is hidden when no engine is available; each shown block adds its own hairline.
-    let hasButton = askEngine != nil
-    let suggestions = CGFloat(flag.suggestions.count) * 42
-    let button: CGFloat = hasButton ? 42 : 0
-    let dividers = (flag.suggestions.isEmpty ? 0.0 : 1.0) + (hasButton ? 1.0 : 0.0)
-    return min(260, 62 + suggestions + button + dividers)
-  }
-
-  private func popupOrigin(anchor: CGPoint, popup: CGSize) -> CGPoint {
-    let margin: CGFloat = 8
-    let below = anchor.y + 6
-    let above = anchor.y - popup.height - 8
-    let hasRoomBelow = below + popup.height <= size.height - margin
-    let hasMoreRoomAbove = anchor.y > size.height - anchor.y
-    let preferredY = (!hasRoomBelow && hasMoreRoomAbove) ? above : below
-    return CGPoint(
-      x: clamp(anchor.x, margin, max(margin, size.width - popup.width - margin)),
-      y: clamp(preferredY, margin, max(margin, size.height - popup.height - margin)))
   }
 
   private func clamp(_ value: CGFloat, _ lower: CGFloat, _ upper: CGFloat) -> CGFloat {
@@ -3255,11 +2964,10 @@ private struct ActiveCardOverlays: View {
 /// the cards only when something that actually affects how they draw changes — never for a transient
 /// gesture (draw / freehand / selection rect / live pan), which all mutate canvas `@State` that this
 /// layer doesn't depend on. The comparison covers exactly that state: the visible cards themselves,
-/// the selection/editing/primary ids, the zoom, the select-tool gate, and the shell-failure marks.
+/// the selection/editing/primary ids, the zoom, the select-tool gate, and the equation drop target.
 ///
-/// `board` and `onEscape` are excluded from `==` on purpose — the board is one stable instance and
-/// the closure is stable, so comparing them would be meaningless. The immutable text context is
-/// included so a cross-card definition edit refreshes every card exactly once for that revision.
+/// `board` is excluded from `==` on purpose — it is one stable instance, so comparing it would be
+/// meaningless.
 ///
 /// Each `BoardCardView` still observes its own `CardInteraction`, so editing/typing a card re-renders
 /// just that card even while this whole layer is skipped — the same way the capture overlay stays
@@ -3267,27 +2975,27 @@ private struct ActiveCardOverlays: View {
 struct BoardCardLayer: View, Equatable {
   let cards: [CardState]
   let board: BoardViewModel
-  let boardTextContext: BoardTextContext
   let selectedCardIDs: Set<UUID>
   let editingCardID: UUID?
-  let primarySelectedCardID: UUID?
   let scale: CGFloat
   let selectable: Bool
-  let failedShellCommands: Set<String>
   /// The graph card a parseable equation is currently dragged over (its accent drop-ring). Included
   /// in `==` so the ring appears/clears mid-drag even though nothing in `cards` changes.
   let equationDropTargetID: UUID?
+  /// Text elements mid corner-scale (see `BoardViewModel.GesturePreview`).
+  let textScaleFactors: [UUID: CGFloat]
+  /// A card whose interactive overlay is open (a graph's point composer) and must stay on top.
+  var floatingCardID: UUID? = nil
 
   static func == (lhs: BoardCardLayer, rhs: BoardCardLayer) -> Bool {
     lhs.cards == rhs.cards &&
-      lhs.boardTextContext.definedVariableNames == rhs.boardTextContext.definedVariableNames &&
       lhs.selectedCardIDs == rhs.selectedCardIDs &&
       lhs.editingCardID == rhs.editingCardID &&
-      lhs.primarySelectedCardID == rhs.primarySelectedCardID &&
       lhs.scale == rhs.scale &&
       lhs.selectable == rhs.selectable &&
-      lhs.failedShellCommands == rhs.failedShellCommands &&
-      lhs.equationDropTargetID == rhs.equationDropTargetID
+      lhs.equationDropTargetID == rhs.equationDropTargetID &&
+      lhs.textScaleFactors == rhs.textScaleFactors &&
+      lhs.floatingCardID == rhs.floatingCardID
   }
 
   var body: some View {
@@ -3300,10 +3008,14 @@ struct BoardCardLayer: View, Equatable {
           isEditing: editingCardID == card.id,
           scale: scale,
           board: board,
-          boardTextContext: boardTextContext,
-          selectable: selectable
+          selectable: selectable,
+          textPreviewScale: textScaleFactors[card.id] ?? 1
         )
-        .zIndex(Double(card.z) + (primarySelectedCardID == card.id ? 10_000 : 0))
+        // Paint order is the board's z-order: selecting an element never lifts it above the
+        // elements covering it (the old +10 000 selection lift reordered the board on every
+        // click). Only a live editor — the inline text editor, a graph's point composer — floats
+        // on top, as Excalidraw's does, so what you type is never hidden under a shape.
+        .zIndex(Double(card.z) + (editingCardID == card.id || floatingCardID == card.id ? 1_000_000 : 0))
       }
     }
   }
@@ -3313,6 +3025,13 @@ struct BoardCardLayer: View, Equatable {
 struct DragSegment: Equatable {
   var start: CGPoint
   var end: CGPoint
+}
+
+/// A quick-connect drag in flight: the rubber band, its connector kind, and its bind target.
+struct QuickConnectDraft: Equatable {
+  var segment: DragSegment
+  var kind: CanvasElementKind
+  var targetID: UUID?
 }
 
 /// Transient drawing state belongs to exactly one loaded board. Board replacement resets this

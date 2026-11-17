@@ -8,8 +8,6 @@ import Security
 /// logging, browser history, or query strings. `CanvasSessionDescriptorStore` is the only persistent
 /// representation, and replaces it on every launch with owner-only permissions.
 struct CanvasSessionDescriptor: Codable, Equatable {
-  static let capabilityEnvironmentVariable = "BONSAI_CANVAS_CAPABILITY"
-
   let apiVersion: String
   let baseURL: String
   let capability: String

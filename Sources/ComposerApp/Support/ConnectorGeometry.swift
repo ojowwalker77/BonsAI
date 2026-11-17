@@ -201,6 +201,14 @@ enum ConnectorGeometry {
     return result
   }
 
+  /// Re-resolve ONE bound connector against `cards` (the live preview's geometry), so an arrow
+  /// follows a dragged shape before anything commits.
+  static func rerouted(_ connector: CardState, among cards: [CardState]) -> CardState? {
+    guard isConnector(connector),
+          connector.startBindingID != nil || connector.endBindingID != nil else { return nil }
+    return refreshed(connector, among: cards)
+  }
+
   // MARK: Implementation
 
   private static func refreshed(_ connector: CardState, among cards: [CardState]) -> CardState? {

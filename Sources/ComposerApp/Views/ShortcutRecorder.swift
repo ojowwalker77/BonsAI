@@ -3,11 +3,10 @@ import Carbon.HIToolbox
 import SwiftUI
 
 /// A click-to-record control for a global shortcut. Click it, then press a key combination (which
-/// must include at least one modifier). Esc cancels. Binds to whichever shortcut it's given, so the
-/// same control records the summon key and the "Snap to board" capture key.
+/// must include at least one modifier). Esc cancels. Records the "Snap to board" capture key.
 struct ShortcutRecorder: View {
   @Binding var shortcut: GlobalShortcut
-  var defaultValue: GlobalShortcut = .default
+  var defaultValue: GlobalShortcut = .defaultCapture
   @State private var recording = false
   @State private var monitor: Any?
 

@@ -23,7 +23,7 @@
   {
     "w": 355.19199673651036,
     "x": 392.0742218698892,
-    "text": "with connectors like:\n\n@finder  @browser @xcode  @github  @context7 @linear @notion @sentry @figma",
+    "text": "with elements like:\n\nshapes · arrows · freehand ink · pen paths · equations · graphs · stickies · checklists · tables",
     "whoWrote": 1,
     "y": 332.49933569473467,
     "id": "033DBB88-521B-4BC0-8FD6-E9480788DBFC",
@@ -33,7 +33,7 @@
   {
     "w": 720.8286935472722,
     "x": 14.993574484746432,
-    "text": "connectors pull context and insert it into the canvas in the background",
+    "text": "⇧⌘Space snaps a screenshot onto the board, read on-device",
     "tint": 0,
     "whoWrote": 1,
     "y": 686.6293178327142,
@@ -44,7 +44,7 @@
   {
     "w": 867.1190042472255,
     "x": 11.517685473046413,
-    "text": "we can also declare variables like  funny_cats_folder=(@finder:/Users/jow/Documents/funny_cats  )\n\nor bash like = $(pwd)",
+    "text": "agents connect over a local server: http://127.0.0.1:7337 (HTTP + MCP)\n\nset them up in Settings ▸ Agents",
     "whoWrote": 1,
     "y": 754.089270874879,
     "id": "7FD04CD2-9FFD-42D4-BC21-6751C346309B",

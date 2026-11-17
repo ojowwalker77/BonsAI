@@ -101,13 +101,8 @@ final class DumpStore: ObservableObject {
   @Published private(set) var dumps: [Dump] = []
   /// The board currently loaded in the canvas.
   @Published private(set) var currentID: PersistentIdentifier?
-  /// The history list overlay is showing (the editor coordinator dismisses it on Esc).
-  @Published var isHistoryOpen = false
-  /// The separate Settings panel is showing (also dismissed on Esc).
+  /// The in-canvas Settings overlay is showing (the editor coordinator dismisses it on Esc).
   @Published var isSettingsOpen = false
-  /// The compiled-draft overlay's text (nil = closed). Board-level, transient UI — kept
-  /// here so the editor coordinator's Esc chain can dismiss it like the other overlays.
-  @Published var compiledDraft: String?
 
   /// `inMemoryOnly` exists for tests: `swift test` runs unsandboxed, so the default on-disk
   /// configuration resolves to the user's REAL `Composer.store` — a test that touched it could
@@ -321,18 +316,16 @@ final class DumpStore: ObservableObject {
     pruneCurrentIfEmpty()
     reload()
     currentID = id
-    isHistoryOpen = false
   }
 
   /// Start a fresh board — but never stack two blanks.
   func newDump() {
-    if let dump = current, dump.isBlank { isHistoryOpen = false; return }
+    if let dump = current, dump.isBlank { return }
     let dump = Dump()
     context.insert(dump)
     guard save("Creating a new board".localizedUI) else { return }
     reload()
     currentID = dump.persistentModelID
-    isHistoryOpen = false
   }
 
   @discardableResult
@@ -399,7 +392,6 @@ final class DumpStore: ObservableObject {
     guard save("Creating an editable recovered board copy".localizedUI) else { return false }
     reload()
     currentID = copy.persistentModelID
-    isHistoryOpen = false
     return true
   }
 

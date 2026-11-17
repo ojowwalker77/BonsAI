@@ -34,15 +34,12 @@ enum Theme {
   enum Material {
     static let hud: NSVisualEffectView.Material = .hudWindow      // canvas backdrop
     static let popover: NSVisualEffectView.Material = .popover    // selection action bar
-    static let menu: NSVisualEffectView.Material = .menu          // @-mention list
+    static let menu: NSVisualEffectView.Material = .menu          // popups (palette, pickers)
   }
 
   enum Size {
     static let actionBarHeight: CGFloat = 34
     static let actionBarItemHeight: CGFloat = 28
-    static let menuWidth: CGFloat = 320
-    static let menuRowHeight: CGFloat = 36
-    static let menuMaxVisibleRows: CGFloat = 6
   }
 
   enum Inset {
@@ -56,7 +53,7 @@ enum Theme {
     static var body: NSFont { ComposerPreferences.editorFont }
     static let bodyLineSpacing: CGFloat = 3
     // Text-bearing tokens route through the app-font resolver so the selected family carries into
-    // the word count, the @-mention list, and text action labels. Sizes mirror the SwiftUI text
+    // the word count, popup lists, and text action labels. Sizes mirror the SwiftUI text
     // styles they replaced (caption2 ≈ 11, body ≈ 13, caption ≈ 12) so `.system` is unchanged.
     static var count: SwiftUI.Font { ComposerPreferences.appSwiftUIFont(size: 11) }
     static var menuName: SwiftUI.Font { ComposerPreferences.appSwiftUIFont(size: 13) }
@@ -84,7 +81,6 @@ enum Theme {
 
     static var accentFill: Color { c(Theme.flavor.accent, 0.20) }
     static var rowFill: Color { c(Theme.flavor.surface0, 0.45) }
-    static var selectedRowFill: Color { c(Theme.flavor.accent, 0.24) }
     /// Warning/error affordances use the stable orange element slot across every theme.
     static var warning: Color { c(Theme.flavor.tints[1]) }
 

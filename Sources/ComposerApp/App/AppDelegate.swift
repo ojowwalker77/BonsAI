@@ -4,45 +4,26 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
   let panelController = PanelController()
   private let hotKeyManager = HotKeyManager()
-  private let menuBarController = MenuBarController()
   /// Held strongly so it keeps firing — a `DispatchSourceSignal` is cancelled on dealloc.
   private var sigtermSource: DispatchSourceSignal?
-  /// AppKit keeps the app alive while the active agent receives TERM/KILL and is reaped.
-  private var terminationTask: Task<Void, Never>?
   /// Watches macOS Light/Dark for the "match macOS appearance" setting. NSApp's own appearance is
   /// never pinned, so `effectiveAppearance` tracks the system even while our windows are themed.
   private var appearanceObservation: NSKeyValueObservation?
-  private lazy var activationPolicyController = ApplicationActivationPolicyController(
-    setPolicy: { NSApp.setActivationPolicy($0) },
-    activate: { NSApp.activate(ignoringOtherApps: true) }
-  )
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    applyActivationPolicy(restoreFocus: true)
     registerBundledFonts()
     hotKeyManager.register()
-    menuBarController.install()
-    _ = EngineCapabilityStore.shared
     _ = UpdaterController.shared
-    MentionStyleCache.shared.preload()
     CanvasServer.shared.start()
     promptForAgentSkillsIfNeeded()
     installSigtermHandler()
 
-    NSApp.servicesProvider = self
-
-    NotificationCenter.default.addObserver(
-      self, selector: #selector(toggle),
-      name: .composerToggleWindow, object: nil)
     NotificationCenter.default.addObserver(
       self, selector: #selector(showBoard),
       name: .composerShowWindow, object: nil)
     NotificationCenter.default.addObserver(
       self, selector: #selector(captureToBoard),
       name: .composerCaptureToBoard, object: nil)
-    NotificationCenter.default.addObserver(
-      self, selector: #selector(dockIconVisibilityChanged),
-      name: .composerDockIconVisibilityChanged, object: nil)
 
     // A system Light/Dark switch re-resolves the effective theme when "match macOS appearance"
     // is on — routed through the same notification a manual theme pick posts, so the window
@@ -56,10 +37,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     panelController.show()
-  }
-
-  func applicationDidBecomeActive(_ notification: Notification) {
-    panelController.restoreEntryFocusAfterActivation()
   }
 
   /// Register every bundled `.otf` (Nohemi, Satoshi) so `NSFont(name:)` can resolve the custom
@@ -82,23 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  /// Flush pending board edits immediately, then defer termination until every supervised agent
-  /// process has exited. The supervisor's TERM-to-KILL grace period keeps this wait bounded.
+  /// Flush pending board edits before quitting — `DumpStore`'s autosave is debounced, so an edit
+  /// (including one an external agent made over the canvas API) right before quit would be lost.
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     CanvasBridge.shared.flush()
-    guard terminationTask == nil else { return .terminateLater }
-
-    let supervisor = CanvasAgent.shared.beginShutdown()
-    terminationTask = Task.detached {
-      await supervisor.stopAll()
-      // `.terminateLater` runs AppKit in NSModalPanelRunLoopMode. A MainActor Task queued from the
-      // SIGTERM dispatch callback cannot start until that callback returns, so schedule the reply
-      // explicitly in the modal run-loop mode that AppKit is currently servicing.
-      RunLoop.main.perform(inModes: [.modalPanel, .default]) {
-        sender.reply(toApplicationShouldTerminate: true)
-      }
-    }
-    return .terminateLater
+    return .terminateNow
   }
 
   /// A final idempotent flush covers termination routes that do not consult the delegate first.
@@ -111,26 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return true
   }
 
-  func application(_ application: NSApplication, open urls: [URL]) {
-    for url in urls { handleURL(url) }
-  }
-
-  @objc private func toggle() { panelController.toggle() }
   @objc private func showBoard() { panelController.show() }
-
-  @objc private func dockIconVisibilityChanged() {
-    applyActivationPolicy(restoreFocus: panelController.isVisible)
-  }
-
-  private func applyActivationPolicy(restoreFocus: Bool) {
-    guard activationPolicyController.apply(
-      hidesDockIcon: ComposerPreferences.hidesDockIcon,
-      restoreFocus: restoreFocus
-    ) else {
-      NSLog("BonsAI: could not update the application activation policy")
-      return
-    }
-  }
 
   /// "Snap to board": run the region capture overlay, save the shot, summon the board, and hand the
   /// PNG to the canvas to add the card and read it on-device. Capture runs above all apps, so this
@@ -152,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// detected on this Mac, offer to install the canvas-API doc into its config so it can drive the
   /// board over `127.0.0.1:7337` without the user hand-rolling curl commands. Silent no-op if none
   /// are detected, or if the user has already been asked once — re-installs live in Settings ▸
-  /// Connectors instead of re-prompting every launch.
+  /// Agents instead of re-prompting every launch.
   private func promptForAgentSkillsIfNeeded() {
     let promptedKey = "app.agentSkills.hasPrompted"
     guard !UserDefaults.standard.bool(forKey: promptedKey) else { return }
@@ -165,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     alert.alertStyle = .informational
     alert.messageText = "Teach your coding agent the BonsAI board?".localizedUI
     let names = detected.map(\.displayName).joined(separator: ", ")
-    alert.informativeText = "BonsAI found %@ on this Mac. Install a short skill doc so it knows how to read and write your board over the local canvas API? You can redo this anytime in Settings > Connectors.".localizedUI(names)
+    alert.informativeText = "BonsAI found %@ on this Mac. Install a short skill doc so it knows how to read and write your board over the local canvas API? You can redo this anytime in Settings > Agents.".localizedUI(names)
     alert.addButton(withTitle: "Install".localizedUI)
     alert.addButton(withTitle: "Not Now".localizedUI)
     guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -191,34 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     sigtermSource = source
   }
 
-  /// Summon the board (if hidden) and open its companion Settings window.
+  /// Summon the board (if hidden) and open its in-canvas Settings overlay.
   func showSettings() {
     panelController.show()
     NotificationCenter.default.post(name: .composerShowSettings, object: nil)
-  }
-
-  /// Services menu: "BonsAI → Send to BonsAI" on selected text in any app.
-  @objc func captureFromService(_ pboard: NSPasteboard, userData: String, error: AutoreleasingUnsafeMutablePointer<NSString?>?) {
-    guard let text = pboard.string(forType: .string), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      error?.pointee = "No text was selected.".localizedUI as NSString
-      return
-    }
-    panelController.show()
-    CaptureInbox.shared.enqueue(text)
-  }
-
-  private func handleURL(_ url: URL) {
-    guard url.scheme?.lowercased() == "bonsai" else { return }
-    panelController.show()
-    switch url.host?.lowercased() {
-    case "capture":
-      if let text = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-        .queryItems?.first(where: { $0.name == "text" })?.value,
-         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        CaptureInbox.shared.enqueue(text)
-      }
-    default:
-      break
-    }
   }
 }

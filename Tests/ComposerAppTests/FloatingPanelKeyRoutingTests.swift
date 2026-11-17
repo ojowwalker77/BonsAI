@@ -96,11 +96,11 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     XCTAssertTrue(fired, "with no text input editing, Backspace must delete the selected cards")
   }
 
-  func testBarePSelectsVectorPenOutsideTextEditing() {
+  func testBareLettersSelectExcalidrawToolsOutsideTextEditing() {
     let panel = makePanel()
-    XCTAssertEqual(
-      selectedTool { panel.sendEvent(letterKeyDown("p", in: panel)) },
-      .vectorPen)
+    XCTAssertEqual(selectedTool { panel.sendEvent(letterKeyDown("p", in: panel)) }, .freehand)
+    XCTAssertEqual(selectedTool { panel.sendEvent(letterKeyDown("r", in: panel)) }, .rectangle)
+    XCTAssertEqual(selectedTool { panel.sendEvent(letterKeyDown("b", in: panel)) }, .vectorPen)
   }
 
   func testBarePRemainsTextInputWhileAFieldIsEditing() {
@@ -232,11 +232,7 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     XCTAssertTrue(routed, "an idle text editor must let Escape reach the workspace coordinator")
   }
 
-  func testEscapeCoordinatorClosesAgentOrSettingsBeforeAnActiveEditor() {
-    XCTAssertEqual(
-      ComposerEscapeCoordinator.target(for: ComposerEscapeState(hasAgent: true, hasActiveEditor: true)),
-      .auxiliaryPanel
-    )
+  func testEscapeCoordinatorClosesSettingsBeforeAnActiveEditor() {
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState(hasSettings: true, hasActiveEditor: true)),
       .auxiliaryPanel
@@ -350,7 +346,7 @@ final class FloatingPanelKeyRoutingTests: XCTestCase {
     )
     XCTAssertEqual(
       ComposerEscapeCoordinator.target(for: ComposerEscapeState()),
-      .windowDismissal
+      .none
     )
   }
 

@@ -6,12 +6,9 @@ not just what the code does.
 
 | Doc | What it covers |
 | --- | -------------- |
-| [agent-engines.md](agent-engines.md) | The AI engines — `claude -p`, `codex exec`, and on-device Apple Intelligence — how each is invoked (one-shot vs. streaming), how one gets selected, and how to add another. |
-| [canvas-agent.md](canvas-agent.md) | The board as an agent-readable graph: `CanvasGraph` nodes/edges, the loopback server → MCP → bridge plumbing, the tool catalog, and how the agent reads and writes board state. |
-| [canvas-api.md](canvas-api.md) | The loopback HTTP API (`127.0.0.1:7337`): health, read, capture, mutate, MCP — for external agents, Raycast, and Alfred. |
-| [roadmap.md](roadmap.md) | Public roadmap themes from user feedback: engine expansion, drawing polish, attachments, export, Apple integrations, compatibility, and technical investigations. |
-| [semanticlinter.md](semanticlinter.md) | The invisible on-device semantic linter: why it runs on Apple's Foundation Models, its precision bias, and the kinds of ambiguity it flags. |
+| [canvas-agent.md](canvas-agent.md) | The board as an agent-readable graph: `CanvasGraph` nodes/edges, the loopback server → MCP → bridge plumbing, the tool catalog, and how agents read and write board state. |
+| [canvas-api.md](canvas-api.md) | The loopback HTTP API (`127.0.0.1:7337`): health, read, mutate, MCP, and the authentication helper for scripts and external agents. |
+| [releasing.md](releasing.md) | Cutting a signed, notarized release and maintaining the Sparkle update feed. |
 
 For the project overview and how to build, see the [README](../README.md); for
-contribution focus areas and the connector philosophy, see
-[CONTRIBUTING](../CONTRIBUTING.md).
+contribution focus areas, see [CONTRIBUTING](../CONTRIBUTING.md).

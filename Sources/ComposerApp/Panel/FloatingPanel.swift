@@ -201,8 +201,8 @@ final class FloatingPanel: NSWindow {
     )
   }
 
-  /// BonsAI has no menu bar, so app-menu shortcuts don't fire. Catch the board's
-  /// shortcuts at the key-window level instead.
+  /// The board's shortcuts are caught at the key-window level rather than relying on
+  /// app-menu items.
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
     let raw = event.charactersIgnoringModifiers?.lowercased()
@@ -267,18 +267,19 @@ final class FloatingPanel: NSWindow {
       return true
     }
 
-    // Compile the whole board into one paste-ready draft: ⌘R (refine→compile) or ⌘↩.
-    if flags == [.command], raw == "r" || raw == "\r" {
-      NotificationCenter.default.post(name: .composerCompileBoard, object: nil)
-      return true
-    }
-
-    if flags == [.command], raw == "[" {
+    // ⌥⌘[ / ⌥⌘] step through boards; plain ⌘[ / ⌘] are Excalidraw's layer order below.
+    if flags == [.command, .option], raw == "[" {
       NotificationCenter.default.post(name: .composerPrevDump, object: nil)
       return true
     }
-    if flags == [.command], raw == "]" {
+    if flags == [.command, .option], raw == "]" {
       NotificationCenter.default.post(name: .composerNextDump, object: nil)
+      return true
+    }
+    // Layer order, as in Excalidraw: ⌘] forward, ⌘[ backward, ⇧⌘] to front, ⇧⌘[ to back. Shift
+    // turns the bracket into a brace in `charactersIgnoringModifiers`, so both spellings count.
+    if !textIsEditing, let raw, let move = Self.zOrderMove(flags: flags, key: raw) {
+      NotificationCenter.default.post(name: .composerReorderSelection, object: nil, userInfo: ["move": move])
       return true
     }
     if flags == [.command], raw == "n" {
@@ -287,10 +288,6 @@ final class FloatingPanel: NSWindow {
     }
     if flags == [.command], raw == "," {
       NotificationCenter.default.post(name: .composerShowSettings, object: nil)
-      return true
-    }
-    if flags == [.command], raw == "j" {
-      NotificationCenter.default.post(name: .composerToggleAgent, object: nil)
       return true
     }
     // ⌘K summons the command palette.
@@ -318,13 +315,35 @@ final class FloatingPanel: NSWindow {
       NotificationCenter.default.post(name: .composerZoomReset, object: nil)
       return true
     }
-    // ⌘1–⌘9 pick a tool (select, text, rectangle, ellipse, diamond, line, arrow, freehand, equation).
-    if flags == [.command], let raw, let index = Int(raw), (1...9).contains(index) {
-      NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["index": index])
+    // ⌘1–⌘9 pick the same tools as the bare digits (CanvasToolbarCatalog).
+    if flags == [.command], let raw, let digit = Int(raw), let tool = CanvasToolbarCatalog.tool(forDigit: digit) {
+      NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["tool": tool])
       return true
     }
 
     return super.performKeyEquivalent(with: event)
+  }
+
+  static func zOrderMove(flags: NSEvent.ModifierFlags, key: String) -> BoardViewModel.ZOrderMove? {
+    switch (flags, key) {
+    case ([.command], "]"): .forward
+    case ([.command], "["): .backward
+    case ([.command, .shift], "]"), ([.command, .shift], "}"): .toFront
+    case ([.command, .shift], "["), ([.command, .shift], "{"): .toBack
+    default: nil
+    }
+  }
+
+  /// Arrow keys nudge the selection 1pt, Shift for 5 (Excalidraw's steps).
+  static func nudge(keyCode: UInt16, shift: Bool) -> CGSize? {
+    let step: CGFloat = shift ? 5 : 1
+    switch keyCode {
+    case 123: return CGSize(width: -step, height: 0)
+    case 124: return CGSize(width: step, height: 0)
+    case 125: return CGSize(width: 0, height: step)
+    case 126: return CGSize(width: 0, height: -step)
+    default: return nil
+    }
   }
 
   /// The event's characters WITH modifiers applied — how "⌘⇧=" reads as "⌘+" on layouts where
@@ -353,27 +372,34 @@ final class FloatingPanel: NSWindow {
       NotificationCenter.default.post(name: .composerDeleteSelection, object: nil)
       return
     }
-    // Bare P selects the vector pen. Keep this beside the bare number routing so it inherits the
-    // same exact-modifier and NSTextView guards: typing a p in any editor remains text input.
-    if !textIsEditing,
-       event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
-       raw?.lowercased() == "p" {
+    if !textIsEditing, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+       let delta = Self.nudge(keyCode: event.keyCode, shift: event.modifierFlags.contains(.shift)) {
       NotificationCenter.default.post(
-        name: .composerSelectTool,
-        object: nil,
-        userInfo: ["tool": CanvasTool.vectorPen])
+        name: .composerNudgeSelection, object: nil,
+        userInfo: ["dx": delta.width, "dy": delta.height])
       return
     }
-    // Bare 1–9 picks a tool (Excalidraw/Figma style) — switching must be one keypress, which is
-    // what makes one-shot tools livable (issue #78; a "keep tool selected" mode was tried and
-    // pulled). Requires no modifiers so ⇧1 stays "!" for anything that wants it, and the
-    // NSTextView guard above means typing digits into a card never switches tools. ⌘1–⌘9 keep
-    // working via performKeyEquivalent.
+    if !textIsEditing, event.keyCode == 36 || event.keyCode == 76,
+       event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
+      NotificationCenter.default.post(name: .composerEditSelection, object: nil)
+      return
+    }
+    // Bare digits and letters pick tools exactly as in Excalidraw (CanvasToolbarCatalog), and Q
+    // toggles "keep the drawing tool active". No modifiers allowed (⇧1 stays "!"), and the
+    // NSTextView guard means typing in any card or field never switches tools.
     if !textIsEditing,
        event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
-       let raw, let index = Int(raw), (1...9).contains(index) {
-      NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["index": index])
-      return
+       let key = raw?.uppercased(), !key.isEmpty {
+      if key == CanvasToolbarCatalog.toolLockLetter {
+        NotificationCenter.default.post(name: .composerToggleToolLock, object: nil)
+        return
+      }
+      let tool = Int(key).flatMap(CanvasToolbarCatalog.tool(forDigit:))
+        ?? CanvasToolbarCatalog.tool(forLetter: key)
+      if let tool {
+        NotificationCenter.default.post(name: .composerSelectTool, object: nil, userInfo: ["tool": tool])
+        return
+      }
     }
     super.keyDown(with: event)
   }

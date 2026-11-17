@@ -10,14 +10,7 @@ struct GlobalShortcut: Equatable {
   var keyCode: UInt32
   var modifierFlags: NSEvent.ModifierFlags
 
-  /// The original hardcoded binding, used until the user picks their own.
-  static let `default` = GlobalShortcut(
-    keyCode: UInt32(kVK_Space),
-    modifierFlags: [.control, .option]
-  )
-
-  /// Default "Snap to board" capture key (⌘⇧Space) — clear of the system screenshot keys (⌘⇧3/4/5)
-  /// and the summon key (⌃⌥Space).
+  /// Default "Snap to board" capture key (⌘⇧Space) — clear of the system screenshot keys (⌘⇧3/4/5).
   static let defaultCapture = GlobalShortcut(
     keyCode: UInt32(kVK_Space),
     modifierFlags: [.command, .shift]
@@ -76,7 +69,7 @@ struct GlobalShortcut: Equatable {
   }
 
   /// Virtual key codes for the standard US layout. Covers the keys a person is
-  /// likely to bind a global summon shortcut to; anything else falls back to a
+  /// likely to bind a global shortcut to; anything else falls back to a
   /// readable placeholder and simply omits the SwiftUI menu hint.
   private static let knownKeys: [UInt32: KeyInfo] = [
     UInt32(kVK_ANSI_A): KeyInfo("A", "a"), UInt32(kVK_ANSI_B): KeyInfo("B", "b"),
@@ -115,28 +108,15 @@ struct GlobalShortcut: Equatable {
   ]
 }
 
-/// Persists the chosen summon shortcut to `UserDefaults` and notifies the rest of
-/// the app (the hotkey registrar, the menu) when it changes.
+/// Persists the "Snap to board" shortcut to `UserDefaults` and notifies the hotkey registrar when
+/// it changes.
 final class ShortcutStore: ObservableObject {
   static let shared = ShortcutStore()
 
-  private let keyCodeKey = "composer.shortcut.keyCode"
-  private let modifiersKey = "composer.shortcut.modifiers"
   private let captureKeyCodeKey = "composer.captureShortcut.keyCode"
   private let captureModifiersKey = "composer.captureShortcut.modifiers"
 
-  @Published var shortcut: GlobalShortcut {
-    didSet {
-      guard shortcut != oldValue else { return }
-      let defaults = UserDefaults.standard
-      defaults.set(Int(shortcut.keyCode), forKey: keyCodeKey)
-      defaults.set(Int(shortcut.modifierFlags.rawValue), forKey: modifiersKey)
-      NotificationCenter.default.post(name: .composerShortcutChanged, object: nil)
-    }
-  }
-
-  /// The "Snap to board" capture hotkey. Re-registered alongside `shortcut` via the same change
-  /// notification, so the hotkey registrar re-binds both whenever either changes.
+  /// The "Snap to board" capture hotkey; changes re-register it via `.composerShortcutChanged`.
   @Published var captureShortcut: GlobalShortcut {
     didSet {
       guard captureShortcut != oldValue else { return }
@@ -149,14 +129,6 @@ final class ShortcutStore: ObservableObject {
 
   private init() {
     let defaults = UserDefaults.standard
-    if defaults.object(forKey: keyCodeKey) != nil {
-      shortcut = GlobalShortcut(
-        keyCode: UInt32(defaults.integer(forKey: keyCodeKey)),
-        modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(defaults.integer(forKey: modifiersKey)))
-      )
-    } else {
-      shortcut = .default
-    }
     if defaults.object(forKey: captureKeyCodeKey) != nil {
       captureShortcut = GlobalShortcut(
         keyCode: UInt32(defaults.integer(forKey: captureKeyCodeKey)),
@@ -168,7 +140,6 @@ final class ShortcutStore: ObservableObject {
   }
 
   func reset() {
-    shortcut = .default
     captureShortcut = .defaultCapture
   }
 }

@@ -789,7 +789,7 @@ final class CapturedShotStore {
 }
 
 /// Encode a captured `CGImage` into the attachment store. Free function (no actor) so it can run off
-/// the main thread — encoding a retina region on the main actor would jank the summon.
+/// the main thread — encoding a retina region on the main actor would jank the board.
 func saveCapturedImage(_ cgImage: CGImage) -> String? {
   AssetStore.ingest(cgImage: cgImage)
 }

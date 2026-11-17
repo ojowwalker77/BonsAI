@@ -37,18 +37,19 @@ final class InkTests: XCTestCase {
     XCTAssertTrue(s.composerPlainTextAndInk.ink.isEmpty)
   }
 
-  /// A chip run collapses to its serialized token; ink offsets are measured over the SERIALIZED
-  /// text, so a run after a chip is located past the token's full length, not the chip's label.
+  /// An inline image collapses to its serialized "[image: …]" token; ink offsets are measured over
+  /// the SERIALIZED text, so a run after an image lands past the token's full length.
   func testInkOffsetsAreSerialized() {
-    let font = NSFont.systemFont(ofSize: 13)
-    let doc = NSMutableAttributedString(attributedString: ChipFactory.make(token: "@github", font: font))
+    var imageAttributes = body
+    imageAttributes[.imageAttachmentPath] = "/tmp/shot.png"
+    let doc = NSMutableAttributedString(string: "\u{FFFC}", attributes: imageAttributes)
     doc.append(NSAttributedString(string: " done", attributes: body))
-    // Ink the "done" word — after "@github " (8 serialized UTF-16 units).
     let visibleDone = (doc.string as NSString).range(of: "done")
     doc.addAttribute(.inkSlot, value: 0, range: visibleDone)
     let (text, ink) = doc.composerPlainTextAndInk
-    XCTAssertEqual(text, "@github done")
-    XCTAssertEqual(ink, [InkRun(loc: 8, len: 4, slot: 0)])
+    XCTAssertEqual(text, "[image: shot.png] done")
+    // "[image: shot.png] " is 18 serialized UTF-16 units.
+    XCTAssertEqual(ink, [InkRun(loc: 18, len: 4, slot: 0)])
   }
 
   /// Restorer round-trip: re-applying persisted runs to plain text re-attaches `.inkSlot` on the
@@ -56,7 +57,7 @@ final class InkTests: XCTestCase {
   func testRestorerReattachesInk() {
     let plain = "color me here"
     let runs = [InkRun(loc: 6, len: 2, slot: 1)]   // "me"
-    let restored = ChipFactory.attributedDocument(
+    let restored = InkText.attributedDocument(
       fromPlainText: plain, font: NSFont.systemFont(ofSize: 13),
       paragraph: NSParagraphStyle(), ink: runs)
     XCTAssertEqual(restored.string, plain)

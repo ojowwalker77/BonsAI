@@ -11,6 +11,78 @@ under the new version heading.
 
 ## [Unreleased]
 
+### Changed
+
+- **BonsAI is now a focused canvas board that your agents drive over a local server.** External
+  agents (Claude Code, Codex, Cursor, scripts) read and shape the board through the loopback HTTP +
+  MCP server on `127.0.0.1:7337`; **Settings ▸ Agents** shows the endpoints and installs the skill
+  docs that teach them the API. Snap-to-board screenshots stay, and are read on-device so agents
+  can see their text.
+- **Tool shortcuts now match Excalidraw exactly.** 1/V select, 2/R rectangle, 3/D diamond,
+  4/O ellipse, 5/A arrow, 6/L line, 7/P/X freehand, 8/T text, 9 equation, B pen, and Q keeps the
+  drawing tool active. The toolbar is in the same order, and every tooltip shows its keys.
+- **One selection box for the whole board, as in Excalidraw.** Press and drag any element to
+  move it, or drag a corner or edge of the box to resize. Shift keeps the aspect ratio (it used to
+  force a square), ⌥ resizes from the centre, and images keep their proportions unless you hold
+  Shift. Several selected elements scale together from the corners. Arrows bound to what you drag
+  now follow it live instead of jumping on release.
+- **Clicks hit what is drawn.** Arrows, lines, and pen strokes are picked by their stroke, and
+  ellipses and diamonds by their outline, not by the invisible box around them. The topmost
+  element always wins. Dragging across a locked element sweeps a selection instead of moving it,
+  and a click still selects it so it can be unlocked.
+- **The selection marquee picks only what lies entirely inside it,** so sweeping across part of
+  a large background shape no longer grabs it.
+- **New keys:**
+  - Enter edits the selected element.
+  - Arrow keys nudge the selection (Shift for 5 points).
+  - ⌘] / ⌘[ bring forward and send backward.
+  - ⇧⌘] / ⇧⌘[ bring to front and send to back.
+  - Shift-drag moves along one axis.
+  - Switching boards moves to ⌥⌘[ / ⌥⌘].
+- **Zoom to fit centres the board** instead of pinning it to the top-left corner.
+
+### Fixed
+
+- **The bottom command bar no longer stretches edge to edge.** The "more elements" menu filled
+  every bit of width it was offered; it is now the same size as every other tool button, so the
+  bar stays compact and the narrow-window layout works again.
+- **Escape never hides the window,** and showing or switching back to BonsAI no longer drops you
+  into editing a card (which made number keys, P, and Delete type instead of acting).
+- **Text tool clicks put the caret in the new text right away.** Editors take focus when they
+  appear instead of on timers, so fast typing after a double-click is no longer lost.
+- **Clicking a card no longer nudges it** toward a neighbour or leaves snap guides on screen.
+- **Resizing from the top-right corner works:** the delete button now sits above that handle
+  instead of covering it.
+- **Copies, pastes, and ⌥-drag duplicates form their own group and are never locked,** so
+  clicking a copy no longer selects the originals.
+- **A mouse wheel pans at a useful speed, and ⌘/⌃ + scroll zooms around the pointer.** The zoom
+  buttons and ⌘+/⌘− zoom around the middle of the window, 100% no longer makes the board jump,
+  and zoom now ranges from 10% to 400% so Fit can frame large boards.
+- **A slightly moved click with the text, equation, sticky, checklist, or table tool places the
+  element** instead of panning, and double-clicking with a shape tool no longer also adds a text
+  card.
+- **An empty text card you abandon leaves no undo step,** so ⌘Z no longer brings back a ghost.
+- **Selecting an element no longer lifts it above everything else.** Selection never changes
+  the board's layering.
+- **Every move, resize, endpoint drag, and ⌥-duplicate is exactly one undo step,** and Esc
+  mid-drag puts everything back as it was.
+- **Scrolling or zooming during a drag keeps the element under the pointer.**
+- **Handles can no longer fight the element they belong to.** Every press is resolved once, on
+  the board, so a grab near a handle never moves the card by mistake.
+
+### Removed
+
+- **The in-app agent chat and its engines** (Claude, Codex, OpenCode runtimes, model pickers, and
+  the permission prompt). Use your agent of choice over the canvas server instead.
+- **Connectors and inline tokens**: `@finder`, `@browser`, `@github`, `@context7`, `@linear`,
+  `@notion`, `@sentry`, `@figma`, `@xcode`, their keychain tokens, `name=(…)` variables, `$(…)` shell
+  tokens, smart paste, and app search.
+- **Quick capture**: the menu-bar item, the summon hotkey, the hidden-Dock-icon mode, the
+  `POST /capture` endpoint, the `bonsai://` URL scheme, the "Send to BonsAI" service, and the
+  Raycast/Alfred integrations.
+- **The semantic linter, Refine, Compile, Describe Board, and Copy Board as prompt.**
+- **The hover pencil on elements.** Press Enter or double-click to edit.
+
 ## [1.4.11] - 2026-09-01
 
 ### Added
